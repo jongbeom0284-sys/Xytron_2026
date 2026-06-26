@@ -25,6 +25,7 @@ setup(
     entry_points={
         'console_scripts': [
             'track_drive = track_drive.track_drive:main',
+            'cone_debug = track_drive.cone_debug:main',
             'record_lidar_scan = track_drive.record_lidar_scan:main',
         ],
     },

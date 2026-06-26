@@ -2,348 +2,368 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from typing import Optional
 
 import cv2
 import numpy as np
 
-
-@dataclass
-class ConeCandidate:
-    x: int
-    y: int
-    w: int
-    h: int
-    area: float
-
-    @property
-    def cx(self) -> float:
-        return self.x + self.w * 0.5
-
-    @property
-    def cy(self) -> float:
-        return self.y + self.h * 0.5
+from .lidar_utils import ConeCluster, PathTarget, center_path_distance, detect_cones_in_corridor
 
 
 @dataclass
-class ConeCommand:
+class ConeFollowerConfig:
+    cruise_speed: float = 5.0
+    min_speed: float = 3.0
+    corner_speed: float = 3.5
+    finish_speed: float = 3.0
+    max_steer: float = 80.0
+    pursuit_gain: float = 4.2
+    lateral_gain: float = 18.0
+    clearance_gain: float = 12.0
+    corner_boost: float = 1.35
+    smooth_alpha_straight: float = 0.40
+    smooth_alpha_corner: float = 0.65
+    lookahead_y_min: float = 0.45
+    lookahead_y_max: float = 6.5
+    lookahead_target_y: float = 3.0
+    left_x_min: float = -3.5
+    left_x_max: float = -0.55
+    right_x_min: float = 0.55
+    right_x_max: float = 3.2
+    half_corridor: float = 2.25
+    left_wall_half: float = 2.15
+    left_wall_center_bias: float = 0.12
+    front_slow_dist: float = 1.0
+    front_stop_dist: float = 0.45
+    clear_frames_required: int = 25
+    min_tracked_frames: int = 80
+    yellow_pixel_threshold: int = 2500
+    yellow_roi_ratio: float = 0.45
+    hold_max_frames: int = 25
+
+
+@dataclass
+class ConeDriveCommand:
     angle: float = 0.0
     speed: float = 0.0
     finished: bool = False
-    debug: dict[str, object] = field(default_factory=dict)
+    debug: dict = field(default_factory=dict)
     debug_image: np.ndarray | None = None
 
 
-@dataclass(frozen=True)
-class ConeFollowerConfig:
-    speed_cmd: float = 7.0
-    slow_speed_cmd: float = 4.0
-    lost_speed_cmd: float = 0.0
-    max_angle_cmd: float = 70.0
-    steer_gain: float = 72.0
-    single_cone_path_offset_px: float = 140.0
-    target_smoothing: float = 0.35
-    camera_roi_y_min_ratio: float = 0.38
-    camera_roi_y_max_ratio: float = 0.96
-    camera_h_min: int = 5
-    camera_h_max: int = 25
-    camera_s_min: int = 80
-    camera_v_min: int = 80
-    min_area_px: float = 35.0
-    max_area_px: float = 9000.0
-    min_height_px: int = 8
-    max_height_ratio: float = 0.55
-    min_aspect: float = 0.35
-    max_aspect: float = 2.40
-    lidar_front_center_deg: float = 0.0
-    lidar_front_half_width_deg: float = 24.0
-    lidar_side_min_deg: float = 8.0
-    lidar_min_valid_distance_m: float = 0.12
-    lidar_max_distance_m: float = 6.0
-    front_stop_distance_m: float = 0.35
-    front_slow_distance_m: float = 0.85
-    right_block_distance_m: float = 0.75
-    finish_min_seen_frames: int = 8
-    finish_lost_frames: int = 16
-    finish_front_clear_distance_m: float = 1.10
+ConeCommand = ConeDriveCommand
 
 
 class ConeFollower:
-    """Self-contained orange cone corridor follower.
+    """LiDAR cone corridor follower from the team cone section.
 
-    This module intentionally owns all cone-driving constants. It does not read
-    lane-following, obstacle, or speed parameters from the main driver.
+    All tuning values live in ConeFollowerConfig or cone_* ROS parameters. The
+    existing lane, obstacle, and distance-follow parameters are not read here.
     """
 
     def __init__(self, config: ConeFollowerConfig | None = None) -> None:
-        self.config = config or ConeFollowerConfig()
-        self.last_target_x: float | None = None
-        self.lost_frames = 0
-        self.seen_frames = 0
-        self.seen_cone_once = False
+        cfg = config or ConeFollowerConfig()
+        self.cruise_speed = float(cfg.cruise_speed)
+        self.min_speed = float(cfg.min_speed)
+        self.corner_speed = float(cfg.corner_speed)
+        self.finish_speed = float(cfg.finish_speed)
+
+        self.max_steer = float(cfg.max_steer)
+        self.pursuit_gain = float(cfg.pursuit_gain)
+        self.lateral_gain = float(cfg.lateral_gain)
+        self.clearance_gain = float(cfg.clearance_gain)
+        self.corner_boost = float(cfg.corner_boost)
+        self.smooth_alpha_straight = float(cfg.smooth_alpha_straight)
+        self.smooth_alpha_corner = float(cfg.smooth_alpha_corner)
+
+        self.lookahead_y_min = float(cfg.lookahead_y_min)
+        self.lookahead_y_max = float(cfg.lookahead_y_max)
+        self.lookahead_target_y = float(cfg.lookahead_target_y)
+        self.left_x = (float(cfg.left_x_min), float(cfg.left_x_max))
+        self.right_x = (float(cfg.right_x_min), float(cfg.right_x_max))
+        self.half_corridor = float(cfg.half_corridor)
+        self.left_wall_half = float(cfg.left_wall_half)
+        self.left_wall_center_bias = float(cfg.left_wall_center_bias)
+
+        self.front_slow_dist = float(cfg.front_slow_dist)
+        self.front_stop_dist = float(cfg.front_stop_dist)
+
+        self.clear_frames_required = int(cfg.clear_frames_required)
+        self.min_tracked_frames = int(cfg.min_tracked_frames)
+        self.yellow_pixel_threshold = int(cfg.yellow_pixel_threshold)
+        self.yellow_roi_ratio = float(cfg.yellow_roi_ratio)
+
+        self.hold_max_frames = int(cfg.hold_max_frames)
+
+        self._left_wall_latched = False
+        self._filtered_angle = 0.0
+        self._last_good_angle = 0.0
+        self._lost_frames = 0
+        self._clear_frames = 0
+        self._tracked_frames = 0
+
+    def reset(self) -> None:
+        self._filtered_angle = 0.0
+        self._last_good_angle = 0.0
+        self._lost_frames = 0
+        self._clear_frames = 0
+        self._tracked_frames = 0
+        self._left_wall_latched = False
+
+    def _detect_yellow_lane(self, image: Optional[np.ndarray]) -> bool:
+        if image is None:
+            return False
+        h, w = image.shape[:2]
+        y0 = int(h * (1.0 - self.yellow_roi_ratio))
+        roi = image[y0:h, int(w * 0.2) : int(w * 0.8)]
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        mask = cv2.inRange(hsv, (18, 80, 100), (38, 255, 255))
+        return int(np.count_nonzero(mask)) >= self.yellow_pixel_threshold
+
+    def _detect_cones(self, ranges):
+        return detect_cones_in_corridor(
+            ranges,
+            y_min=self.lookahead_y_min,
+            y_max=self.lookahead_y_max,
+            left_x=self.left_x,
+            right_x=self.right_x,
+            target_y=self.lookahead_target_y,
+            half_corridor=self.half_corridor,
+            force_left_wall=self._left_wall_latched,
+        )
+
+    def _blend_path_target(self, path_targets: list[PathTarget]) -> Optional[tuple]:
+        if not path_targets:
+            return None
+        wsum = sum(t.weight for t in path_targets)
+        cx = sum(t.cx * t.weight for t in path_targets) / wsum
+        cy = sum(t.cy * t.weight for t in path_targets) / wsum
+        far = max(path_targets, key=lambda t: t.depth)
+        return cx, cy, far.cx, far.cy
+
+    def _pure_pursuit_angle(self, cx: float, cy: float, boost: float = 1.0) -> float:
+        cy = max(cy, 0.8)
+        heading = math.degrees(math.atan2(cx, cy))
+        lateral = self.lateral_gain * cx / cy
+        angle = (heading * self.pursuit_gain + lateral) * boost
+        return float(np.clip(angle, -self.max_steer, self.max_steer))
 
     def compute(
         self,
-        lidar_ranges: list[float] | tuple[float, ...] | None,
-        frame: np.ndarray | None,
-        angle_min: float = 0.0,
-        angle_increment: float = 0.0,
-    ) -> ConeCommand:
-        candidates, mask = self._detect_cones(frame)
-        left_cone, right_cone = self._select_track_cones(candidates, frame)
-        path_cx, path_cy, follow_mode = self._path_target(left_cone, right_cone, frame)
-        path_count = len(candidates)
+        ranges,
+        image: Optional[np.ndarray] = None,
+    ) -> ConeDriveCommand:
+        if ranges is None:
+            return ConeDriveCommand(angle=0.0, speed=0.0, finished=False)
 
-        if path_cx is None:
-            self.lost_frames += 1
-            path_cx = self.last_target_x
-            follow_mode = "hold" if path_cx is not None else "lost"
+        left, right, det_dbg = self._detect_cones(ranges)
+        mode = det_dbg.get("mode", "none")
+        follow_mode = det_dbg.get("follow_mode", "center")
+        path_targets: list[PathTarget] = det_dbg.get("path_targets", [])
+
+        if mode in ("pair", "single", "left_wall"):
+            self._tracked_frames += 1
+            self._lost_frames = 0
         else:
-            self.seen_cone_once = True
-            self.seen_frames += 1
-            self.lost_frames = 0
-            path_cx = self._smooth_target(path_cx)
-            self.last_target_x = path_cx
+            self._lost_frames += 1
 
-        image_width = self._image_width(frame)
-        center_x = image_width * 0.5
-        if path_cx is None:
-            center_offset = 0.0
-        else:
-            center_offset = (float(path_cx) - center_x) / max(1.0, center_x)
+        if follow_mode == "left_wall":
+            self._left_wall_latched = True
+        elif det_dbg.get("left_turn", 0) > 0.14 and left:
+            self._left_wall_latched = True
+        if mode == "none" and self._lost_frames > 30:
+            self._left_wall_latched = False
 
-        front_dist = self._front_distance(lidar_ranges, angle_min, angle_increment)
-        right_blocked = self._right_blocked(lidar_ranges, angle_min, angle_increment)
-        angle = float(np.clip(center_offset * self.config.steer_gain, -self.config.max_angle_cmd, self.config.max_angle_cmd))
-        speed, mode, steer_mode = self._speed_and_mode(front_dist, follow_mode, angle)
-        finished = self._finished(front_dist)
+        finished = self._check_finished_with_cones(left, right, image, mode)
+        angle, steer_dbg = self._compute_steer(left, right, det_dbg, path_targets, mode, follow_mode)
+        speed = self._compute_speed_with_cones(ranges, left, right, finished, mode, follow_mode)
+        front_dist = self._front_clearance(ranges, left, right, path_targets)
 
         debug = {
-            "left_cone": left_cone,
-            "right_cone": right_cone,
-            "center_offset": float(center_offset),
-            "front_dist": float(front_dist) if math.isfinite(front_dist) else float("inf"),
+            **det_dbg,
+            **steer_dbg,
+            "left_cone": left,
+            "right_cone": right,
             "mode": mode,
-            "path_cx": float(path_cx) if path_cx is not None else 0.0,
-            "path_cy": float(path_cy) if path_cy is not None else 0.0,
-            "path_count": int(path_count),
+            "finished": finished,
+            "clear_frames": self._clear_frames,
+            "tracked_frames": self._tracked_frames,
+            "lost_frames": self._lost_frames,
+            "front_dist": front_dist,
+            "path_count": len(path_targets),
             "follow_mode": follow_mode,
-            "right_blocked": bool(right_blocked),
-            "steer_mode": steer_mode,
-            "lost_frames": int(self.lost_frames),
-            "seen_frames": int(self.seen_frames),
         }
-        return ConeCommand(
+        return ConeDriveCommand(
             angle=angle,
             speed=speed,
             finished=finished,
             debug=debug,
-            debug_image=self._debug_image(frame, mask, candidates, left_cone, right_cone, path_cx, path_cy, debug),
+            debug_image=self._debug_image(image, left, right, debug),
         )
 
-    def _detect_cones(self, frame: np.ndarray | None) -> tuple[list[ConeCandidate], np.ndarray | None]:
-        if frame is None or frame.size == 0:
-            return [], None
+    def _compute_steer(self, left, right, det_dbg, path_targets, mode, follow_mode):
+        steer_mode = mode
+        boost = 1.0
 
-        cfg = self.config
-        height, width = frame.shape[:2]
-        y0 = int(np.clip(round(height * cfg.camera_roi_y_min_ratio), 0, max(0, height - 1)))
-        y1 = int(np.clip(round(height * cfg.camera_roi_y_max_ratio), y0 + 1, height))
-        roi = frame[y0:y1, :]
-        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-        mask = cv2.inRange(
-            hsv,
-            np.array([cfg.camera_h_min, cfg.camera_s_min, cfg.camera_v_min], dtype=np.uint8),
-            np.array([cfg.camera_h_max, 255, 255], dtype=np.uint8),
-        )
-        mask = cv2.medianBlur(mask, 3)
-        open_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        close_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 7))
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, open_kernel)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, close_kernel)
+        if follow_mode == "left_wall":
+            boost = self.corner_boost
+            steer_mode = "left_wall"
+        elif mode == "single":
+            boost = self.corner_boost
+        elif mode == "pair" and path_targets:
+            blended = self._blend_path_target(path_targets)
+            if blended and abs(blended[0]) > 0.35:
+                boost = 1.15
 
-        candidates: list[ConeCandidate] = []
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        for contour in contours:
-            area = float(cv2.contourArea(contour))
-            if not (cfg.min_area_px <= area <= cfg.max_area_px):
-                continue
-            x, y, w, h = cv2.boundingRect(contour)
-            if h < cfg.min_height_px or h > max(cfg.min_height_px, int(height * cfg.max_height_ratio)):
-                continue
-            aspect = w / max(1.0, float(h))
-            if not (cfg.min_aspect <= aspect <= cfg.max_aspect):
-                continue
-            fill = area / max(1.0, float(w * h))
-            if fill < 0.18:
-                continue
-            candidates.append(ConeCandidate(int(x), int(y + y0), int(w), int(h), area))
+        blended = self._blend_path_target(path_targets)
 
-        candidates.sort(key=lambda c: (c.cy, c.area), reverse=True)
-        return candidates, mask
+        if blended:
+            cx, cy, far_cx, far_cy = blended
+            if follow_mode == "left_wall":
+                cx += self.left_wall_center_bias
+                far_cx += self.left_wall_center_bias * 0.6
+                near_angle = self._pure_pursuit_angle(cx, cy, boost)
+                far_angle = self._pure_pursuit_angle(far_cx, far_cy, boost * 1.05)
+                raw_angle = 0.30 * near_angle + 0.70 * far_angle
+            else:
+                near_angle = self._pure_pursuit_angle(cx, cy, boost)
+                far_angle = self._pure_pursuit_angle(far_cx, far_cy, boost * 1.1)
+                raw_angle = 0.35 * near_angle + 0.65 * far_angle
+            center_offset = cx
+        elif left and right:
+            cx = (left.cx + right.cx) / 2.0
+            cy = (left.cy + right.cy) / 2.0
+            raw_angle = self._pure_pursuit_angle(cx, cy, boost)
+            center_offset = cx
+            left_clear = abs(left.cx)
+            right_clear = abs(right.cx)
+            clearance_offset = (left_clear - right_clear) / max(left_clear + right_clear, 0.1)
+            raw_angle -= self.clearance_gain * clearance_offset
+        elif left:
+            boost = self.corner_boost
+            cx = left.cx + self.left_wall_half
+            cy = max(left.cy, 1.0)
+            raw_angle = self._pure_pursuit_angle(cx, cy, boost)
+            center_offset = cx
+            steer_mode = "single_left"
+        elif right and not det_dbg.get("right_blocked"):
+            boost = self.corner_boost
+            cx = right.cx - self.half_corridor
+            cy = max(right.cy, 1.0)
+            raw_angle = self._pure_pursuit_angle(cx, cy, boost)
+            center_offset = cx
+            steer_mode = "single_right"
+        elif self._lost_frames <= self.hold_max_frames:
+            steer_mode = "hold"
+            raw_angle = self._last_good_angle * 1.05
+            raw_angle = float(np.clip(raw_angle, -self.max_steer, self.max_steer))
+            alpha = self.smooth_alpha_corner
+            self._filtered_angle += alpha * (raw_angle - self._filtered_angle)
+            return self._filtered_angle, {
+                "center_offset": 0.0,
+                "raw_angle": raw_angle,
+                "filtered_angle": self._filtered_angle,
+                "steer_mode": steer_mode,
+                "path_cx": 0.0,
+                "path_cy": 0.0,
+            }
+        else:
+            raw_angle = 0.0
+            center_offset = 0.0
 
-    def _select_track_cones(
+        raw_angle = float(np.clip(raw_angle, -self.max_steer, self.max_steer))
+
+        if mode in ("pair", "single", "left_wall"):
+            self._last_good_angle = raw_angle
+
+        is_corner = follow_mode == "left_wall" or mode != "pair" or abs(raw_angle) > 12.0
+        alpha = self.smooth_alpha_corner if is_corner else self.smooth_alpha_straight
+        self._filtered_angle += alpha * (raw_angle - self._filtered_angle)
+
+        path_cx = blended[0] if blended else center_offset
+        path_cy = blended[1] if blended else (left.cy if left else 99.0)
+
+        return self._filtered_angle, {
+            "center_offset": center_offset if blended is None else blended[0],
+            "raw_angle": raw_angle,
+            "filtered_angle": self._filtered_angle,
+            "steer_mode": steer_mode,
+            "path_cx": path_cx,
+            "path_cy": path_cy,
+            "boost": boost,
+        }
+
+    def _compute_speed_with_cones(self, ranges, left, right, finished, mode, follow_mode):
+        if finished:
+            return self.finish_speed
+
+        front_dist = self._front_clearance(ranges, left, right, [])
+        if follow_mode == "left_wall" or mode != "pair" or self._lost_frames > 0:
+            base = self.corner_speed
+        else:
+            base = self.cruise_speed
+
+        if front_dist < self.front_stop_dist:
+            return 0.0
+        if front_dist < self.front_slow_dist:
+            ratio = (front_dist - self.front_stop_dist) / (self.front_slow_dist - self.front_stop_dist)
+            return self.min_speed + ratio * (base - self.min_speed)
+        return base
+
+    def _check_finished_with_cones(self, left, right, image, mode):
+        no_cones = mode == "none" and self._lost_frames > self.hold_max_frames
+        lane_visible = self._detect_yellow_lane(image)
+        tracked_enough = self._tracked_frames >= self.min_tracked_frames
+
+        if no_cones and lane_visible and tracked_enough:
+            self._clear_frames += 1
+        else:
+            self._clear_frames = 0
+
+        return self._clear_frames >= self.clear_frames_required
+
+    def _front_clearance(
         self,
-        candidates: list[ConeCandidate],
-        frame: np.ndarray | None,
-    ) -> tuple[ConeCandidate | None, ConeCandidate | None]:
-        if not candidates:
-            return None, None
-
-        center_x = self._image_width(frame) * 0.5
-        left = [candidate for candidate in candidates if candidate.cx < center_x]
-        right = [candidate for candidate in candidates if candidate.cx >= center_x]
-
-        def score(candidate: ConeCandidate) -> float:
-            return candidate.area + candidate.cy * 0.8
-
-        left_cone = max(left, key=score) if left else None
-        right_cone = max(right, key=score) if right else None
-        return left_cone, right_cone
-
-    def _path_target(
-        self,
-        left_cone: ConeCandidate | None,
-        right_cone: ConeCandidate | None,
-        frame: np.ndarray | None,
-    ) -> tuple[float | None, float | None, str]:
-        width = self._image_width(frame)
-        cfg = self.config
-        if left_cone is not None and right_cone is not None:
-            return (left_cone.cx + right_cone.cx) * 0.5, (left_cone.cy + right_cone.cy) * 0.5, "pair"
-        if left_cone is not None:
-            return min(width - 1.0, left_cone.cx + cfg.single_cone_path_offset_px), left_cone.cy, "left_only"
-        if right_cone is not None:
-            return max(0.0, right_cone.cx - cfg.single_cone_path_offset_px), right_cone.cy, "right_only"
-        return None, None, "lost"
-
-    def _smooth_target(self, target_x: float) -> float:
-        alpha = float(np.clip(self.config.target_smoothing, 0.0, 1.0))
-        if self.last_target_x is None:
-            return float(target_x)
-        return float(self.last_target_x * alpha + target_x * (1.0 - alpha))
-
-    def _speed_and_mode(self, front_dist: float, follow_mode: str, angle: float) -> tuple[float, str, str]:
-        cfg = self.config
-        steer_mode = "turn" if abs(angle) > cfg.max_angle_cmd * 0.45 else "track"
-        if math.isfinite(front_dist) and front_dist <= cfg.front_stop_distance_m:
-            return 0.0, "front_blocked", steer_mode
-        if follow_mode == "lost":
-            return cfg.lost_speed_cmd, "lost", "lost"
-        if follow_mode == "hold":
-            return min(cfg.slow_speed_cmd, cfg.speed_cmd), "hold", steer_mode
-        if math.isfinite(front_dist) and front_dist <= cfg.front_slow_distance_m:
-            return min(cfg.slow_speed_cmd, cfg.speed_cmd), "front_slow", steer_mode
-        if steer_mode == "turn":
-            return min(cfg.slow_speed_cmd, cfg.speed_cmd), "turn_slow", steer_mode
-        return cfg.speed_cmd, "track", steer_mode
-
-    def _finished(self, front_dist: float) -> bool:
-        cfg = self.config
-        clear_front = (not math.isfinite(front_dist)) or front_dist >= cfg.finish_front_clear_distance_m
-        return (
-            self.seen_cone_once
-            and self.seen_frames >= max(0, cfg.finish_min_seen_frames)
-            and self.lost_frames >= max(1, cfg.finish_lost_frames)
-            and clear_front
-        )
-
-    def _front_distance(
-        self,
-        ranges: list[float] | tuple[float, ...] | None,
-        angle_min: float,
-        angle_increment: float,
+        ranges,
+        left: Optional[ConeCluster],
+        right: Optional[ConeCluster],
+        path_targets: list[PathTarget],
     ) -> float:
-        points = self._lidar_points(ranges, angle_min, angle_increment)
-        front = [distance for distance, relative in points if abs(math.degrees(relative)) <= self.config.lidar_front_half_width_deg]
-        return min(front) if front else float("inf")
+        center_front = center_path_distance(ranges, y_max=self.lookahead_y_max)
 
-    def _right_blocked(
-        self,
-        ranges: list[float] | tuple[float, ...] | None,
-        angle_min: float,
-        angle_increment: float,
-    ) -> bool:
-        cfg = self.config
-        for distance, relative in self._lidar_points(ranges, angle_min, angle_increment):
-            relative_deg = math.degrees(relative)
-            if -cfg.lidar_front_half_width_deg <= relative_deg <= -cfg.lidar_side_min_deg:
-                if distance <= cfg.right_block_distance_m:
-                    return True
-        return False
+        pair_front = 99.0
+        if path_targets:
+            pair_front = min(t.cy for t in path_targets)
+        elif left and right:
+            avg_y = (left.cy + right.cy) / 2.0
+            if avg_y > 1.0:
+                pair_front = avg_y
 
-    def _lidar_points(
-        self,
-        ranges: list[float] | tuple[float, ...] | None,
-        angle_min: float,
-        angle_increment: float,
-    ) -> list[tuple[float, float]]:
-        cfg = self.config
-        if ranges is None or len(ranges) == 0 or angle_increment == 0.0:
-            return []
-        front_angle = math.radians(cfg.lidar_front_center_deg)
-        points: list[tuple[float, float]] = []
-        for idx, raw_distance in enumerate(ranges):
-            distance = float(raw_distance)
-            if not math.isfinite(distance):
-                continue
-            if not (cfg.lidar_min_valid_distance_m < distance < cfg.lidar_max_distance_m):
-                continue
-            angle = angle_min + idx * angle_increment
-            relative = self._wrap_angle_pi(angle - front_angle)
-            if math.cos(relative) <= 0.0:
-                continue
-            points.append((distance, relative))
-        return points
+        front = min(center_front, pair_front)
+        if front < 1.0 and center_front > 1.2:
+            front = center_front
+        return front
 
     def _debug_image(
         self,
-        frame: np.ndarray | None,
-        mask: np.ndarray | None,
-        candidates: list[ConeCandidate],
-        left_cone: ConeCandidate | None,
-        right_cone: ConeCandidate | None,
-        path_cx: float | None,
-        path_cy: float | None,
-        debug: dict[str, object],
+        image: Optional[np.ndarray],
+        left: Optional[ConeCluster],
+        right: Optional[ConeCluster],
+        debug: dict,
     ) -> np.ndarray | None:
-        if frame is None or frame.size == 0:
+        if image is None:
             return None
-        vis = frame.copy()
-        height, width = vis.shape[:2]
-        y0 = int(np.clip(round(height * self.config.camera_roi_y_min_ratio), 0, max(0, height - 1)))
-        y1 = int(np.clip(round(height * self.config.camera_roi_y_max_ratio), y0 + 1, height))
-        cv2.rectangle(vis, (0, y0), (width - 1, y1), (0, 180, 255), 2)
-        for candidate in candidates:
-            color = (0, 140, 255)
-            if candidate is left_cone:
-                color = (255, 80, 0)
-            elif candidate is right_cone:
-                color = (0, 255, 80)
-            cv2.rectangle(vis, (candidate.x, candidate.y), (candidate.x + candidate.w, candidate.y + candidate.h), color, 2)
-            cv2.circle(vis, (int(candidate.cx), int(candidate.cy)), 3, color, -1)
-        if path_cx is not None and path_cy is not None:
-            cv2.circle(vis, (int(path_cx), int(path_cy)), 7, (255, 0, 255), -1)
-            cv2.line(vis, (width // 2, height - 1), (int(path_cx), int(path_cy)), (255, 0, 255), 2)
+        vis = image.copy()
         lines = [
             f"CONE mode={debug.get('mode')} follow={debug.get('follow_mode')}",
-            f"angle={debug.get('center_offset', 0.0):+.2f} lost={debug.get('lost_frames')}",
-            f"front={debug.get('front_dist')} n={debug.get('path_count')}",
+            f"angle={debug.get('filtered_angle', 0.0):+.1f} raw={debug.get('raw_angle', 0.0):+.1f}",
+            f"path=({debug.get('path_cx', 0.0):+.2f},{debug.get('path_cy', 0.0):.2f}) front={debug.get('front_dist', 99.0):.2f}",
+            f"tracked={debug.get('tracked_frames')} lost={debug.get('lost_frames')} clear={debug.get('clear_frames')}",
         ]
         for idx, text in enumerate(lines):
-            cv2.putText(vis, text, (12, 28 + idx * 24), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (0, 255, 255), 2, cv2.LINE_AA)
-        if mask is not None:
-            mask_bgr = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
-            mask_bgr = cv2.resize(mask_bgr, (max(1, width // 4), max(1, mask_bgr.shape[0] // 4)))
-            mh, mw = mask_bgr.shape[:2]
-            vis[0:mh, width - mw:width] = mask_bgr
+            cv2.putText(vis, text, (12, 28 + idx * 24), cv2.FONT_HERSHEY_SIMPLEX, 0.56, (0, 255, 255), 2, cv2.LINE_AA)
+        if left:
+            cv2.putText(vis, f"L ({left.cx:+.2f},{left.cy:.2f})", (12, vis.shape[0] - 48), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (255, 120, 0), 2, cv2.LINE_AA)
+        if right:
+            cv2.putText(vis, f"R ({right.cx:+.2f},{right.cy:.2f})", (12, vis.shape[0] - 22), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (0, 255, 120), 2, cv2.LINE_AA)
         return vis
-
-    @staticmethod
-    def _image_width(frame: np.ndarray | None) -> int:
-        if frame is not None and frame.ndim >= 2 and frame.shape[1] > 0:
-            return int(frame.shape[1])
-        return 640
-
-    @staticmethod
-    def _wrap_angle_pi(angle: float) -> float:
-        return (angle + math.pi) % (2.0 * math.pi) - math.pi

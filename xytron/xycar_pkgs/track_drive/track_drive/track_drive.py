@@ -180,36 +180,34 @@ class TrackDriverNode(Node):
         self.declare_parameter("cone_start_active", True)
         self.declare_parameter("cone_finish_to_lane", True)
         self.declare_parameter("cone_publish_debug_image", True)
-        self.declare_parameter("cone_speed_cmd", 7.0)
-        self.declare_parameter("cone_slow_speed_cmd", 4.0)
-        self.declare_parameter("cone_lost_speed_cmd", 0.0)
-        self.declare_parameter("cone_max_angle_cmd", 70.0)
-        self.declare_parameter("cone_steer_gain", 72.0)
-        self.declare_parameter("cone_single_path_offset_px", 140.0)
-        self.declare_parameter("cone_target_smoothing", 0.35)
-        self.declare_parameter("cone_camera_roi_y_min_ratio", 0.38)
-        self.declare_parameter("cone_camera_roi_y_max_ratio", 0.96)
-        self.declare_parameter("cone_camera_h_min", 5)
-        self.declare_parameter("cone_camera_h_max", 25)
-        self.declare_parameter("cone_camera_s_min", 80)
-        self.declare_parameter("cone_camera_v_min", 80)
-        self.declare_parameter("cone_min_area_px", 35.0)
-        self.declare_parameter("cone_max_area_px", 9000.0)
-        self.declare_parameter("cone_min_height_px", 8)
-        self.declare_parameter("cone_max_height_ratio", 0.55)
-        self.declare_parameter("cone_min_aspect", 0.35)
-        self.declare_parameter("cone_max_aspect", 2.40)
-        self.declare_parameter("cone_lidar_front_center_deg", 0.0)
-        self.declare_parameter("cone_lidar_front_half_width_deg", 24.0)
-        self.declare_parameter("cone_lidar_side_min_deg", 8.0)
-        self.declare_parameter("cone_lidar_min_valid_distance_m", 0.12)
-        self.declare_parameter("cone_lidar_max_distance_m", 6.0)
-        self.declare_parameter("cone_front_stop_distance_m", 0.35)
-        self.declare_parameter("cone_front_slow_distance_m", 0.85)
-        self.declare_parameter("cone_right_block_distance_m", 0.75)
-        self.declare_parameter("cone_finish_min_seen_frames", 8)
-        self.declare_parameter("cone_finish_lost_frames", 16)
-        self.declare_parameter("cone_finish_front_clear_distance_m", 1.10)
+        self.declare_parameter("cone_cruise_speed", 5.0)
+        self.declare_parameter("cone_min_speed", 3.0)
+        self.declare_parameter("cone_corner_speed", 3.5)
+        self.declare_parameter("cone_finish_speed", 3.0)
+        self.declare_parameter("cone_max_steer", 80.0)
+        self.declare_parameter("cone_pursuit_gain", 4.2)
+        self.declare_parameter("cone_lateral_gain", 18.0)
+        self.declare_parameter("cone_clearance_gain", 12.0)
+        self.declare_parameter("cone_corner_boost", 1.35)
+        self.declare_parameter("cone_smooth_alpha_straight", 0.40)
+        self.declare_parameter("cone_smooth_alpha_corner", 0.65)
+        self.declare_parameter("cone_lookahead_y_min", 0.45)
+        self.declare_parameter("cone_lookahead_y_max", 6.5)
+        self.declare_parameter("cone_lookahead_target_y", 3.0)
+        self.declare_parameter("cone_left_x_min", -3.5)
+        self.declare_parameter("cone_left_x_max", -0.55)
+        self.declare_parameter("cone_right_x_min", 0.55)
+        self.declare_parameter("cone_right_x_max", 3.2)
+        self.declare_parameter("cone_half_corridor", 2.25)
+        self.declare_parameter("cone_left_wall_half", 2.15)
+        self.declare_parameter("cone_left_wall_center_bias", 0.12)
+        self.declare_parameter("cone_front_slow_dist", 1.0)
+        self.declare_parameter("cone_front_stop_dist", 0.45)
+        self.declare_parameter("cone_clear_frames_required", 25)
+        self.declare_parameter("cone_min_tracked_frames", 80)
+        self.declare_parameter("cone_yellow_pixel_threshold", 2500)
+        self.declare_parameter("cone_yellow_roi_ratio", 0.45)
+        self.declare_parameter("cone_hold_max_frames", 25)
 
         self.image_topic = str(self.get_parameter("image_topic").value)
         self.scan_topic = str(self.get_parameter("scan_topic").value)
@@ -360,36 +358,34 @@ class TrackDriverNode(Node):
         self.cone_finish_to_lane = bool(self.get_parameter("cone_finish_to_lane").value)
         self.cone_publish_debug_image = bool(self.get_parameter("cone_publish_debug_image").value)
         self.cone_config = ConeFollowerConfig(
-            speed_cmd=float(self.get_parameter("cone_speed_cmd").value),
-            slow_speed_cmd=float(self.get_parameter("cone_slow_speed_cmd").value),
-            lost_speed_cmd=float(self.get_parameter("cone_lost_speed_cmd").value),
-            max_angle_cmd=float(self.get_parameter("cone_max_angle_cmd").value),
-            steer_gain=float(self.get_parameter("cone_steer_gain").value),
-            single_cone_path_offset_px=float(self.get_parameter("cone_single_path_offset_px").value),
-            target_smoothing=float(self.get_parameter("cone_target_smoothing").value),
-            camera_roi_y_min_ratio=float(self.get_parameter("cone_camera_roi_y_min_ratio").value),
-            camera_roi_y_max_ratio=float(self.get_parameter("cone_camera_roi_y_max_ratio").value),
-            camera_h_min=int(self.get_parameter("cone_camera_h_min").value),
-            camera_h_max=int(self.get_parameter("cone_camera_h_max").value),
-            camera_s_min=int(self.get_parameter("cone_camera_s_min").value),
-            camera_v_min=int(self.get_parameter("cone_camera_v_min").value),
-            min_area_px=float(self.get_parameter("cone_min_area_px").value),
-            max_area_px=float(self.get_parameter("cone_max_area_px").value),
-            min_height_px=int(self.get_parameter("cone_min_height_px").value),
-            max_height_ratio=float(self.get_parameter("cone_max_height_ratio").value),
-            min_aspect=float(self.get_parameter("cone_min_aspect").value),
-            max_aspect=float(self.get_parameter("cone_max_aspect").value),
-            lidar_front_center_deg=float(self.get_parameter("cone_lidar_front_center_deg").value),
-            lidar_front_half_width_deg=float(self.get_parameter("cone_lidar_front_half_width_deg").value),
-            lidar_side_min_deg=float(self.get_parameter("cone_lidar_side_min_deg").value),
-            lidar_min_valid_distance_m=float(self.get_parameter("cone_lidar_min_valid_distance_m").value),
-            lidar_max_distance_m=float(self.get_parameter("cone_lidar_max_distance_m").value),
-            front_stop_distance_m=float(self.get_parameter("cone_front_stop_distance_m").value),
-            front_slow_distance_m=float(self.get_parameter("cone_front_slow_distance_m").value),
-            right_block_distance_m=float(self.get_parameter("cone_right_block_distance_m").value),
-            finish_min_seen_frames=int(self.get_parameter("cone_finish_min_seen_frames").value),
-            finish_lost_frames=int(self.get_parameter("cone_finish_lost_frames").value),
-            finish_front_clear_distance_m=float(self.get_parameter("cone_finish_front_clear_distance_m").value),
+            cruise_speed=float(self.get_parameter("cone_cruise_speed").value),
+            min_speed=float(self.get_parameter("cone_min_speed").value),
+            corner_speed=float(self.get_parameter("cone_corner_speed").value),
+            finish_speed=float(self.get_parameter("cone_finish_speed").value),
+            max_steer=float(self.get_parameter("cone_max_steer").value),
+            pursuit_gain=float(self.get_parameter("cone_pursuit_gain").value),
+            lateral_gain=float(self.get_parameter("cone_lateral_gain").value),
+            clearance_gain=float(self.get_parameter("cone_clearance_gain").value),
+            corner_boost=float(self.get_parameter("cone_corner_boost").value),
+            smooth_alpha_straight=float(self.get_parameter("cone_smooth_alpha_straight").value),
+            smooth_alpha_corner=float(self.get_parameter("cone_smooth_alpha_corner").value),
+            lookahead_y_min=float(self.get_parameter("cone_lookahead_y_min").value),
+            lookahead_y_max=float(self.get_parameter("cone_lookahead_y_max").value),
+            lookahead_target_y=float(self.get_parameter("cone_lookahead_target_y").value),
+            left_x_min=float(self.get_parameter("cone_left_x_min").value),
+            left_x_max=float(self.get_parameter("cone_left_x_max").value),
+            right_x_min=float(self.get_parameter("cone_right_x_min").value),
+            right_x_max=float(self.get_parameter("cone_right_x_max").value),
+            half_corridor=float(self.get_parameter("cone_half_corridor").value),
+            left_wall_half=float(self.get_parameter("cone_left_wall_half").value),
+            left_wall_center_bias=float(self.get_parameter("cone_left_wall_center_bias").value),
+            front_slow_dist=float(self.get_parameter("cone_front_slow_dist").value),
+            front_stop_dist=float(self.get_parameter("cone_front_stop_dist").value),
+            clear_frames_required=int(self.get_parameter("cone_clear_frames_required").value),
+            min_tracked_frames=int(self.get_parameter("cone_min_tracked_frames").value),
+            yellow_pixel_threshold=int(self.get_parameter("cone_yellow_pixel_threshold").value),
+            yellow_roi_ratio=float(self.get_parameter("cone_yellow_roi_ratio").value),
+            hold_max_frames=int(self.get_parameter("cone_hold_max_frames").value),
         )
 
         self.lane_detector = LaneDetector(
@@ -843,12 +839,7 @@ class TrackDriverNode(Node):
         if not self.cone_mode_active:
             return False
 
-        cmd = self.cone_follower.compute(
-            self.lidar_ranges,
-            self.image,
-            self.lidar_angle_min,
-            self.lidar_angle_increment,
-        )
+        cmd = self.cone_follower.compute(self.lidar_ranges, self.image)
         self.last_cone_cmd = cmd
         self.last_speed_mode = "cone_mode"
 
@@ -1759,7 +1750,7 @@ class TrackDriverNode(Node):
             "cone_follow_mode": str(cone_dbg.get("follow_mode", "none")),
             "cone_steer_mode": str(cone_dbg.get("steer_mode", "none")),
             "cone_lost_frames": int(cone_dbg.get("lost_frames", 0)),
-            "cone_seen_frames": int(cone_dbg.get("seen_frames", 0)),
+            "cone_tracked_frames": int(cone_dbg.get("tracked_frames", 0)),
             "cone_path_count": int(cone_dbg.get("path_count", 0)),
             "cone_center_offset": round(float(cone_dbg.get("center_offset", 0.0)), 3),
             "cone_front_dist": round(cone_front_dist, 3) if math.isfinite(cone_front_dist) else None,
