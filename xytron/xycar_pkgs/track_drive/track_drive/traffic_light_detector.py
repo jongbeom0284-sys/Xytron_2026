@@ -245,14 +245,14 @@ class TrafficLightDetector:
         bar_supported_scores = {
             color: lamp["area"]
             for color, lamp in lamp_candidates.items()
-            if self._has_dark_signal_bar_support(analysis_roi, lamp)
+            if self._has_dark_signal_bar_support(analysis_roi, lamp, color)
         }
         if not bar_supported_scores and analysis_roi is not roi:
             roi_lamp_candidates = self._compact_lamp_candidates(roi)
             bar_supported_scores = {
                 color: lamp["area"]
                 for color, lamp in roi_lamp_candidates.items()
-                if self._has_dark_signal_bar_support(roi, lamp)
+                if self._has_dark_signal_bar_support(roi, lamp, color)
             }
         if bar_supported_scores:
             best_signal = max(bar_supported_scores, key=bar_supported_scores.get)
@@ -841,7 +841,7 @@ class TrafficLightDetector:
                 candidates[color] = max(blobs, key=lambda item: item["area"])
         return candidates
 
-    def _has_dark_signal_bar_support(self, roi, lamp):
+    def _has_dark_signal_bar_support(self, roi, lamp, color=None):
         """Confirm a compact colored blob belongs to a traffic light bar."""
 
         cx = lamp.get("cx")
@@ -862,8 +862,15 @@ class TrafficLightDetector:
 
         band_top = max(0, int(y - height * 0.55))
         band_bottom = min(roi_height, int(y + height * 1.55))
-        band_left = max(0, int(x - width * 5.2))
-        band_right = min(roi_width, int(x + width * 0.55))
+        if color == self.START_RED:
+            band_left = max(0, int(x - width * 0.55))
+            band_right = min(roi_width, int(x + width * 5.2))
+        elif color == self.START_GREEN:
+            band_left = max(0, int(x - width * 5.2))
+            band_right = min(roi_width, int(x + width * 0.55))
+        else:
+            band_left = max(0, int(x - width * 3.0))
+            band_right = min(roi_width, int(x + width * 3.0))
         if band_right <= band_left or band_bottom <= band_top:
             return False
 
@@ -879,8 +886,9 @@ class TrafficLightDetector:
                 continue
             if bw < width * 2.0 or bh < height * 0.40:
                 continue
-            global_right = band_left + bx + bw
-            if global_right < x - width * 0.20:
+            global_left = band_left + bx
+            global_right = global_left + bw
+            if global_right < x - width * 0.20 or global_left > x + width * 1.20:
                 continue
             return True
         return False

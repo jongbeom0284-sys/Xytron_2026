@@ -12,17 +12,17 @@ from .lidar_utils import ConeCluster, PathTarget, center_path_distance, detect_c
 
 @dataclass
 class ConeFollowerConfig:
-    cruise_speed: float = 5.0
-    min_speed: float = 3.0
-    corner_speed: float = 3.5
-    finish_speed: float = 3.0
-    max_steer: float = 80.0
-    pursuit_gain: float = 4.2
-    lateral_gain: float = 18.0
-    clearance_gain: float = 12.0
+    cruise_speed: float = 15.0
+    min_speed: float = 9.0
+    corner_speed: float = 10.5
+    finish_speed: float = 9.0
+    max_steer: float = 75.0
+    pursuit_gain: float = 3.8
+    lateral_gain: float = 13.5
+    clearance_gain: float = 5.5
     corner_boost: float = 1.35
-    smooth_alpha_straight: float = 0.40
-    smooth_alpha_corner: float = 0.65
+    smooth_alpha_straight: float = 0.30
+    smooth_alpha_corner: float = 0.50
     lookahead_y_min: float = 0.45
     lookahead_y_max: float = 6.5
     lookahead_target_y: float = 3.0
@@ -40,6 +40,8 @@ class ConeFollowerConfig:
     yellow_pixel_threshold: int = 2500
     yellow_roi_ratio: float = 0.45
     hold_max_frames: int = 25
+    right_only_finish_frames: int = 0
+    left_missing_finish_frames: int = 20
 
 
 @dataclass
@@ -94,6 +96,8 @@ class ConeFollower:
         self.yellow_roi_ratio = float(cfg.yellow_roi_ratio)
 
         self.hold_max_frames = int(cfg.hold_max_frames)
+        self.right_only_finish_frames = int(cfg.right_only_finish_frames)
+        self.left_missing_finish_frames = int(cfg.left_missing_finish_frames)
 
         self._left_wall_latched = False
         self._filtered_angle = 0.0
@@ -101,6 +105,10 @@ class ConeFollower:
         self._lost_frames = 0
         self._clear_frames = 0
         self._tracked_frames = 0
+        self._right_only_frames = 0
+        self._left_missing_frames = 0
+        self._left_seen = False
+        self._finish_reason = "none"
 
     def reset(self) -> None:
         self._filtered_angle = 0.0
@@ -108,6 +116,10 @@ class ConeFollower:
         self._lost_frames = 0
         self._clear_frames = 0
         self._tracked_frames = 0
+        self._right_only_frames = 0
+        self._left_missing_frames = 0
+        self._left_seen = False
+        self._finish_reason = "none"
         self._left_wall_latched = False
 
     def _detect_yellow_lane(self, image: Optional[np.ndarray]) -> bool:
@@ -189,6 +201,10 @@ class ConeFollower:
             "clear_frames": self._clear_frames,
             "tracked_frames": self._tracked_frames,
             "lost_frames": self._lost_frames,
+            "right_only_frames": self._right_only_frames,
+            "left_missing_frames": self._left_missing_frames,
+            "left_seen": self._left_seen,
+            "finish_reason": self._finish_reason,
             "front_dist": front_dist,
             "path_count": len(path_targets),
             "follow_mode": follow_mode,
@@ -311,8 +327,36 @@ class ConeFollower:
         return base
 
     def _check_finished_with_cones(self, left, right, image, mode):
-        no_cones = mode == "none" and self._lost_frames > self.hold_max_frames
         lane_visible = self._detect_yellow_lane(image)
+
+        if left is not None:
+            self._left_seen = True
+
+        left_missing = self._left_seen and left is None
+        if left_missing:
+            self._left_missing_frames += 1
+        else:
+            self._left_missing_frames = 0
+
+        if (
+            self.left_missing_finish_frames > 0
+            and self._left_missing_frames >= self.left_missing_finish_frames
+            and lane_visible
+        ):
+            self._finish_reason = "left_missing"
+            return True
+
+        right_only = mode == "single" and right is not None and left is None
+        if right_only:
+            self._right_only_frames += 1
+        else:
+            self._right_only_frames = 0
+
+        if self.right_only_finish_frames > 0 and self._right_only_frames >= self.right_only_finish_frames:
+            self._finish_reason = "right_only"
+            return True
+
+        no_cones = mode == "none" and self._lost_frames > self.hold_max_frames
         tracked_enough = self._tracked_frames >= self.min_tracked_frames
 
         if no_cones and lane_visible and tracked_enough:
@@ -320,7 +364,12 @@ class ConeFollower:
         else:
             self._clear_frames = 0
 
-        return self._clear_frames >= self.clear_frames_required
+        if self._clear_frames >= self.clear_frames_required:
+            self._finish_reason = "clear_lane"
+            return True
+
+        self._finish_reason = "none"
+        return False
 
     def _front_clearance(
         self,

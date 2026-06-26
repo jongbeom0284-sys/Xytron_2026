@@ -22,7 +22,7 @@ from .lane_detector import LaneDetector, LaneResult
 from .lidar_obstacle import ObstacleDetector, ObstacleResult
 from .object_detector import HeadlightDetector, HeadlightResult, ObjectResult, VehicleObjectDetector
 from .stopline_detector import StopLineDetector
-from .traffic_light_detector import TrafficLightDetector
+from .traffic_light_detector import RoiRatio, TrafficLightDetector
 
 try:
     from detection_msgs.msg import BoundingBoxes  # type: ignore
@@ -32,7 +32,7 @@ except Exception:
 
 class TrackDriverNode(Node):
     def __init__(self) -> None:
-        super().__init__("driver")
+        super().__init__("kobot_driver")
         self.bridge = CvBridge()
         self.motor_msg = XycarMotor()
 
@@ -56,10 +56,19 @@ class TrackDriverNode(Node):
         self.declare_parameter("yolo_topic", "/yolov5/detections")
         self.declare_parameter("control_hz", 10.0)
         self.declare_parameter("publish_debug_images", True)
-        self.declare_parameter("enable_start_signal_gate", False)
+        self.declare_parameter("drive_status_console_period_s", 0.5)
+        self.declare_parameter("enable_start_signal_gate", True)
         self.declare_parameter("start_signal_release_latched", True)
+        self.declare_parameter("enable_traffic_light_gate", True)
+        self.declare_parameter("traffic_light_green_ignore_s", 4.0)
+        self.declare_parameter("traffic_light_red_hold_s", 0.7)
+        self.declare_parameter("traffic_light_min_red_score", 80.0)
+        self.declare_parameter("traffic_light_roi_x1", 0.15)
+        self.declare_parameter("traffic_light_roi_y1", 0.10)
+        self.declare_parameter("traffic_light_roi_x2", 0.85)
+        self.declare_parameter("traffic_light_roi_y2", 0.40)
         self.declare_parameter("enable_stopline", False)
-        self.declare_parameter("enable_lidar_obstacle", True)
+        self.declare_parameter("enable_lidar_obstacle", False)
         self.declare_parameter("enable_object_detector", True)
         self.declare_parameter("enable_headlight_detector", True)
         self.declare_parameter("headlight_camera_side", "left")
@@ -88,17 +97,17 @@ class TrackDriverNode(Node):
         self.declare_parameter("headlight_auto_lane_deadband_px", 45.0)
         self.declare_parameter("headlight_image_timeout_s", 0.7)
         self.declare_parameter("front_stop_distance_m", 0.0)
-        self.declare_parameter("front_slow_distance_m", 0.9)
+        self.declare_parameter("front_slow_distance_m", 0.0)
         self.declare_parameter("image_timeout_s", 1.0)
         self.declare_parameter("scan_timeout_s", 1.0)
         self.declare_parameter("lane_dropout_hold_s", 0.0)
-        self.declare_parameter("lane_dropout_speed_cmd", 15.0)
+        self.declare_parameter("lane_dropout_speed_cmd", 8.0)
         self.declare_parameter("lane_good_confidence", 0.35)
         self.declare_parameter("straight_fast_speed_cmd", 30.0)
         self.declare_parameter("caution_speed_cmd", 12.0)
         self.declare_parameter("dynamic_speed_min_cmd", 12.0)
         self.declare_parameter("dynamic_speed_max_cmd", 30.0)
-        self.declare_parameter("dynamic_lateral_accel_limit_mps2", 3.0)
+        self.declare_parameter("dynamic_lateral_accel_limit_mps2", 1.6)
         self.declare_parameter("dynamic_curve_score_deadband_px", 20.0)
         self.declare_parameter("dynamic_curve_score_to_curvature", 0.0015)
         self.declare_parameter("dynamic_angle_error_to_curve_score", 4.0)
@@ -107,6 +116,7 @@ class TrackDriverNode(Node):
         self.declare_parameter("straight_curve_score_max_px", 30.0)
         self.declare_parameter("straight_angle_error_max_deg", 18.0)
         self.declare_parameter("straight_raw_angle_max_cmd", 24.0)
+        self.declare_parameter("straight_fast_steering_scale", 0.35)
         self.declare_parameter("enable_yellow_lane_slowdown", True)
         self.declare_parameter("yellow_lane_slow_min_pixels", 3000)
         self.declare_parameter("yellow_lane_slow_edge_min_pixels", 700)
@@ -122,8 +132,8 @@ class TrackDriverNode(Node):
         self.declare_parameter("overtake_return_s", 1.0)
         self.declare_parameter("overtake_front_width_deg", 30.0)
         self.declare_parameter("enable_lidar_lane_avoidance", True)
-        self.declare_parameter("lidar_lane_avoid_trigger_distance_m", 2.0)
-        self.declare_parameter("lidar_lane_avoid_clear_distance_m", 2.6)
+        self.declare_parameter("lidar_lane_avoid_trigger_distance_m", 2.7)
+        self.declare_parameter("lidar_lane_avoid_clear_distance_m", 4.2)
         self.declare_parameter("lidar_lane_avoid_side_min_deg", 8.0)
         self.declare_parameter("lidar_lane_avoid_speed_cmd", 10.0)
         self.declare_parameter("lidar_lane_avoid_preferred_side", "left")
@@ -131,13 +141,21 @@ class TrackDriverNode(Node):
         self.declare_parameter("lidar_positive_angle_side", "left")
         self.declare_parameter("lidar_front_center_deg", 0.0)
         self.declare_parameter("lidar_front_half_width_deg", 40.0)
+        self.declare_parameter("enable_lidar_steering_block", True)
+        self.declare_parameter("lidar_steering_block_distance_m", 3.0)
         self.declare_parameter("publish_lidar_front_image", True)
         self.declare_parameter("lidar_front_view_max_m", 5.0)
         self.declare_parameter("enable_checkerboard_avoid_reset", True)
+        self.declare_parameter("enable_checkerboard_yaw_recovery", False)
+        self.declare_parameter("checkerboard_yaw_recovery_hold_s", 4.0)
+        self.declare_parameter("checkerboard_yaw_recovery_speed_cmd", 8.0)
+        self.declare_parameter("checkerboard_yaw_recovery_kp", 0.45)
+        self.declare_parameter("checkerboard_yaw_recovery_max_angle_cmd", 15.0)
+        self.declare_parameter("checkerboard_yaw_recovery_smooth_alpha", 0.25)
         self.declare_parameter("lidar_ignore_self_reflection", True)
         self.declare_parameter("lidar_self_reflect_min_rel_deg", 8.0)
         self.declare_parameter("lidar_self_reflect_max_rel_deg", 24.0)
-        self.declare_parameter("lidar_self_reflect_max_distance_m", 0.9)
+        self.declare_parameter("lidar_self_reflect_max_distance_m", 0.6)
         self.declare_parameter("enable_lidar_distance_follow", True)
         self.declare_parameter("enable_lidar_distance_hold", False)
         self.declare_parameter("lidar_min_valid_distance_m", 0.2)
@@ -160,7 +178,7 @@ class TrackDriverNode(Node):
         self.declare_parameter("lookahead_m", 0.4)
         self.declare_parameter("speed_cmd_to_mps", 0.5)
         self.declare_parameter("compensate_steering_delay", True)
-        self.declare_parameter("steering_prediction_horizon_s", 0.16)
+        self.declare_parameter("steering_prediction_horizon_s", 0.08)
         self.declare_parameter("steering_bias_deg", 0.0)
         self.declare_parameter("curve_steering_gain", 2.5)
         self.declare_parameter("curve_steering_score_start_px", 40.0)
@@ -176,21 +194,21 @@ class TrackDriverNode(Node):
         self.declare_parameter("timed_start_yaw_s", 1.0)
         self.declare_parameter("timed_start_speed_cmd", 11.111)
         self.declare_parameter("timed_start_yaw_angle_cmd", 0.0)
-        self.declare_parameter("enable_cone_mode", False)
+        self.declare_parameter("enable_cone_mode", True)
         self.declare_parameter("cone_start_active", True)
         self.declare_parameter("cone_finish_to_lane", True)
         self.declare_parameter("cone_publish_debug_image", True)
-        self.declare_parameter("cone_cruise_speed", 5.0)
-        self.declare_parameter("cone_min_speed", 3.0)
-        self.declare_parameter("cone_corner_speed", 3.5)
-        self.declare_parameter("cone_finish_speed", 3.0)
-        self.declare_parameter("cone_max_steer", 80.0)
-        self.declare_parameter("cone_pursuit_gain", 4.2)
-        self.declare_parameter("cone_lateral_gain", 18.0)
-        self.declare_parameter("cone_clearance_gain", 12.0)
+        self.declare_parameter("cone_cruise_speed", 15.0)
+        self.declare_parameter("cone_min_speed", 9.0)
+        self.declare_parameter("cone_corner_speed", 10.5)
+        self.declare_parameter("cone_finish_speed", 9.0)
+        self.declare_parameter("cone_max_steer", 75.0)
+        self.declare_parameter("cone_pursuit_gain", 3.8)
+        self.declare_parameter("cone_lateral_gain", 13.5)
+        self.declare_parameter("cone_clearance_gain", 5.5)
         self.declare_parameter("cone_corner_boost", 1.35)
-        self.declare_parameter("cone_smooth_alpha_straight", 0.40)
-        self.declare_parameter("cone_smooth_alpha_corner", 0.65)
+        self.declare_parameter("cone_smooth_alpha_straight", 0.30)
+        self.declare_parameter("cone_smooth_alpha_corner", 0.50)
         self.declare_parameter("cone_lookahead_y_min", 0.45)
         self.declare_parameter("cone_lookahead_y_max", 6.5)
         self.declare_parameter("cone_lookahead_target_y", 3.0)
@@ -208,6 +226,10 @@ class TrackDriverNode(Node):
         self.declare_parameter("cone_yellow_pixel_threshold", 2500)
         self.declare_parameter("cone_yellow_roi_ratio", 0.45)
         self.declare_parameter("cone_hold_max_frames", 25)
+        self.declare_parameter("cone_right_only_finish_frames", 0)
+        self.declare_parameter("cone_left_missing_finish_frames", 20)
+        self.declare_parameter("cone_start_steering_ramp_s", 1.0)
+        self.declare_parameter("cone_start_steering_min_scale", 0.0)
 
         self.image_topic = str(self.get_parameter("image_topic").value)
         self.scan_topic = str(self.get_parameter("scan_topic").value)
@@ -217,8 +239,19 @@ class TrackDriverNode(Node):
         self.yolo_topic = str(self.get_parameter("yolo_topic").value)
         self.control_hz = float(self.get_parameter("control_hz").value)
         self.publish_debug_images = bool(self.get_parameter("publish_debug_images").value)
+        self.drive_status_console_period_s = float(self.get_parameter("drive_status_console_period_s").value)
         self.enable_start_signal_gate = bool(self.get_parameter("enable_start_signal_gate").value)
         self.start_signal_release_latched = bool(self.get_parameter("start_signal_release_latched").value)
+        self.enable_traffic_light_gate = bool(self.get_parameter("enable_traffic_light_gate").value)
+        self.traffic_light_green_ignore_s = float(self.get_parameter("traffic_light_green_ignore_s").value)
+        self.traffic_light_red_hold_s = float(self.get_parameter("traffic_light_red_hold_s").value)
+        self.traffic_light_min_red_score = float(self.get_parameter("traffic_light_min_red_score").value)
+        self.traffic_light_roi = RoiRatio(
+            float(self.get_parameter("traffic_light_roi_x1").value),
+            float(self.get_parameter("traffic_light_roi_y1").value),
+            float(self.get_parameter("traffic_light_roi_x2").value),
+            float(self.get_parameter("traffic_light_roi_y2").value),
+        )
         self.enable_stopline = bool(self.get_parameter("enable_stopline").value)
         self.enable_lidar_obstacle = bool(self.get_parameter("enable_lidar_obstacle").value)
         self.enable_object_detector = bool(self.get_parameter("enable_object_detector").value)
@@ -280,6 +313,7 @@ class TrackDriverNode(Node):
         self.straight_curve_score_max_px = float(self.get_parameter("straight_curve_score_max_px").value)
         self.straight_angle_error_max_deg = float(self.get_parameter("straight_angle_error_max_deg").value)
         self.straight_raw_angle_max_cmd = float(self.get_parameter("straight_raw_angle_max_cmd").value)
+        self.straight_fast_steering_scale = float(self.get_parameter("straight_fast_steering_scale").value)
         self.enable_yellow_lane_slowdown = bool(self.get_parameter("enable_yellow_lane_slowdown").value)
         self.yellow_lane_slow_min_pixels = int(self.get_parameter("yellow_lane_slow_min_pixels").value)
         self.yellow_lane_slow_edge_min_pixels = int(self.get_parameter("yellow_lane_slow_edge_min_pixels").value)
@@ -308,9 +342,27 @@ class TrackDriverNode(Node):
         self.lidar_positive_angle_side = str(self.get_parameter("lidar_positive_angle_side").value)
         self.lidar_front_center_deg = float(self.get_parameter("lidar_front_center_deg").value)
         self.lidar_front_half_width_deg = float(self.get_parameter("lidar_front_half_width_deg").value)
+        self.enable_lidar_steering_block = bool(self.get_parameter("enable_lidar_steering_block").value)
+        self.lidar_steering_block_distance_m = float(self.get_parameter("lidar_steering_block_distance_m").value)
         self.publish_lidar_front_image = bool(self.get_parameter("publish_lidar_front_image").value)
         self.lidar_front_view_max_m = float(self.get_parameter("lidar_front_view_max_m").value)
         self.enable_checkerboard_avoid_reset = bool(self.get_parameter("enable_checkerboard_avoid_reset").value)
+        self.enable_checkerboard_yaw_recovery = bool(
+            self.get_parameter("enable_checkerboard_yaw_recovery").value
+        )
+        self.checkerboard_yaw_recovery_hold_s = float(
+            self.get_parameter("checkerboard_yaw_recovery_hold_s").value
+        )
+        self.checkerboard_yaw_recovery_speed_cmd = float(
+            self.get_parameter("checkerboard_yaw_recovery_speed_cmd").value
+        )
+        self.checkerboard_yaw_recovery_kp = float(self.get_parameter("checkerboard_yaw_recovery_kp").value)
+        self.checkerboard_yaw_recovery_max_angle_cmd = float(
+            self.get_parameter("checkerboard_yaw_recovery_max_angle_cmd").value
+        )
+        self.checkerboard_yaw_recovery_smooth_alpha = float(
+            self.get_parameter("checkerboard_yaw_recovery_smooth_alpha").value
+        )
         self.lidar_ignore_self_reflection = bool(self.get_parameter("lidar_ignore_self_reflection").value)
         self.lidar_self_reflect_min_rel_deg = float(self.get_parameter("lidar_self_reflect_min_rel_deg").value)
         self.lidar_self_reflect_max_rel_deg = float(self.get_parameter("lidar_self_reflect_max_rel_deg").value)
@@ -386,6 +438,13 @@ class TrackDriverNode(Node):
             yellow_pixel_threshold=int(self.get_parameter("cone_yellow_pixel_threshold").value),
             yellow_roi_ratio=float(self.get_parameter("cone_yellow_roi_ratio").value),
             hold_max_frames=int(self.get_parameter("cone_hold_max_frames").value),
+            right_only_finish_frames=int(self.get_parameter("cone_right_only_finish_frames").value),
+            left_missing_finish_frames=int(self.get_parameter("cone_left_missing_finish_frames").value),
+        )
+        self.cone_start_steering_ramp_s = max(0.0, float(self.get_parameter("cone_start_steering_ramp_s").value))
+        self.cone_start_steering_min_scale = max(
+            0.0,
+            min(1.0, float(self.get_parameter("cone_start_steering_min_scale").value)),
         )
 
         self.lane_detector = LaneDetector(
@@ -466,6 +525,7 @@ class TrackDriverNode(Node):
         }
         self.stopline_detector = StopLineDetector()
         self.start_signal_detector = TrafficLightDetector()
+        self.traffic_light_detector = TrafficLightDetector(left_roi=self.traffic_light_roi)
         self.last_object = ObjectResult()
         self.last_headlight = HeadlightResult()
         self.last_headlight_by_camera = {
@@ -510,7 +570,18 @@ class TrackDriverNode(Node):
         self.lidar_avoid_left_headlight_confirmed = False
         self.lidar_avoid_locked_until_checkerboard = False
         self.lidar_avoid_left_headlight_confirmed = False
+        self.lidar_steering_block_side = "none"
+        self.lidar_steering_block_distance = float("inf")
+        self.lidar_steering_block_angle_deg = 0.0
+        self.last_requested_angle_cmd = 0.0
+        self.last_motor_angle_cmd = 0.0
+        self.last_motor_speed_cmd = 0.0
         self.checkerboard_avoid_reset_detected = False
+        self.checkerboard_last_seen_time = 0.0
+        self.checkerboard_yaw_recovery_armed = False
+        self.checkerboard_yaw_recovery_active = False
+        self.checkerboard_yaw_recovery_angle = 0.0
+        self.checkerboard_yaw_recovery_error_deg = 0.0
         self.follow_state = "clear"
         self.follow_speed_limit_cmd = self.dynamic_speed_max_cmd
         self.effective_headlight_camera_side = self.headlight_camera_side
@@ -524,6 +595,10 @@ class TrackDriverNode(Node):
             TrafficLightDetector.START_YELLOW: 0.0,
             TrafficLightDetector.START_GREEN: 0.0,
         }
+        self.traffic_light_stop_latched = False
+        self.traffic_light_ignore_until = 0.0
+        self.traffic_light_last_red_time = 0.0
+        self.last_drive_status_console_time = 0.0
         self.stopline_until = 0.0
         self.timed_start_begin_time = 0.0
         self.timed_start_yaw_begin_time = 0.0
@@ -533,6 +608,8 @@ class TrackDriverNode(Node):
         self.timed_start_phase = "disabled" if not self.enable_timed_start_sequence else "waiting"
         self.cone_finished = False
         self.last_cone_cmd = ConeCommand()
+        self.cone_mode_begin_time = 0.0
+        self.cone_steering_scale = 1.0
 
         self.motor_pub = self.create_publisher(XycarMotor, self.motor_topic, 10)
         self.debug_pub = self.create_publisher(String, self.debug_topic, 10)
@@ -543,6 +620,9 @@ class TrackDriverNode(Node):
         self.start_signal_debug_image_pub = self.create_publisher(
             Image, "/track_drive/start_signal_debug_image", 3
         )
+        self.traffic_light_debug_image_pub = self.create_publisher(
+            Image, "/track_drive/traffic_light_debug_image", 3
+        )
         self.headlight_left_debug_image_pub = self.create_publisher(
             Image, "/track_drive/headlight_left_debug_image", 3
         )
@@ -552,24 +632,25 @@ class TrackDriverNode(Node):
         self.lidar_front_image_pub = self.create_publisher(Image, "/track_drive/lidar_front_image", 3)
 
         self.create_subscription(Image, self.image_topic, self.cam_callback, qos_profile_sensor_data)
-        self.create_subscription(
-            Image,
-            self.headlight_left_image_topic,
-            lambda msg: self.headlight_cam_callback("left", msg),
-            qos_profile_sensor_data,
-        )
-        self.create_subscription(
-            Image,
-            self.headlight_right_image_topic,
-            lambda msg: self.headlight_cam_callback("right", msg),
-            qos_profile_sensor_data,
-        )
-        self.create_subscription(
-            Image,
-            self.headlight_behind_image_topic,
-            lambda msg: self.headlight_cam_callback("behind", msg),
-            qos_profile_sensor_data,
-        )
+        if self.enable_headlight_detector:
+            self.create_subscription(
+                Image,
+                self.headlight_left_image_topic,
+                lambda msg: self.headlight_cam_callback("left", msg),
+                qos_profile_sensor_data,
+            )
+            self.create_subscription(
+                Image,
+                self.headlight_right_image_topic,
+                lambda msg: self.headlight_cam_callback("right", msg),
+                qos_profile_sensor_data,
+            )
+            self.create_subscription(
+                Image,
+                self.headlight_behind_image_topic,
+                lambda msg: self.headlight_cam_callback("behind", msg),
+                qos_profile_sensor_data,
+            )
         self.create_subscription(LaserScan, self.scan_topic, self.lidar_callback, qos_profile_sensor_data)
         self.create_subscription(Imu, self.imu_topic, self.imu_callback, qos_profile_sensor_data)
         if self.enable_object_detector and BoundingBoxes is not None:
@@ -580,7 +661,7 @@ class TrackDriverNode(Node):
 
         self.create_timer(1.0 / max(1.0, self.control_hz), self.control_step)
         self.get_logger().info(
-            "AuTURBO ROS2 driver started: "
+            "KOBOT ROS2 driver started: "
             f"image={self.image_topic}, scan={self.scan_topic}, imu={self.imu_topic}, motor={self.motor_topic}"
         )
 
@@ -733,11 +814,78 @@ class TrackDriverNode(Node):
         self.lidar_front_image_pub.publish(self.bridge.cv2_to_imgmsg(canvas, encoding="bgr8"))
 
     def drive(self, angle: float, speed: float) -> None:
+        self.last_requested_angle_cmd = float(angle)
+        angle = self.apply_lidar_steering_block(float(angle))
+        self.last_motor_angle_cmd = float(angle)
+        self.last_motor_speed_cmd = float(speed)
         self.motor_msg.header.stamp = self.get_clock().now().to_msg()
-        self.motor_msg.angle = float(angle)
+        self.motor_msg.angle = angle
         self.motor_msg.speed = float(speed)
         self.motor_pub.publish(self.motor_msg)
         self.lane_controller.observe_command(angle)
+
+    def apply_lidar_steering_block(self, angle: float) -> float:
+        self.lidar_steering_block_side = "none"
+        self.lidar_steering_block_distance = float("inf")
+        self.lidar_steering_block_angle_deg = 0.0
+
+        if not self.enable_lidar_steering_block or abs(angle) < 1e-6:
+            return float(angle)
+        if not self.lidar_avoid_locked_until_checkerboard:
+            return float(angle)
+        if self.lidar_ranges is None or self.lidar_angle_increment == 0.0:
+            return float(angle)
+        if self.last_scan_time <= 0.0 or time.monotonic() - self.last_scan_time > self.scan_timeout_s:
+            return float(angle)
+
+        turn_side = "left" if angle < 0.0 else "right"
+        if turn_side != "left":
+            return float(angle)
+        distance, relative_deg = self.lidar_turn_side_obstacle(turn_side, self.lidar_steering_block_distance_m)
+        if distance <= self.lidar_steering_block_distance_m:
+            self.lidar_steering_block_side = turn_side
+            self.lidar_steering_block_distance = distance
+            self.lidar_steering_block_angle_deg = relative_deg
+            return 0.0
+        return float(angle)
+
+    def lidar_turn_side_obstacle(self, turn_side: str, max_distance_m: float) -> tuple[float, float]:
+        if self.lidar_ranges is None or self.lidar_angle_increment == 0.0:
+            return float("inf"), 0.0
+
+        side = turn_side.strip().lower()
+        if side not in {"left", "right"}:
+            return float("inf"), 0.0
+
+        front_angle = math.radians(self.lidar_front_center_deg)
+        half_width = math.radians(max(0.0, float(self.lidar_front_half_width_deg)))
+        max_distance = max(self.lidar_min_valid_distance_m + 1e-3, float(max_distance_m))
+        positive_side = self.lidar_positive_angle_side.strip().lower()
+        if positive_side not in {"left", "right"}:
+            positive_side = "left"
+        best_distance = float("inf")
+        best_relative_deg = 0.0
+
+        for idx, raw_distance in enumerate(self.lidar_ranges):
+            distance = float(raw_distance)
+            if not self.is_valid_lidar_front_point_from_values(idx, distance, max_distance + 1e-6):
+                continue
+
+            relative = self.wrap_angle_pi(self.lidar_angle_min + idx * self.lidar_angle_increment - front_angle)
+            if abs(relative) > half_width:
+                continue
+            relative_side = positive_side if relative > 0.0 else ("right" if positive_side == "left" else "left")
+            if relative_side != side:
+                continue
+
+            forward = distance * math.cos(relative)
+            if forward <= 0.0:
+                continue
+            if distance < best_distance:
+                best_distance = distance
+                best_relative_deg = math.degrees(relative)
+
+        return best_distance, best_relative_deg
 
     def update_start_signal_scores(self) -> None:
         roi, _ = self.start_signal_detector.start_roi.crop(self.image)
@@ -769,6 +917,68 @@ class TrackDriverNode(Node):
         )
         self.start_signal_debug_image_pub.publish(self.bridge.cv2_to_imgmsg(output, encoding="bgr8"))
 
+    def publish_traffic_light_debug_image(self) -> None:
+        if self.image is None:
+            return
+
+        output = self.image.copy()
+        state = self.traffic_light_detector.detect_four_light_state(self.image)
+        _roi, (left, top, right, bottom) = self.traffic_light_detector.left_roi.crop(output)
+        signal = str(state.get("signal", TrafficLightDetector.UNKNOWN))
+        source = str(state.get("candidate_source", "NONE"))
+        presence = bool(state.get("presence", False))
+        color = {
+            TrafficLightDetector.START_RED: (0, 0, 255),
+            TrafficLightDetector.START_YELLOW: (0, 255, 255),
+            TrafficLightDetector.START_GREEN: (0, 255, 0),
+        }.get(signal, (180, 180, 180))
+
+        cv2.rectangle(output, (left, top), (right, bottom), (90, 0, 0), 2)
+        for idx, candidate in enumerate(getattr(self.traffic_light_detector, "last_candidates", []), start=1):
+            x, y, width, height = candidate.get("bbox", (0, 0, 0, 0))
+            box_left = int(x)
+            box_top = int(y)
+            box_right = int(x + width)
+            box_bottom = int(y + height)
+            cv2.rectangle(output, (box_left, box_top), (box_right, box_bottom), (0, 0, 255), 2)
+            cv2.putText(
+                output,
+                f"{idx} {candidate.get('source', 'CAND')}",
+                (box_left + 4, max(18, box_top - 6)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.45,
+                (0, 0, 255),
+                1,
+                cv2.LINE_AA,
+            )
+
+        status = "SIGNAL_PRESENT" if presence and source not in ("NONE", "COLOR_FALLBACK") else "NO_SIGNAL"
+        cv2.putText(
+            output,
+            f"FOUR-ROI {status} {signal} SRC:{source}",
+            (left + 6, max(22, top + 22)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.58,
+            color,
+            2,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            output,
+            (
+                f"R:{float(state.get('red_score', 0.0)):.0f} "
+                f"Y:{float(state.get('yellow_score', 0.0)):.0f} "
+                f"G:{float(state.get('green_score', 0.0)):.0f}"
+            ),
+            (left + 6, max(44, top + 46)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.52,
+            color,
+            2,
+            cv2.LINE_AA,
+        )
+        self.traffic_light_debug_image_pub.publish(self.bridge.cv2_to_imgmsg(output, encoding="bgr8"))
+
     def handle_start_signal_gate(self, image_age: float, scan_age: float) -> bool:
         if not self.enable_start_signal_gate:
             self.start_signal_gate_open = True
@@ -795,6 +1005,57 @@ class TrackDriverNode(Node):
         self.last_speed_mode = "start_signal_wait"
         self.drive(0.0, 0.0)
         self.publish_debug("start_signal_wait", 0.0, 0.0, image_age, scan_age)
+        return True
+
+    def handle_traffic_light_gate(self, now: float, image_age: float, scan_age: float) -> bool:
+        if not self.enable_traffic_light_gate:
+            self.traffic_light_stop_latched = False
+            return False
+
+        if self.enable_start_signal_gate and not self.start_signal_released:
+            return False
+
+        if now < self.traffic_light_ignore_until:
+            return False
+
+        state = self.traffic_light_detector.detect_four_light_state(self.image)
+        signal = str(state.get("signal", TrafficLightDetector.UNKNOWN))
+        source = str(state.get("candidate_source", "NONE"))
+        presence = bool(state.get("presence", False))
+        red_score = float(state.get("red_score", 0.0))
+        yellow_score = float(state.get("yellow_score", 0.0))
+        green_score = float(state.get("green_score", 0.0))
+        red_source = source in ("SIGNAL_BAR_COLOR", "HOUSING")
+        red_dominant = red_score >= max(
+            self.traffic_light_min_red_score,
+            green_score * 1.45,
+            yellow_score * 1.20,
+        )
+        green_visible = (
+            presence
+            and signal == TrafficLightDetector.START_GREEN
+            and green_score >= max(35.0, red_score)
+        )
+
+        if green_visible:
+            self.traffic_light_stop_latched = False
+            self.traffic_light_ignore_until = now + max(0.0, self.traffic_light_green_ignore_s)
+        elif presence and red_source and signal == TrafficLightDetector.START_RED and red_dominant:
+            self.traffic_light_stop_latched = True
+            self.traffic_light_last_red_time = now
+        elif (
+            self.traffic_light_stop_latched
+            and self.traffic_light_last_red_time > 0.0
+            and now - self.traffic_light_last_red_time > max(0.0, self.traffic_light_red_hold_s)
+        ):
+            self.traffic_light_stop_latched = False
+
+        if not self.traffic_light_stop_latched:
+            return False
+
+        self.last_speed_mode = "traffic_light_red_stop"
+        self.drive(0.0, 0.0)
+        self.publish_debug("traffic_light_red_stop", 0.0, 0.0, image_age, scan_age)
         return True
 
     def handle_timed_start_sequence(self, now: float, image_age: float, scan_age: float) -> bool:
@@ -839,6 +1100,10 @@ class TrackDriverNode(Node):
         if not self.cone_mode_active:
             return False
 
+        now = time.monotonic()
+        if self.cone_mode_begin_time <= 0.0:
+            self.cone_mode_begin_time = now
+
         cmd = self.cone_follower.compute(self.lidar_ranges, self.image)
         self.last_cone_cmd = cmd
         self.last_speed_mode = "cone_mode"
@@ -851,21 +1116,38 @@ class TrackDriverNode(Node):
             self.cone_mode_active = False
             if self.cone_finish_to_lane:
                 self.get_logger().info("cone section finished; handing off to lane driving")
-                self.publish_debug("cone_finished", cmd.angle, cmd.speed, image_age, scan_age)
                 return False
             self.drive(0.0, 0.0)
             self.publish_debug("cone_finished_stop", 0.0, 0.0, image_age, scan_age)
             return True
 
-        self.drive(cmd.angle, cmd.speed)
-        self.publish_debug("cone_follow", cmd.angle, cmd.speed, image_age, scan_age)
+        angle = self.apply_cone_start_steering_ramp(cmd.angle, now)
+        self.drive(angle, cmd.speed)
+        self.publish_debug("cone_follow", angle, cmd.speed, image_age, scan_age)
         return True
+
+    def apply_cone_start_steering_ramp(self, angle: float, now: float) -> float:
+        if self.cone_start_steering_ramp_s <= 0.0 or self.cone_mode_begin_time <= 0.0:
+            self.cone_steering_scale = 1.0
+            return float(angle)
+
+        elapsed = max(0.0, now - self.cone_mode_begin_time)
+        if elapsed >= self.cone_start_steering_ramp_s:
+            self.cone_steering_scale = 1.0
+            return float(angle)
+
+        progress = elapsed / max(1e-6, self.cone_start_steering_ramp_s)
+        min_scale = self.cone_start_steering_min_scale
+        self.cone_steering_scale = min_scale + (1.0 - min_scale) * progress
+        return float(angle) * self.cone_steering_scale
 
     def control_step(self) -> None:
         now = time.monotonic()
         image_age = now - self.last_image_time if self.last_image_time else float("inf")
         scan_age = now - self.last_scan_time if self.last_scan_time else float("inf")
         image_fresh = self.image is not None and image_age <= self.image_timeout_s
+        if image_fresh and self.publish_debug_images:
+            self.publish_traffic_light_debug_image()
 
         if self.enable_start_signal_gate:
             gate_already_released = self.start_signal_release_latched and self.start_signal_released
@@ -898,6 +1180,9 @@ class TrackDriverNode(Node):
         if not image_fresh:
             self.drive(0.0, 0.0)
             self.publish_debug("no_fresh_image", 0.0, 0.0, image_age, scan_age)
+            return
+
+        if self.handle_traffic_light_gate(now, image_age, scan_age):
             return
 
         if self.enable_headlight_detector:
@@ -944,6 +1229,8 @@ class TrackDriverNode(Node):
             self.enable_checkerboard_avoid_reset and self.detect_checkerboard_avoid_reset(self.image)
         )
         if self.checkerboard_avoid_reset_detected:
+            self.checkerboard_last_seen_time = now
+            self.checkerboard_yaw_recovery_armed = True
             self.lidar_avoid_locked_until_checkerboard = False
             self.reset_lidar_lane_avoidance()
         elif self.enable_lidar_lane_avoidance and scan_age <= self.scan_timeout_s:
@@ -1013,6 +1300,9 @@ class TrackDriverNode(Node):
             target_offset_px=target_offset_px,
             bev_status_text=self.bev_status_text(),
         )
+        if self.last_lane.confidence >= self.lane_good_confidence:
+            self.checkerboard_yaw_recovery_armed = False
+            self.checkerboard_yaw_recovery_active = False
 
         if self.handle_timed_start_sequence(now, image_age, scan_age):
             self.publish_lane_images(self.last_lane)
@@ -1036,6 +1326,8 @@ class TrackDriverNode(Node):
                 self.last_lane.curve_score,
             )
             speed = self.select_lane_speed(self.last_lane, self.lane_controller.last_raw_angle_cmd)
+            if self.last_speed_mode == "straight_fast":
+                angle *= max(0.0, min(1.0, self.straight_fast_steering_scale))
             if lidar_lane_avoid_active:
                 speed = min(speed, self.lidar_lane_avoid_speed_cmd)
                 self.last_speed_mode = "lidar_lane_avoid"
@@ -1046,6 +1338,11 @@ class TrackDriverNode(Node):
             self.last_lane_hold_angle = angle
             self.last_lane_hold_speed = min(speed, self.lane_dropout_speed_cmd)
             self.has_lane_hold_command = True
+        elif self.should_checkerboard_yaw_recover(now):
+            angle, speed = self.checkerboard_yaw_recovery_command()
+            self.straight_frame_count = 0
+            self.last_speed_mode = "checkerboard_yaw_recovery"
+            debug_state = "checkerboard_yaw_recovery"
         elif self.has_lane_hold_command and (
             self.lane_dropout_hold_s <= 0.0 or now - self.last_lane_seen_time <= self.lane_dropout_hold_s
         ):
@@ -1079,6 +1376,30 @@ class TrackDriverNode(Node):
         self.drive(angle, speed)
         self.publish_lane_images(self.last_lane)
         self.publish_debug(debug_state, angle, speed, image_age, scan_age)
+
+    def should_checkerboard_yaw_recover(self, now: float) -> bool:
+        if not self.enable_checkerboard_yaw_recovery:
+            self.checkerboard_yaw_recovery_active = False
+            return False
+        if self.current_yaw_deg is None:
+            self.checkerboard_yaw_recovery_active = False
+            return False
+        self.checkerboard_yaw_recovery_active = bool(self.checkerboard_yaw_recovery_armed)
+        return self.checkerboard_yaw_recovery_active
+
+    def checkerboard_yaw_recovery_command(self) -> tuple[float, float]:
+        yaw_deg = 0.0 if self.current_yaw_deg is None else float(self.current_yaw_deg)
+        yaw_error = (yaw_deg + 180.0) % 360.0 - 180.0
+        self.checkerboard_yaw_recovery_error_deg = yaw_error
+
+        max_angle = abs(self.checkerboard_yaw_recovery_max_angle_cmd)
+        target_angle = -self.checkerboard_yaw_recovery_kp * yaw_error
+        target_angle = max(-max_angle, min(max_angle, target_angle))
+
+        alpha = max(0.0, min(1.0, self.checkerboard_yaw_recovery_smooth_alpha))
+        self.checkerboard_yaw_recovery_angle += alpha * (target_angle - self.checkerboard_yaw_recovery_angle)
+        speed = max(0.0, self.checkerboard_yaw_recovery_speed_cmd)
+        return float(self.checkerboard_yaw_recovery_angle), float(speed)
 
     def count_yellow_lane_pixels(self, frame: np.ndarray | None) -> tuple[int, int]:
         if frame is None or frame.size == 0:
@@ -1315,12 +1636,6 @@ class TrackDriverNode(Node):
         raw_target_side = "middle"
         raw_blocked_side = "none"
 
-        if left_blocked and not right_blocked:
-            raw_blocked_side = "left"
-            raw_target_side = "right"
-        elif right_blocked and not left_blocked:
-            raw_blocked_side = "right"
-            raw_target_side = "left"
         if not self.lidar_avoid_front_blocked:
             pass
         elif raw_target_side == "middle":
@@ -1749,6 +2064,9 @@ class TrackDriverNode(Node):
         cone_dbg = self.last_cone_cmd.debug
         cone_left = cone_dbg.get("left_cone")
         cone_right = cone_dbg.get("right_cone")
+        cone_ramp_elapsed = 0.0
+        if self.cone_mode_begin_time > 0.0:
+            cone_ramp_elapsed = max(0.0, time.monotonic() - self.cone_mode_begin_time)
         try:
             cone_front_dist = float(cone_dbg.get("front_dist", float("inf")))
         except (TypeError, ValueError):
@@ -1774,7 +2092,15 @@ class TrackDriverNode(Node):
             "cone_follow_mode": str(cone_dbg.get("follow_mode", "none")),
             "cone_steer_mode": str(cone_dbg.get("steer_mode", "none")),
             "cone_lost_frames": int(cone_dbg.get("lost_frames", 0)),
+            "cone_clear_frames": int(cone_dbg.get("clear_frames", 0)),
             "cone_tracked_frames": int(cone_dbg.get("tracked_frames", 0)),
+            "cone_right_only_frames": int(cone_dbg.get("right_only_frames", 0)),
+            "cone_left_missing_frames": int(cone_dbg.get("left_missing_frames", 0)),
+            "cone_left_seen": bool(cone_dbg.get("left_seen", False)),
+            "cone_finish_reason": str(cone_dbg.get("finish_reason", "none")),
+            "cone_steering_scale": round(float(self.cone_steering_scale), 3),
+            "cone_start_steering_ramp_elapsed_s": round(float(cone_ramp_elapsed), 3),
+            "cone_start_steering_ramp_s": round(float(self.cone_start_steering_ramp_s), 3),
             "cone_path_count": int(cone_dbg.get("path_count", 0)),
             "cone_center_offset": round(float(cone_dbg.get("center_offset", 0.0)), 3),
             "cone_front_dist": round(cone_front_dist, 3) if math.isfinite(cone_front_dist) else None,
@@ -1841,7 +2167,16 @@ class TrackDriverNode(Node):
             "lidar_avoid_release_camera_side": self.lidar_avoid_release_camera_side,
             "lidar_avoid_locked_until_checkerboard": bool(self.lidar_avoid_locked_until_checkerboard),
             "lidar_avoid_left_headlight_confirmed": bool(self.lidar_avoid_left_headlight_confirmed),
+            "lidar_steering_block_side": self.lidar_steering_block_side,
+            "lidar_steering_block_distance_m": round(float(self.lidar_steering_block_distance), 3)
+            if math.isfinite(self.lidar_steering_block_distance)
+            else None,
+            "lidar_steering_block_angle_deg": round(float(self.lidar_steering_block_angle_deg), 3),
             "checkerboard_avoid_reset_detected": bool(self.checkerboard_avoid_reset_detected),
+            "checkerboard_yaw_recovery_active": bool(self.checkerboard_yaw_recovery_active),
+            "checkerboard_yaw_recovery_error_deg": round(float(self.checkerboard_yaw_recovery_error_deg), 3),
+            "checkerboard_yaw_recovery_angle": round(float(self.checkerboard_yaw_recovery_angle), 3),
+            "checkerboard_yaw_recovery_speed_cmd": round(float(self.checkerboard_yaw_recovery_speed_cmd), 3),
             "lidar_avoid_left_clear_m": round(float(self.lidar_avoid_left_clear_m), 3)
             if math.isfinite(self.lidar_avoid_left_clear_m)
             else None,
@@ -1900,15 +2235,16 @@ class TrackDriverNode(Node):
             "headlight_right_pair_width_px": round(
                 float(self.last_headlight_by_camera["right"].pair_width_px), 3
             ),
-            "xycar_angle_cmd": round(float(angle), 3),
+            "requested_angle_cmd": round(float(self.last_requested_angle_cmd), 3),
+            "xycar_angle_cmd": round(float(self.last_motor_angle_cmd), 3),
             "raw_angle_cmd": round(float(self.lane_controller.last_raw_angle_cmd), 3),
             "steering_gain": round(float(self.lane_controller.last_steering_gain), 3),
             "estimated_steering_deg": round(float(self.lane_controller.current_steering_deg), 3),
             "desired_steering_deg": round(float(self.lane_controller.last_desired_steering_deg), 3),
             "target_steering_deg": round(float(self.lane_controller.last_target_steering_needed_deg), 3),
             "steering_horizon_s": round(float(self.lane_controller.steering_prediction_horizon_s), 3),
-            "xycar_speed_cmd": round(float(speed), 3),
-            "speed_kmh_est": round(float(speed) * self.speed_cmd_to_mps * 3.6, 3),
+            "xycar_speed_cmd": round(float(self.last_motor_speed_cmd), 3),
+            "speed_kmh_est": round(float(self.last_motor_speed_cmd) * self.speed_cmd_to_mps * 3.6, 3),
             "image_age_s": round(float(image_age), 3) if math.isfinite(image_age) else None,
             "scan_age_s": round(float(scan_age), 3) if math.isfinite(scan_age) else None,
             "yaw_rate": round(float(self.yaw_rate), 4),
@@ -1917,6 +2253,93 @@ class TrackDriverNode(Node):
         msg = String()
         msg.data = json.dumps(payload, separators=(",", ":"))
         self.debug_pub.publish(msg)
+        self.maybe_log_drive_status_console(time.monotonic())
+
+    def maybe_log_drive_status_console(self, now: float) -> None:
+        if self.drive_status_console_period_s <= 0.0:
+            return
+        if now - self.last_drive_status_console_time < self.drive_status_console_period_s:
+            return
+        self.last_drive_status_console_time = now
+        try:
+            signal_present, signal_text = self.console_signal_status()
+            vehicle_text = self.console_vehicle_status()
+            lane_text = self.console_lane_status()
+            heading_text = self.console_heading_status()
+            self.get_logger().info(
+                "\n=====\n"
+                f"신호등 : {signal_present}\n"
+                f"신호 : {signal_text}\n"
+                f"차량 : {vehicle_text}\n"
+                f"차선 : {lane_text}\n"
+                f"헤딩 : {heading_text}\n"
+                "====="
+            )
+        except Exception:
+            return
+
+    def console_signal_status(self) -> tuple[str, str]:
+        start_signal = str(self.start_signal_state)
+        signal_map = {
+            TrafficLightDetector.START_RED: "red",
+            TrafficLightDetector.START_YELLOW: "yellow",
+            TrafficLightDetector.START_GREEN: "green",
+        }
+        if self.enable_start_signal_gate and not self.start_signal_released:
+            if start_signal in signal_map:
+                return "인식", signal_map[start_signal]
+            return "미인식", "none"
+
+        if self.image is None:
+            return "미인식", "none"
+
+        state = self.traffic_light_detector.detect_four_light_state(self.image)
+        left_detail = self.traffic_light_detector.detect_left_turn_detail(self.image, update_history=False)
+        arrow_detected = bool(left_detail.get("raw_signal", False) or left_detail.get("stable_signal", False))
+        source = str(state.get("candidate_source", "NONE"))
+        trusted_presence = bool(state.get("presence", False)) and source not in ("NONE", "COLOR_FALLBACK")
+        if arrow_detected:
+            return "인식", "arrow"
+        if not trusted_presence:
+            return "미인식", "none"
+
+        signal = str(state.get("signal", TrafficLightDetector.UNKNOWN))
+        return "인식", signal_map.get(signal, "none")
+
+    def console_vehicle_status(self) -> str:
+        if self.last_object.detected and self.last_object.direction in {"left", "right", "middle"}:
+            return f"{self.last_object.direction} (지연되는 차량)"
+        if self.last_headlight.detected and self.last_headlight.direction in {"left", "right", "middle"}:
+            return f"{self.last_headlight.direction} (지연되는 차량)"
+        for side in ("left", "right"):
+            result = self.last_headlight_by_camera[side]
+            if result.detected:
+                direction = result.direction if result.direction in {"left", "right", "middle"} else side
+                return f"{direction} (지연되는 차량)"
+        if self.lidar_avoid_blocked_side in {"left", "right"}:
+            return f"{self.lidar_avoid_blocked_side} (지연되는 차량)"
+        if self.lidar_avoid_target_side in {"left", "right"}:
+            return f"{self.lidar_avoid_target_side} (회피 방향)"
+        return "none"
+
+    def console_lane_status(self) -> str:
+        has_left = self.last_lane.left_count > 0
+        has_middle = self.last_lane.mid_count > 0
+        has_right = self.last_lane.right_count > 0
+        if has_left and has_right:
+            return "middle"
+        if has_middle:
+            return "middle"
+        if has_left:
+            return "left"
+        if has_right:
+            return "right"
+        return "none"
+
+    def console_heading_status(self) -> str:
+        if self.current_yaw_deg is None:
+            return "none"
+        return f"{float(self.current_yaw_deg):.1f} deg"
 
     def destroy_node(self) -> bool:
         try:
