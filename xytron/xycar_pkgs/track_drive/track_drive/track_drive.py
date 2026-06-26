@@ -865,15 +865,39 @@ class TrackDriverNode(Node):
         now = time.monotonic()
         image_age = now - self.last_image_time if self.last_image_time else float("inf")
         scan_age = now - self.last_scan_time if self.last_scan_time else float("inf")
-        if self.image is None or image_age > self.image_timeout_s:
-            self.drive(0.0, 0.0)
-            self.publish_debug("no_fresh_image", 0.0, 0.0, image_age, scan_age)
-            return
+        image_fresh = self.image is not None and image_age <= self.image_timeout_s
 
-        if self.handle_start_signal_gate(image_age, scan_age):
+        if self.enable_start_signal_gate:
+            gate_already_released = self.start_signal_release_latched and self.start_signal_released
+            if gate_already_released:
+                self.start_signal_gate_open = True
+            else:
+                if not image_fresh:
+                    self.drive(0.0, 0.0)
+                    self.publish_debug("no_fresh_image", 0.0, 0.0, image_age, scan_age)
+                    return
+                if self.handle_start_signal_gate(image_age, scan_age):
+                    return
+        else:
+            self.start_signal_gate_open = True
+            self.start_signal_state = "DISABLED"
+
+        cone_mode_pending = (
+            self.enable_cone_mode
+            and self.cone_mode_active
+            and not (self.cone_finished and self.cone_finish_to_lane)
+        )
+        if cone_mode_pending and (self.lidar_ranges is None or scan_age > self.scan_timeout_s):
+            self.drive(0.0, 0.0)
+            self.publish_debug("no_fresh_scan", 0.0, 0.0, image_age, scan_age)
             return
 
         if self.handle_cone_mode(image_age, scan_age):
+            return
+
+        if not image_fresh:
+            self.drive(0.0, 0.0)
+            self.publish_debug("no_fresh_image", 0.0, 0.0, image_age, scan_age)
             return
 
         if self.enable_headlight_detector:
@@ -1899,7 +1923,6 @@ class TrackDriverNode(Node):
             self.drive(0.0, 0.0)
         except Exception:
             pass
-        cv2.destroyAllWindows()
         return super().destroy_node()
 
 
