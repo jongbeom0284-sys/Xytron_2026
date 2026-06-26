@@ -5,11 +5,10 @@
 ## 현재 결론
 
 - 현재 작업 브랜치: `codex/cone-mode-integration`
-- 실제 주행 패키지 위치: `C:\Users\yaja0\Downloads\2026_Xytron\xytron\xycar_pkgs\track_drive`
-- `2026_Xytron` workspace에는 현재 `track_drive` 패키지만 있다.
-- `xycar_msgs`, `ros_tcp_endpoint`, `my_cam`, `my_lidar`, `my_motor`, `my_imu`, `kookmin9_viewer`는 `C:\Users\yaja0\Downloads\newAuto\xytron\xycar_pkgs`에 있다.
-- 실행할 때는 `newAuto`를 dependency overlay로 먼저 source하고, 그 다음 `2026_Xytron`의 `track_drive` overlay를 source한다.
-- 패키지 overlay 확인은 완료됐다. `xycar_msgs`/`ros_tcp_endpoint`는 `newAuto`에서, `track_drive`는 `2026_Xytron`에서 잡힌다.
+- 실제 실행 workspace: `C:\Users\yaja0\Downloads\2026_Xytron\xytron\xycar_pkgs`
+- 이제 필요한 ROS2 패키지는 모두 `2026_Xytron` 한 폴더 안에 있다.
+- `newAuto`는 더 이상 실행 source 경로로 쓰지 않아도 된다.
+- `newAuto`의 기존 주행 코드와 `origin/codex/track-drive-start-signal-gate`는 같은 기준 코드였고, 현재 브랜치는 그 위에 라바콘 통합을 얹은 버전이다.
 - 현재 확인 시점에는 ROS graph에 `/scan`, `/usb_cam/image_raw/front`, `/imu`가 없었다. 즉 simulator/ROS-TCP endpoint live 연결은 아직 확인되지 않았다.
 - 실제 주행 시작은 하지 않았다.
 
@@ -20,6 +19,13 @@ C:\Users\yaja0\Downloads\2026_Xytron
 ├─ src\
 │  └─ 과거 신호 제어 단독 프로토타입
 └─ xytron\xycar_pkgs\
+   ├─ xycar_msgs\                    # XycarMotor 메시지
+   ├─ ROS-TCP-Endpoint-main-ros2\    # Unity simulator endpoint, package name: ros_tcp_endpoint
+   ├─ my_cam\
+   ├─ my_lidar\
+   ├─ my_motor\
+   ├─ my_imu\
+   ├─ kookmin9_viewer\
    └─ track_drive\
       ├─ launch\
       │  └─ track_drive.launch.py
@@ -41,23 +47,11 @@ C:\Users\yaja0\Downloads\2026_Xytron
          └─ preprocessor.py
 ```
 
-```text
-C:\Users\yaja0\Downloads\newAuto\xytron\xycar_pkgs
-├─ xycar_msgs\                    # XycarMotor 메시지
-├─ ROS-TCP-Endpoint-main-ros2\    # Unity simulator endpoint
-├─ my_cam\
-├─ my_lidar\
-├─ my_motor\
-├─ my_imu\
-├─ kookmin9_viewer\
-└─ track_drive\                   # 기존 주행 코드, GitHub origin/codex/track-drive-start-signal-gate와 동일
-```
-
 ## 추종해야 하는 코드 기준
 
 코드 기준은 `2026_Xytron`의 `codex/cone-mode-integration` 브랜치다.
 
-`newAuto`의 `track_drive`는 기존 주행 코드 기준이고, 현재 브랜치는 그 위에 라바콘 구간을 통합한 버전이다. 실행 의존성은 `newAuto` workspace에서 가져오되, `track_drive` 패키지는 반드시 `2026_Xytron` overlay가 마지막에 source되어야 한다.
+`track_drive`는 현재 브랜치의 것을 따라야 한다. `newAuto`의 `track_drive`를 다시 복사하면 라바콘 통합이 사라질 수 있으므로 덮어쓰면 안 된다.
 
 ## 빌드
 
@@ -66,20 +60,16 @@ WSL Ubuntu-22.04 터미널 기준:
 ```bash
 source /opt/ros/humble/setup.bash
 
-cd /mnt/c/Users/yaja0/Downloads/newAuto/xytron/xycar_pkgs
-colcon build --packages-select xycar_msgs ros_tcp_endpoint my_cam my_lidar my_motor my_imu kookmin9_viewer
-
 cd /mnt/c/Users/yaja0/Downloads/2026_Xytron/xytron/xycar_pkgs
-colcon build --packages-select track_drive
+colcon build
 ```
 
 ## Source 순서
 
-모든 실행 터미널에서 아래 순서를 유지한다.
+이제 실행 터미널마다 `2026_Xytron` workspace 하나만 source하면 된다.
 
 ```bash
 source /opt/ros/humble/setup.bash
-source /mnt/c/Users/yaja0/Downloads/newAuto/xytron/xycar_pkgs/install/setup.bash
 source /mnt/c/Users/yaja0/Downloads/2026_Xytron/xytron/xycar_pkgs/install/setup.bash
 ```
 
@@ -94,8 +84,9 @@ python3 -c "import track_drive.track_drive as t; print(t.__file__)"
 
 기대값:
 
-- `xycar_msgs`와 `ros_tcp_endpoint`는 `newAuto` install 경로
-- `track_drive`는 `2026_Xytron` install 경로
+- `xycar_msgs`: `/mnt/c/Users/yaja0/Downloads/2026_Xytron/xytron/xycar_pkgs/install/xycar_msgs`
+- `ros_tcp_endpoint`: `/mnt/c/Users/yaja0/Downloads/2026_Xytron/xytron/xycar_pkgs/install/ros_tcp_endpoint`
+- `track_drive`: `/mnt/c/Users/yaja0/Downloads/2026_Xytron/xytron/xycar_pkgs/install/track_drive`
 
 ## Simulator 연결 확인
 
@@ -105,7 +96,7 @@ python3 -c "import track_drive.track_drive as t; print(t.__file__)"
 
 ```bash
 source /opt/ros/humble/setup.bash
-source /mnt/c/Users/yaja0/Downloads/newAuto/xytron/xycar_pkgs/install/setup.bash
+source /mnt/c/Users/yaja0/Downloads/2026_Xytron/xytron/xycar_pkgs/install/setup.bash
 ros2 launch ros_tcp_endpoint endpoint.py
 ```
 
@@ -115,7 +106,6 @@ Unity simulator를 실행하고 ROS-TCP endpoint에 연결한다.
 
 ```bash
 source /opt/ros/humble/setup.bash
-source /mnt/c/Users/yaja0/Downloads/newAuto/xytron/xycar_pkgs/install/setup.bash
 source /mnt/c/Users/yaja0/Downloads/2026_Xytron/xytron/xycar_pkgs/install/setup.bash
 
 ros2 topic list
@@ -213,9 +203,9 @@ ros2 launch track_drive track_drive.launch.py \
 확인 완료:
 
 - Ubuntu-22.04 / ROS2 Humble 환경에서 `ros2`, `rqt`, `colcon` 사용 가능
-- `newAuto` dependency packages build 완료
-- `2026_Xytron`의 `track_drive` build 완료
-- source 순서대로 overlay 시 `xycar_msgs`, `ros_tcp_endpoint`, `track_drive` package resolution 정상
+- `2026_Xytron` 단일 workspace에서 8개 패키지 인식 확인
+- `2026_Xytron` 단일 workspace `colcon build` 완료
+- `2026_Xytron`만 source해도 `xycar_msgs`, `ros_tcp_endpoint`, `track_drive` package resolution 정상
 - Python import 기준 `track_drive`는 `2026_Xytron` install 경로에서 로드됨
 
 미확인:
