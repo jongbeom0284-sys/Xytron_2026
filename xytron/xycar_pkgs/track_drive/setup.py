@@ -26,6 +26,8 @@ setup(
         'console_scripts': [
             'track_drive = track_drive.track_drive:main',
             'cone_debug = track_drive.cone_debug:main',
+            'overtake_debug = track_drive.overtake_debug:main',
+            'lidar_avoid_debug = track_drive.lidar_avoid_debug:main',
             'record_lidar_scan = track_drive.record_lidar_scan:main',
         ],
     },
