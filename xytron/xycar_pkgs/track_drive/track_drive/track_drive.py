@@ -16,6 +16,7 @@ from sensor_msgs.msg import Image, Imu, LaserScan
 from std_msgs.msg import String
 from xycar_msgs.msg import XycarMotor
 
+from .cone_follower import ConeCommand, ConeFollower, ConeFollowerConfig
 from .lane_controller import LaneController
 from .lane_detector import LaneDetector, LaneResult
 from .lidar_obstacle import ObstacleDetector, ObstacleResult
@@ -175,6 +176,40 @@ class TrackDriverNode(Node):
         self.declare_parameter("timed_start_yaw_s", 1.0)
         self.declare_parameter("timed_start_speed_cmd", 11.111)
         self.declare_parameter("timed_start_yaw_angle_cmd", 0.0)
+        self.declare_parameter("enable_cone_mode", False)
+        self.declare_parameter("cone_start_active", True)
+        self.declare_parameter("cone_finish_to_lane", True)
+        self.declare_parameter("cone_publish_debug_image", True)
+        self.declare_parameter("cone_speed_cmd", 7.0)
+        self.declare_parameter("cone_slow_speed_cmd", 4.0)
+        self.declare_parameter("cone_lost_speed_cmd", 0.0)
+        self.declare_parameter("cone_max_angle_cmd", 70.0)
+        self.declare_parameter("cone_steer_gain", 72.0)
+        self.declare_parameter("cone_single_path_offset_px", 140.0)
+        self.declare_parameter("cone_target_smoothing", 0.35)
+        self.declare_parameter("cone_camera_roi_y_min_ratio", 0.38)
+        self.declare_parameter("cone_camera_roi_y_max_ratio", 0.96)
+        self.declare_parameter("cone_camera_h_min", 5)
+        self.declare_parameter("cone_camera_h_max", 25)
+        self.declare_parameter("cone_camera_s_min", 80)
+        self.declare_parameter("cone_camera_v_min", 80)
+        self.declare_parameter("cone_min_area_px", 35.0)
+        self.declare_parameter("cone_max_area_px", 9000.0)
+        self.declare_parameter("cone_min_height_px", 8)
+        self.declare_parameter("cone_max_height_ratio", 0.55)
+        self.declare_parameter("cone_min_aspect", 0.35)
+        self.declare_parameter("cone_max_aspect", 2.40)
+        self.declare_parameter("cone_lidar_front_center_deg", 0.0)
+        self.declare_parameter("cone_lidar_front_half_width_deg", 24.0)
+        self.declare_parameter("cone_lidar_side_min_deg", 8.0)
+        self.declare_parameter("cone_lidar_min_valid_distance_m", 0.12)
+        self.declare_parameter("cone_lidar_max_distance_m", 6.0)
+        self.declare_parameter("cone_front_stop_distance_m", 0.35)
+        self.declare_parameter("cone_front_slow_distance_m", 0.85)
+        self.declare_parameter("cone_right_block_distance_m", 0.75)
+        self.declare_parameter("cone_finish_min_seen_frames", 8)
+        self.declare_parameter("cone_finish_lost_frames", 16)
+        self.declare_parameter("cone_finish_front_clear_distance_m", 1.10)
 
         self.image_topic = str(self.get_parameter("image_topic").value)
         self.scan_topic = str(self.get_parameter("scan_topic").value)
@@ -320,6 +355,42 @@ class TrackDriverNode(Node):
         self.timed_start_yaw_s = max(0.0, float(self.get_parameter("timed_start_yaw_s").value))
         self.timed_start_speed_cmd = float(self.get_parameter("timed_start_speed_cmd").value)
         self.timed_start_yaw_angle_cmd = float(self.get_parameter("timed_start_yaw_angle_cmd").value)
+        self.enable_cone_mode = bool(self.get_parameter("enable_cone_mode").value)
+        self.cone_mode_active = bool(self.get_parameter("cone_start_active").value)
+        self.cone_finish_to_lane = bool(self.get_parameter("cone_finish_to_lane").value)
+        self.cone_publish_debug_image = bool(self.get_parameter("cone_publish_debug_image").value)
+        self.cone_config = ConeFollowerConfig(
+            speed_cmd=float(self.get_parameter("cone_speed_cmd").value),
+            slow_speed_cmd=float(self.get_parameter("cone_slow_speed_cmd").value),
+            lost_speed_cmd=float(self.get_parameter("cone_lost_speed_cmd").value),
+            max_angle_cmd=float(self.get_parameter("cone_max_angle_cmd").value),
+            steer_gain=float(self.get_parameter("cone_steer_gain").value),
+            single_cone_path_offset_px=float(self.get_parameter("cone_single_path_offset_px").value),
+            target_smoothing=float(self.get_parameter("cone_target_smoothing").value),
+            camera_roi_y_min_ratio=float(self.get_parameter("cone_camera_roi_y_min_ratio").value),
+            camera_roi_y_max_ratio=float(self.get_parameter("cone_camera_roi_y_max_ratio").value),
+            camera_h_min=int(self.get_parameter("cone_camera_h_min").value),
+            camera_h_max=int(self.get_parameter("cone_camera_h_max").value),
+            camera_s_min=int(self.get_parameter("cone_camera_s_min").value),
+            camera_v_min=int(self.get_parameter("cone_camera_v_min").value),
+            min_area_px=float(self.get_parameter("cone_min_area_px").value),
+            max_area_px=float(self.get_parameter("cone_max_area_px").value),
+            min_height_px=int(self.get_parameter("cone_min_height_px").value),
+            max_height_ratio=float(self.get_parameter("cone_max_height_ratio").value),
+            min_aspect=float(self.get_parameter("cone_min_aspect").value),
+            max_aspect=float(self.get_parameter("cone_max_aspect").value),
+            lidar_front_center_deg=float(self.get_parameter("cone_lidar_front_center_deg").value),
+            lidar_front_half_width_deg=float(self.get_parameter("cone_lidar_front_half_width_deg").value),
+            lidar_side_min_deg=float(self.get_parameter("cone_lidar_side_min_deg").value),
+            lidar_min_valid_distance_m=float(self.get_parameter("cone_lidar_min_valid_distance_m").value),
+            lidar_max_distance_m=float(self.get_parameter("cone_lidar_max_distance_m").value),
+            front_stop_distance_m=float(self.get_parameter("cone_front_stop_distance_m").value),
+            front_slow_distance_m=float(self.get_parameter("cone_front_slow_distance_m").value),
+            right_block_distance_m=float(self.get_parameter("cone_right_block_distance_m").value),
+            finish_min_seen_frames=int(self.get_parameter("cone_finish_min_seen_frames").value),
+            finish_lost_frames=int(self.get_parameter("cone_finish_lost_frames").value),
+            finish_front_clear_distance_m=float(self.get_parameter("cone_finish_front_clear_distance_m").value),
+        )
 
         self.lane_detector = LaneDetector(
             threshold_mode=self.lane_threshold_mode,
@@ -341,6 +412,7 @@ class TrackDriverNode(Node):
             curve_steering_score_full_px=self.curve_steering_score_full_px,
             curve_steering_error_start_deg=self.curve_steering_error_start_deg,
         )
+        self.cone_follower = ConeFollower(self.cone_config)
         self.obstacle_detector = ObstacleDetector()
         self.object_detector = VehicleObjectDetector()
         self.headlight_left_roi_x_side = self.headlight_roi_side_for_camera("left")
@@ -463,12 +535,15 @@ class TrackDriverNode(Node):
         self.timed_start_yaw0_deg: float | None = None
         self.timed_start_done = False
         self.timed_start_phase = "disabled" if not self.enable_timed_start_sequence else "waiting"
+        self.cone_finished = False
+        self.last_cone_cmd = ConeCommand()
 
         self.motor_pub = self.create_publisher(XycarMotor, self.motor_topic, 10)
         self.debug_pub = self.create_publisher(String, self.debug_topic, 10)
         self.debug_image_pub = self.create_publisher(Image, "/track_drive/lane_debug_image", 3)
         self.bev_image_pub = self.create_publisher(Image, "/track_drive/lane_bev_image", 3)
         self.mask_image_pub = self.create_publisher(Image, "/track_drive/lane_mask_image", 3)
+        self.cone_debug_image_pub = self.create_publisher(Image, "/track_drive/cone_debug_image", 3)
         self.start_signal_debug_image_pub = self.create_publisher(
             Image, "/track_drive/start_signal_debug_image", 3
         )
@@ -760,6 +835,41 @@ class TrackDriverNode(Node):
         self.timed_start_phase = "done"
         return False
 
+    def handle_cone_mode(self, image_age: float, scan_age: float) -> bool:
+        if not self.enable_cone_mode:
+            return False
+        if self.cone_finished and self.cone_finish_to_lane:
+            return False
+        if not self.cone_mode_active:
+            return False
+
+        cmd = self.cone_follower.compute(
+            self.lidar_ranges,
+            self.image,
+            self.lidar_angle_min,
+            self.lidar_angle_increment,
+        )
+        self.last_cone_cmd = cmd
+        self.last_speed_mode = "cone_mode"
+
+        if self.publish_debug_images and self.cone_publish_debug_image and cmd.debug_image is not None:
+            self.cone_debug_image_pub.publish(self.bridge.cv2_to_imgmsg(cmd.debug_image, encoding="bgr8"))
+
+        if cmd.finished:
+            self.cone_finished = True
+            self.cone_mode_active = False
+            if self.cone_finish_to_lane:
+                self.get_logger().info("cone section finished; handing off to lane driving")
+                self.publish_debug("cone_finished", cmd.angle, cmd.speed, image_age, scan_age)
+                return False
+            self.drive(0.0, 0.0)
+            self.publish_debug("cone_finished_stop", 0.0, 0.0, image_age, scan_age)
+            return True
+
+        self.drive(cmd.angle, cmd.speed)
+        self.publish_debug("cone_follow", cmd.angle, cmd.speed, image_age, scan_age)
+        return True
+
     def control_step(self) -> None:
         now = time.monotonic()
         image_age = now - self.last_image_time if self.last_image_time else float("inf")
@@ -770,6 +880,9 @@ class TrackDriverNode(Node):
             return
 
         if self.handle_start_signal_gate(image_age, scan_age):
+            return
+
+        if self.handle_cone_mode(image_age, scan_age):
             return
 
         if self.enable_headlight_detector:
@@ -1618,6 +1731,13 @@ class TrackDriverNode(Node):
 
     def publish_debug(self, state: str, angle: float, speed: float, image_age: float, scan_age: float) -> None:
         front = self.last_obstacle.front_distance_m
+        cone_dbg = self.last_cone_cmd.debug
+        cone_left = cone_dbg.get("left_cone")
+        cone_right = cone_dbg.get("right_cone")
+        try:
+            cone_front_dist = float(cone_dbg.get("front_dist", float("inf")))
+        except (TypeError, ValueError):
+            cone_front_dist = float("inf")
         payload = {
             "controller_state": state,
             "lane_state": self.last_lane.state,
@@ -1631,6 +1751,25 @@ class TrackDriverNode(Node):
             "lane_has_left": bool(self.last_lane.left_count > 0),
             "lane_has_right": bool(self.last_lane.right_count > 0),
             "speed_mode": self.last_speed_mode,
+            "cone_mode_enabled": bool(self.enable_cone_mode),
+            "cone_mode_active": bool(self.cone_mode_active),
+            "cone_finished": bool(self.cone_finished),
+            "cone_cmd_finished": bool(self.last_cone_cmd.finished),
+            "cone_mode": str(cone_dbg.get("mode", "none")),
+            "cone_follow_mode": str(cone_dbg.get("follow_mode", "none")),
+            "cone_steer_mode": str(cone_dbg.get("steer_mode", "none")),
+            "cone_lost_frames": int(cone_dbg.get("lost_frames", 0)),
+            "cone_seen_frames": int(cone_dbg.get("seen_frames", 0)),
+            "cone_path_count": int(cone_dbg.get("path_count", 0)),
+            "cone_center_offset": round(float(cone_dbg.get("center_offset", 0.0)), 3),
+            "cone_front_dist": round(cone_front_dist, 3) if math.isfinite(cone_front_dist) else None,
+            "cone_path_cx": round(float(cone_dbg.get("path_cx", 0.0)), 3),
+            "cone_path_cy": round(float(cone_dbg.get("path_cy", 0.0)), 3),
+            "cone_left_x": round(float(getattr(cone_left, "cx", 0.0)), 3) if cone_left else None,
+            "cone_left_y": round(float(getattr(cone_left, "cy", 0.0)), 3) if cone_left else None,
+            "cone_right_x": round(float(getattr(cone_right, "cx", 0.0)), 3) if cone_right else None,
+            "cone_right_y": round(float(getattr(cone_right, "cy", 0.0)), 3) if cone_right else None,
+            "cone_right_blocked": bool(cone_dbg.get("right_blocked", False)),
             "start_signal_gate_enabled": bool(self.enable_start_signal_gate),
             "start_signal": self.start_signal_state,
             "start_signal_gate_open": bool(self.start_signal_gate_open),
