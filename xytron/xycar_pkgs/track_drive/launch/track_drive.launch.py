@@ -1,10 +1,15 @@
 from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
 def generate_launch_description():
     return LaunchDescription(
         [
+            DeclareLaunchArgument("enable_start_signal_gate", default_value="false"),
+            DeclareLaunchArgument("enable_cone_mode", default_value="false"),
+            DeclareLaunchArgument("cone_start_active", default_value="true"),
             Node(
                 package="track_drive",
                 executable="track_drive",
@@ -16,7 +21,7 @@ def generate_launch_description():
                         "scan_topic": "/scan",
                         "imu_topic": "/imu",
                         "motor_topic": "xycar_motor",
-                        "enable_start_signal_gate": False,
+                        "enable_start_signal_gate": LaunchConfiguration("enable_start_signal_gate"),
                         "start_signal_release_latched": True,
                         "enable_stopline": False,
                         "enable_lidar_obstacle": False,
@@ -50,8 +55,8 @@ def generate_launch_description():
                         "white_s_max": 35,
                         "white_v_min": 190,
                         "lane_target_lookahead_y_px": 65,
-                        "enable_cone_mode": False,
-                        "cone_start_active": True,
+                        "enable_cone_mode": LaunchConfiguration("enable_cone_mode"),
+                        "cone_start_active": LaunchConfiguration("cone_start_active"),
                         "cone_finish_to_lane": True,
                         "cone_publish_debug_image": True,
                         "cone_cruise_speed": 5.0,
