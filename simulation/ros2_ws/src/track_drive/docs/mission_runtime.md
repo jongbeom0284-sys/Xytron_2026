@@ -4,9 +4,9 @@
 
 ## 현재 결론
 
-- 현재 작업 브랜치: `codex/cone-mode-integration`
-- 실제 실행 workspace: `C:\Users\yaja0\Downloads\2026_Xytron\xytron\xycar_pkgs`
-- 이제 필요한 ROS2 패키지는 모두 `2026_Xytron` 한 폴더 안에 있다.
+- 현재 작업 브랜치: `feat/scanline-lane-id-tracking`
+- 시뮬레이터 workspace: `C:\Users\yaja0\Downloads\2026_Xytron\simulation\ros2_ws`
+- Unity용 ROS2 패키지는 `simulation/ros2_ws/src`에만 둔다.
 - `newAuto`는 더 이상 실행 source 경로로 쓰지 않아도 된다.
 - `newAuto`의 기존 주행 코드와 `origin/codex/track-drive-start-signal-gate`는 같은 기준 코드였고, 현재 브랜치는 그 위에 라바콘 통합을 얹은 버전이다.
 - 현재 확인 시점에는 ROS graph에 `/scan`, `/usb_cam/image_raw/front`, `/imu`가 없었다. 즉 simulator/ROS-TCP endpoint live 연결은 아직 확인되지 않았다.
@@ -16,40 +16,29 @@
 
 ```text
 C:\Users\yaja0\Downloads\2026_Xytron
-├─ src\
-│  └─ 과거 신호 제어 단독 프로토타입
-└─ xytron\xycar_pkgs\
-   ├─ xycar_msgs\                    # XycarMotor 메시지
-   ├─ ROS-TCP-Endpoint-main-ros2\    # Unity simulator endpoint, package name: ros_tcp_endpoint
-   ├─ my_cam\
-   ├─ my_lidar\
-   ├─ my_motor\
-   ├─ my_imu\
-   ├─ kookmin9_viewer\
-   └─ track_drive\
-      ├─ launch\
-      │  └─ track_drive.launch.py
-      ├─ docs\
-      │  └─ mission_runtime.md
-      ├─ package.xml
-      ├─ setup.py
-      └─ track_drive\
-         ├─ track_drive.py              # 메인 상태기계/주행 노드
-         ├─ traffic_light_detector.py   # 시작 신호등 인식
-         ├─ cone_follower.py            # 라바콘 주행 제어
-         ├─ lidar_utils.py              # 라바콘 라이다 클러스터/경로 생성
-         ├─ cone_debug.py               # 라바콘 터미널 디버그, 모터 publish 없음
-         ├─ lane_detector.py            # 차선 인식
-         ├─ lane_controller.py          # 차선 추종 제어
-         ├─ lidar_obstacle.py
-         ├─ object_detector.py
-         ├─ stopline_detector.py
-         └─ preprocessor.py
+├─ simulation\
+│  ├─ ros2_ws\src\
+│  │  ├─ xycar_msgs\                    # Unity XycarMotor 메시지
+│  │  ├─ ROS-TCP-Endpoint-main-ros2\    # Unity endpoint
+│  │  ├─ kookmin9_viewer\
+│  │  └─ track_drive\
+│  │     ├─ launch\
+│  │     │  └─ track_drive.launch.py
+│  │     ├─ docs\
+│  │     │  └─ mission_runtime.md
+│  │     ├─ package.xml
+│  │     ├─ setup.py
+│  │     └─ track_drive\
+│  ├─ assets\
+│  └─ legacy\
+└─ real\
+   ├─ lane_id_perception\
+   └─ drivers\
 ```
 
 ## 추종해야 하는 코드 기준
 
-코드 기준은 `2026_Xytron`의 `codex/cone-mode-integration` 브랜치다.
+시뮬레이터 코드는 `simulation/ros2_ws/src`만 기준으로 삼는다.
 
 `track_drive`는 현재 브랜치의 것을 따라야 한다. `newAuto`의 `track_drive`를 다시 복사하면 라바콘 통합이 사라질 수 있으므로 덮어쓰면 안 된다.
 
@@ -60,7 +49,7 @@ WSL Ubuntu-22.04 터미널 기준:
 ```bash
 source /opt/ros/humble/setup.bash
 
-cd /mnt/c/Users/yaja0/Downloads/2026_Xytron/xytron/xycar_pkgs
+cd /mnt/c/Users/yaja0/Downloads/2026_Xytron/simulation/ros2_ws
 colcon build
 ```
 
@@ -70,7 +59,7 @@ colcon build
 
 ```bash
 source /opt/ros/humble/setup.bash
-source /mnt/c/Users/yaja0/Downloads/2026_Xytron/xytron/xycar_pkgs/install/setup.bash
+source /mnt/c/Users/yaja0/Downloads/2026_Xytron/simulation/ros2_ws/install/setup.bash
 ```
 
 확인 명령:
@@ -84,9 +73,9 @@ python3 -c "import track_drive.track_drive as t; print(t.__file__)"
 
 기대값:
 
-- `xycar_msgs`: `/mnt/c/Users/yaja0/Downloads/2026_Xytron/xytron/xycar_pkgs/install/xycar_msgs`
-- `ros_tcp_endpoint`: `/mnt/c/Users/yaja0/Downloads/2026_Xytron/xytron/xycar_pkgs/install/ros_tcp_endpoint`
-- `track_drive`: `/mnt/c/Users/yaja0/Downloads/2026_Xytron/xytron/xycar_pkgs/install/track_drive`
+- `xycar_msgs`: `/mnt/c/Users/yaja0/Downloads/2026_Xytron/simulation/ros2_ws/install/xycar_msgs`
+- `ros_tcp_endpoint`: `/mnt/c/Users/yaja0/Downloads/2026_Xytron/simulation/ros2_ws/install/ros_tcp_endpoint`
+- `track_drive`: `/mnt/c/Users/yaja0/Downloads/2026_Xytron/simulation/ros2_ws/install/track_drive`
 
 ## Simulator 연결 확인
 
@@ -96,7 +85,7 @@ python3 -c "import track_drive.track_drive as t; print(t.__file__)"
 
 ```bash
 source /opt/ros/humble/setup.bash
-source /mnt/c/Users/yaja0/Downloads/2026_Xytron/xytron/xycar_pkgs/install/setup.bash
+source /mnt/c/Users/yaja0/Downloads/2026_Xytron/simulation/ros2_ws/install/setup.bash
 ros2 launch ros_tcp_endpoint endpoint.py
 ```
 
@@ -106,7 +95,7 @@ Unity simulator를 실행하고 ROS-TCP endpoint에 연결한다.
 
 ```bash
 source /opt/ros/humble/setup.bash
-source /mnt/c/Users/yaja0/Downloads/2026_Xytron/xytron/xycar_pkgs/install/setup.bash
+source /mnt/c/Users/yaja0/Downloads/2026_Xytron/simulation/ros2_ws/install/setup.bash
 
 ros2 topic list
 ros2 topic hz /scan
@@ -203,10 +192,9 @@ ros2 launch track_drive track_drive.launch.py \
 확인 완료:
 
 - Ubuntu-22.04 / ROS2 Humble 환경에서 `ros2`, `rqt`, `colcon` 사용 가능
-- `2026_Xytron` 단일 workspace에서 8개 패키지 인식 확인
-- `2026_Xytron` 단일 workspace `colcon build` 완료
-- `2026_Xytron`만 source해도 `xycar_msgs`, `ros_tcp_endpoint`, `track_drive` package resolution 정상
-- Python import 기준 `track_drive`는 `2026_Xytron` install 경로에서 로드됨
+- 기존 통합 workspace에서 패키지 인식과 `colcon build`가 완료된 이력이 있음
+- 새 구조에서는 Unity 패키지 4개를 `simulation/ros2_ws`로 이동함
+- 새 경로에서의 전체 `colcon build`는 이 브랜치 검증 단계에서 다시 확인함
 
 미확인:
 
