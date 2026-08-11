@@ -1,7 +1,8 @@
 __pycache__/
 *.py[cod]
+.pytest_cache/
 .DS_Store
 Thumbs.db
-xytron/xycar_pkgs/build/
-xytron/xycar_pkgs/install/
-xytron/xycar_pkgs/log/
+**/build/
+**/install/
+**/log/

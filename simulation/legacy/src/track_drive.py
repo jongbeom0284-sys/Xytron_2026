@@ -145,8 +145,7 @@ class SignalMap:
 
     def _candidate_dirs(self) -> Iterable[Path]:
         here = Path(__file__).resolve()
-        yield here.parent.parent / "unity_map_extract"
-        yield here.parent / "unity_map_extract"
+        yield here.parents[2] / "assets" / "unity_map_extract"
         yield Path.cwd() / "unity_map_extract"
         yield Path("/mnt/c/Users/user/Desktop/Xycar_signal_control_review/unity_map_extract")
         yield Path("C:/Users/user/Desktop/Xycar_signal_control_review/unity_map_extract")
