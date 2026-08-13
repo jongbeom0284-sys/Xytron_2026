@@ -2,7 +2,9 @@
 set -u
 
 REPOSITORY=/home/xytron/2026_Xytron
+set +u
 source /home/xytron/kobot_env.sh
+set -u
 
 echo "HOST=$(hostname)"
 cd "$REPOSITORY" || exit 1
