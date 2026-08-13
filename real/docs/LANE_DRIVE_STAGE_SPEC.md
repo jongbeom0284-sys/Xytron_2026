@@ -8,7 +8,7 @@ CLRerNet이 검출한 좌측 차선을 지면 좌표로 변환하고, 좌측 차
 
 ## Stage 1 - 공개 구현 통합
 
-상태: `implemented`, Windows unit test 통과, Jetson runtime 미검증
+상태: `implemented`, Jetson CLRerNet runtime-verified, ROS 빌드 의존성 대기
 
 - 공식 CLRerNet 고정 커밋
 - ros-sports/ipm Humble 고정 커밋
@@ -23,6 +23,16 @@ CLRerNet이 검출한 좌측 차선을 지면 좌표로 변환하고, 좌측 차
 - WSL ROS2 Humble `ipm_interfaces`, `ipm_library`, `kobot_lane_drive` 통합 빌드 통과
 - 두 launch 파일의 인자 해석 통과
 - `armed:=false`, `calibration_ready:=false` smoke에서 `drive_bridge` 시작 0건
+
+2026-08-13 Jetson 배치 근거:
+
+- 최종 경로 `real/.venv`로 기존 CLRerNet 환경을 복제하고 원본은 보존
+- Torch 2.8.0, TorchVision 0.23.0, Shapely 2.1.2, CUDA NMS import 통과
+- 모델 SHA-256 `cce8b552bc8301e31186da192fe4213043e9351b35651ef5d40014ce3040c787` 일치
+- Jetson 최종 venv에서 Kobot 통합 단위시험 `12 passed`
+- 저장된 실제 카메라 프레임 `001.jpg` GPU 추론에서 차선 3개 반환, 161.16ms
+- ROS 선택 빌드는 `vision_msgs` 미설치로 `ipm_interfaces`에서 차단됨
+- `ros-humble-vision-msgs`, `ros-humble-camera-calibration`은 sudo 입력 후 설치 필요
 
 ## Stage 2 - 무모터 실시간 검증
 
@@ -40,9 +50,9 @@ CLRerNet이 검출한 좌측 차선을 지면 좌표로 변환하고, 좌측 차
 4. 실제 트랙 직선·좌곡선·우곡선 원본과 overlay를 함께 확인한다.
 5. 평균/최악 추론 지연과 좌측 차선 누락률을 기록한다.
 
-2026-08-13 읽기 전용/메모리 추론 근거:
+2026-08-13 읽기 전용/저장 프레임 추론 근거:
 
-- hostname `kobot`, main/HEAD/GitHub main 모두 `be4a0fc56006c796db1fd416432af558461d2a1b`
+- hostname `kobot`, branch `main`, 배치 시점마다 HEAD와 GitHub main 일치 확인
 - 실제 `/camera_info`: 640x480, K/R/P 전부 0, `/tf_static` 없음
 - 로컬 `CLRerNetEngine` 파일을 원격 파일 생성 없이 Jetson GPU에서 직접 실행
 - 저장 이미지 5장 추론: 4장 좌측 후보 선택, 1장 `LOST`
