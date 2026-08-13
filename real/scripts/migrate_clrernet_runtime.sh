@@ -25,12 +25,12 @@ cp -a "$SOURCE_VENV" "$MIGRATING_VENV"
 # and preserve the existing pip/site-packages without requiring sudo.
 /usr/bin/python3 -m venv --upgrade --without-pip "$MIGRATING_VENV"
 "$MIGRATING_VENV/bin/python" -m pip --version
+"$MIGRATING_VENV/bin/python" -m pip install \
+    --no-build-isolation --no-deps --force-reinstall "$NMS_SOURCE"
 set +u
 source /opt/ros/humble/setup.bash
 set -u
 export PYTHONPATH="/usr/lib/python3/dist-packages:${PYTHONPATH:-}"
-"$MIGRATING_VENV/bin/python" -m pip install \
-    --no-build-isolation --no-deps --force-reinstall "$NMS_SOURCE"
 "$MIGRATING_VENV/bin/python" - <<'PY'
 import cv2
 import mmcv
