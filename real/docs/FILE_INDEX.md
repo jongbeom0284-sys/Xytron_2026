@@ -2,7 +2,7 @@
 
 이 표는 `real/`에 커밋되는 모든 파일의 출처, 역할, 주요 입력·출력, 편집 정책을 기록한다. 생성물(`build/`, `install/`, `log/`), 캐시, 백업은 포함하지 않는다. vendored 모듈의 개별 파일은 같은 upstream 기준을 반복 표기해 경계를 명확히 한다.
 
-총 파일 수: **303**
+총 파일 수: **304**
 
 | 경로 | 출처 | 역할 | 입력·출력 | 수정 정책 |
 |---|---|---|---|---|
@@ -86,6 +86,7 @@
 | `real/ros2_ws/src/vesc/vesc_msgs/msg/VescStateStamped.msg` | F1TENTH vesc upstream 153998df | 모듈 지원 파일 | 빌드·문서·runtime 지원 | 직접 수정 지양; upstream 갱신으로 관리 |
 | `real/ros2_ws/src/vesc/vesc_msgs/package.xml` | F1TENTH vesc upstream 153998df | 빌드·패키지 메타데이터 | 빌드 도구 입력 → library/node/package | 직접 수정 지양; upstream 갱신으로 관리 |
 | `real/ros2_ws/src/xycar_lidar/CMakeLists.txt` | Kobot LiDAR ROS 2 wrapper (2026-08-13) | 빌드·패키지 메타데이터 | 빌드 도구 입력 → library/node/package | 실장·빌드 검증 후 수정 가능 |
+| `real/ros2_ws/src/xycar_lidar/config/.gitkeep` | Kobot LiDAR ROS 2 wrapper (2026-08-13) | CMake 설치 대상인 빈 config 디렉터리 보존 | Git checkout → config 디렉터리 | 디렉터리가 필요하므로 유지 |
 | `real/ros2_ws/src/xycar_lidar/LICENSE.txt` | Kobot LiDAR ROS 2 wrapper (2026-08-13) | upstream 문서 | 개발자 입력 → 사용·API 설명 | 실장·빌드 검증 후 수정 가능 |
 | `real/ros2_ws/src/xycar_lidar/README.md` | Kobot LiDAR ROS 2 wrapper (2026-08-13) | upstream 문서 | 개발자 입력 → 사용·API 설명 | 실장·빌드 검증 후 수정 가능 |
 | `real/ros2_ws/src/xycar_lidar/YDLidar-SDK/.gitignore` | YDLidar-SDK upstream 16ca1f40 | 모듈 지원 파일 | 빌드·문서·runtime 지원 | 직접 수정 지양; upstream 갱신으로 관리 |
