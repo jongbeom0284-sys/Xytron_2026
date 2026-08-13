@@ -30,7 +30,7 @@ cp -a "$SOURCE_VENV" "$MIGRATING_VENV"
 set +u
 source /opt/ros/humble/setup.bash
 set -u
-export PYTHONPATH="/usr/lib/python3/dist-packages:${PYTHONPATH:-}"
+export PYTHONPATH="$MIGRATING_VENV/lib/python3.10/site-packages:/usr/lib/python3/dist-packages:${PYTHONPATH:-}"
 "$MIGRATING_VENV/bin/python" - <<'PY'
 import cv2
 import mmcv

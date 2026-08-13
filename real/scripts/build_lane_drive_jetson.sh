@@ -14,7 +14,7 @@ test -x "$VENV/bin/python"
 set +u
 source /opt/ros/humble/setup.bash
 set -u
-export PYTHONPATH="/usr/lib/python3/dist-packages:${PYTHONPATH:-}"
+export PYTHONPATH="$VENV/lib/python3.10/site-packages:/usr/lib/python3/dist-packages:${PYTHONPATH:-}"
 cd "$WORKSPACE"
 "$VENV/bin/python" -m colcon build --symlink-install \
     --packages-select ipm_interfaces ipm_library kobot_lane_drive
