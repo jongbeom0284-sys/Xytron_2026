@@ -21,6 +21,24 @@ lane_preview → /lane_preview/status → dashboard 차선 상태
 
 `lane_preview`는 OpenCV HSV 색상 마스크, Canny edge, Hough 선분을 이용해 카메라 영상 위에 좌우 차선 후보를 그리는 표시 전용 노드다. CLRerNet 모델이 아니며 경로 계획이나 차량 제어를 하지 않는다. 출력 정확도는 실제 트랙 대표 영상으로 별도 검증해야 한다.
 
+## CLRerNet 좌측 차선 흐름
+
+```text
+/image_raw → 공식 CLRerNet → 가장 가까운 좌측 경계 영상점
+/camera_info + base_link↔default_cam TF
+  → ros-sports/ipm → 좌측 경계 지면점(m)
+  → Shapely offset_curve(d) → 목표 Path(m)
+  → PythonRobotics Stanley → 조향 미리보기(rad)
+  ├→ /kobot_lane_drive/debug_image
+  ├→ /kobot_lane_drive/status
+  ├→ /kobot_lane_drive/target_path
+  └→ /kobot_lane_drive/steering_preview
+```
+
+`d`는 미터 단위다. 카메라 K 행렬이나 TF가 유효하지 않으면 `CALIBRATION_INVALID`로 차단하고 목표 경로와 조향값을 발행하지 않는다.
+
+기본 perception launch는 모터 토픽을 발행하지 않고 `sensors.launch.py`에도 자동 포함되지 않는다. 승인 잠금 `drive_bridge`만 `armed:=true`일 때 `/xycar_motor`를 발행한다.
+
 ## 모터 명령 흐름
 
 ```text
@@ -50,6 +68,11 @@ lane_preview → /lane_preview/status → dashboard 차선 상태
 | VESC 출력 | `/commands/servo/position` | servo position 명령 |
 | 화면 | `/lane_preview/image` | 오버레이 영상 |
 | 화면 | `/lane_preview/status` | 검출 상태 JSON 문자열 |
+| 차선 인식 입력 | `/image_raw` | CLRerNet 입력 영상 |
+| 좌측 차선 화면 | `/kobot_lane_drive/debug_image` | 좌측 경계·목표 경로·오차 overlay |
+| 좌측 차선 상태 | `/kobot_lane_drive/status` | 보정·IPM·거리·조향 상태 JSON |
+| 목표 경로 | `/kobot_lane_drive/target_path` | `nav_msgs/Path`, base_link 미터 좌표 |
+| 조향 미리보기 | `/kobot_lane_drive/steering_preview` | Stanley 조향각 rad |
 
 ## HTTP API
 

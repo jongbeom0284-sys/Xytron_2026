@@ -32,4 +32,6 @@
 
 ## 기능 경계
 
-`lane_preview`는 HSV/Canny/Hough 기반 표시 전용 노드다. CLRerNet이나 자율주행 제어기가 아니며 모터 명령을 내보내면 안 된다. `track_drive`, `kmu_race`, CLRerNet 통합은 이 기준판 범위 밖이다.
+`lane_preview`는 HSV/Canny/Hough 기반 표시 전용 노드다. CLRerNet이나 자율주행 제어기가 아니며 모터 명령을 내보내면 안 된다.
+
+CLRerNet 좌측 차선 주행은 `real/ros2_ws/src/kobot_lane_drive`에서만 개발한다. `lane_perception.launch.py`는 항상 무모터다. `track_test.launch.py`의 drive bridge는 사용자 승인, 카메라/IPM 검증, 기존 모터 프로세스 충돌 점검 후에만 `armed:=true`로 실행한다. `track_drive`, `kmu_race`와 과거 `clrernet_eval`은 최종 개발 위치가 아니다.

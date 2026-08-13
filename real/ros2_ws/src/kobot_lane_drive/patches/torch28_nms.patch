@@ -1,0 +1,30 @@
+diff --git a/libs/models/layers/nms/src/nms.cpp b/libs/models/layers/nms/src/nms.cpp
+--- a/libs/models/layers/nms/src/nms.cpp
++++ b/libs/models/layers/nms/src/nms.cpp
+@@
+-#define CHECK_CUDA(x) AT_ASSERTM(x.type().is_cuda(), #x " must be a CUDA tensor")
++#define CHECK_CUDA(x) AT_ASSERTM(x.is_cuda(), #x " must be a CUDA tensor")
+diff --git a/libs/models/layers/nms/src/nms_kernel.cu b/libs/models/layers/nms/src/nms_kernel.cu
+--- a/libs/models/layers/nms/src/nms_kernel.cu
++++ b/libs/models/layers/nms/src/nms_kernel.cu
+@@
+-  AT_DISPATCH_FLOATING_TYPES(boxes.type(), "nms_cuda_forward", ([&] {
++  AT_DISPATCH_FLOATING_TYPES(boxes.scalar_type(), "nms_cuda_forward", ([&] {
+@@
+-                                    boxes.data<scalar_t>(),
+-                                    idx.data<int64_t>(),
+-                                    mask.data<int64_t>());
++                                    boxes.data_ptr<scalar_t>(),
++                                    idx.data_ptr<int64_t>(),
++                                    mask.data_ptr<int64_t>());
+@@
+-                        idx.data<int64_t>(),
+-                        mask.data<int64_t>(),
+-                        keep.data<int64_t>(),
+-                        parent_object_index.data<int64_t>(),
+-                        num_to_keep.data<int64_t>());
++                        idx.data_ptr<int64_t>(),
++                        mask.data_ptr<int64_t>(),
++                        keep.data_ptr<int64_t>(),
++                        parent_object_index.data_ptr<int64_t>(),
++                        num_to_keep.data_ptr<int64_t>());
