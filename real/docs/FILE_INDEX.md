@@ -1,8 +1,8 @@
 # 파일 색인
 
-이 표는 `real/`에 커밋되는 모든 파일의 출처, 역할, 주요 입력·출력, 편집 정책을 기록한다. 생성물(`build/`, `install/`, `log/`), 캐시, 백업은 포함하지 않는다. vendored 모듈의 개별 파일은 같은 upstream 기준을 반복 표기해 경계를 명확히 한다.
+이 표는 `real/`에 커밋되는 파일의 출처, 역할, 주요 입력·출력, 편집 정책을 기록한다. 생성물(`build/`, `install/`, `log/`), 캐시, 백업은 포함하지 않는다. 큰 vendored subtree는 기준 commit과 패치 경계를 한 항목으로 묶어 기록한다.
 
-총 파일 수: **304**
+총 파일 수: **432**
 
 | 경로 | 출처 | 역할 | 입력·출력 | 수정 정책 |
 |---|---|---|---|---|
@@ -14,8 +14,16 @@
 | `real/docs/ARCHITECTURE.md` | Kobot 프로젝트 자체 작성 | 노드·토픽·HTTP 구조 | 소스 인터페이스 → 공동 설계 기준 | 검토·검증 후 수정 가능 |
 | `real/docs/FILE_INDEX.md` | Kobot 프로젝트 자체 작성 | 모든 커밋 파일의 색인 | 저장소 파일 → 출처·역할·편집 정책 | 검토·검증 후 수정 가능 |
 | `real/docs/HARDWARE_AND_VESC.md` | Kobot 프로젝트 자체 작성 | 하드웨어·VESC 안전 기준 | 실장 설정 → 제한값·시험 조건 | 검토·검증 후 수정 가능 |
+| `real/docs/LANE_DRIVE_STAGE_SPEC.md` | Kobot 프로젝트 자체 작성 | 좌측 차선 거리 유지 단계·검증 계약 | 구현·실측 근거 → 단계 승인 | 단계 결과와 함께 갱신 |
 | `real/docs/OPERATIONS.md` | Kobot 프로젝트 자체 작성 | 빌드·운영·검증 절차 | 운영자 입력 → 검증 순서 | 검토·검증 후 수정 가능 |
 | `real/docs/PROVENANCE.md` | Kobot 프로젝트 자체 작성 | 원본 commit과 패치 기록 | upstream/차량 스냅샷 → 추적 정보 | 검토·검증 후 수정 가능 |
+| `real/models/README.md` | Kobot 프로젝트 자체 작성 | CLRerNet 가중치 출처·checksum | 모델 준비 → 무결성 검증 | 모델 파일 자체는 Git 제외 |
+| `real/calibration/README.md` | Kobot 프로젝트 자체 작성 | 카메라 내부·외부 보정 gate | 실측 보정 → 유효 CameraInfo·TF | 추정값 금지 |
+| `real/requirements/clrernet-jetson.freeze.txt` | Kobot 평가 venv read-only snapshot | Jetson Python 환경 재현 기록 | 기존 venv → 고정 버전 목록 | 실제 호환 검증 후 갱신 |
+| `real/scripts/` | Kobot 프로젝트 자체 작성 | runtime 복제·venv 빌드·읽기 전용 preflight | 승인된 운영 입력 → 검증 결과 | 실행 전 승인 경계 확인 |
+| `real/ros2_ws/src/kobot_lane_drive/` | Kobot 통합 + 공개 알고리즘 | 좌측 차선 미터 경로·Stanley·승인 잠금 bridge | 이미지/보정/TF → debug·Path·preview·승인 시 motor | 공개 구현 provenance와 안전 gate 유지 |
+| `real/ros2_ws/src/kobot_lane_drive/third_party/CLRerNet/` | CLRerNet upstream `dae038f` + NMS patch | CLRerNet 추론 runtime source/config | 이미지 tensor → 차선 후보 | upstream 원문 유지; 패치는 provenance와 함께 관리 |
+| `real/ros2_ws/src/ipm/` | ros-sports/ipm Humble `2943925` | 영상점의 지면 좌표 투영 | CameraInfo·TF·영상점 → 지면점(m) | upstream 원문 유지 |
 | `real/ros2_ws/src/kobot_vehicle/config/camera.yaml` | Kobot 차량 실행본 (2026-08-13) | 카메라 파라미터 | launch → usb_cam | 검토·테스트 후 수정 가능 |
 | `real/ros2_ws/src/kobot_vehicle/config/imu.yaml` | Kobot 차량 실행본 (2026-08-13) | IMU 파라미터 | launch → imu_node | 검토·테스트 후 수정 가능 |
 | `real/ros2_ws/src/kobot_vehicle/config/lidar.yaml` | Kobot 차량 실행본 (2026-08-13) | LiDAR 파라미터 | launch → xycar_lidar | 검토·테스트 후 수정 가능 |

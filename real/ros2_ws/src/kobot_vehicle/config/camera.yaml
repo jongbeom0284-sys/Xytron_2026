@@ -5,5 +5,6 @@
     image_height: 480
     framerate: 30.0
     pixel_format: yuyv2rgb
-    camera_frame_id: camera
+    frame_id: default_cam
     camera_name: kobot_camera
+    camera_info_url: file:///home/xytron/2026_Xytron/real/calibration/kobot_camera.yaml

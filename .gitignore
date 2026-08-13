@@ -6,3 +6,8 @@ Thumbs.db
 **/build/
 **/install/
 **/log/
+**/.venv/
+real/models/*.pth
+**/third_party/CLRerNet/dataset/
+**/third_party/CLRerNet/**/*.so
+**/third_party/CLRerNet/**/*.egg-info/

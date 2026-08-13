@@ -7,18 +7,26 @@ ssh -i ~/.ssh/jetson_j4012_auto xytron@100.95.40.26
 hostname
 ```
 
-결과가 `kobot`이 아니면 중단한다. 기존 `/home/xytron/xycar_ws`와 다른 저장소의 `/home/xytron/2026_Xytron` 실행본을 임의로 수정하지 않는다.
+결과가 `kobot`이 아니면 중단한다. 최종 저장소는 `/home/xytron/2026_Xytron`, 실제 ROS 2 workspace는 `/home/xytron/2026_Xytron/real/ros2_ws`다. `xycar_ws`, `real_candidate`, `clrernet_eval`에서는 최종 코드를 개발하지 않는다.
 
-## 2. 후보본 빌드
+저장소 작업 전 다음 순서를 지킨다.
 
-운영본과 분리한 `/home/xytron/2026_Xytron_real_candidate`에서 먼저 검증한다.
+```bash
+cd /home/xytron/2026_Xytron
+test "$(git branch --show-current)" = main
+git pull --ff-only origin main
+test "$(git rev-parse HEAD)" = "$(git ls-remote origin refs/heads/main | cut -f1)"
+```
+
+## 2. 통합 workspace 빌드
 
 ```bash
 source /opt/ros/humble/setup.bash
-cd /home/xytron/2026_Xytron_real_candidate/real/ros2_ws
+source /home/xytron/2026_Xytron/real/.venv/bin/activate
+cd /home/xytron/2026_Xytron/real/ros2_ws
 rosdep install --from-paths src --ignore-src -r -y
 colcon build --symlink-install
-colcon test --packages-select kobot_vehicle
+colcon test --packages-select kobot_vehicle kobot_lane_drive
 colcon test-result --verbose
 ```
 
@@ -54,6 +62,21 @@ ros2 launch kobot_vehicle sensors.launch.py
 ```
 
 대시보드의 차선 화면은 `/lane_preview/image`와 `/lane_preview/status`를 표시할 뿐 자율주행을 수행하지 않는다.
+
+`kobot_lane_drive`도 기본 센서 launch에 포함되지 않는다. 패키지 빌드, 모델 준비, launch는 각각 승인 후 수행한다. `/camera_info` K 행렬과 카메라 TF를 먼저 검증하고, 무모터 launch 후 `/kobot_lane_drive/status`, 목표 Path, 조향 미리보기와 debug 영상을 확인한다. `BLOCKED` 상태에서 모터 단계로 넘어가지 않는다.
+
+```bash
+ros2 launch kobot_lane_drive lane_perception.launch.py
+```
+
+실제 출력은 별도 승인과 충돌 점검 뒤에만 실행한다.
+
+```bash
+ros2 launch kobot_lane_drive track_test.launch.py \
+  calibration_ready:=true camera_x_m:=<실측> camera_y_m:=<실측> \
+  camera_z_m:=<실측> camera_roll_rad:=<실측> \
+  camera_pitch_rad:=<실측> camera_yaw_rad:=<실측> armed:=true
+```
 
 ## 5. 웹 확인
 
