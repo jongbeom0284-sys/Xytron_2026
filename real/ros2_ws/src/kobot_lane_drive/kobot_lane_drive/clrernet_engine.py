@@ -47,8 +47,13 @@ class CLRerNetEngine:
         self._torch = torch
         self._compose_type = Compose
         self._get_prediction = get_prediction
+        # An explicit palette keeps MMDetection from constructing the CULane
+        # evaluation dataset just to obtain visualization metadata.
         self._model = init_detector(
-            str(self.config_path), str(self.checkpoint_path), device=self.device
+            str(self.config_path),
+            str(self.checkpoint_path),
+            device=self.device,
+            palette="random",
         )
         self._model.bbox_head.test_cfg.as_lanes = False
         self._pipeline = self._compose_type(
