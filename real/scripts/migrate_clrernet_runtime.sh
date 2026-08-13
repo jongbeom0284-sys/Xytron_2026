@@ -20,7 +20,11 @@ actual_source_hash="$(sha256sum "$SOURCE_WEIGHT" | cut -d' ' -f1)"
 test "$actual_source_hash" = "$EXPECTED_WEIGHT_SHA256"
 
 cp -a "$SOURCE_VENV" "$MIGRATING_VENV"
-/usr/bin/python3 -m venv --upgrade "$MIGRATING_VENV"
+# Jetson's minimal system Python may not include ensurepip.  The copied
+# environment already contains pip, so refresh only the interpreter metadata
+# and preserve the existing pip/site-packages without requiring sudo.
+/usr/bin/python3 -m venv --upgrade --without-pip "$MIGRATING_VENV"
+"$MIGRATING_VENV/bin/python" -m pip --version
 source /opt/ros/humble/setup.bash
 export PYTHONPATH="/usr/lib/python3/dist-packages:${PYTHONPATH:-}"
 "$MIGRATING_VENV/bin/python" -m pip install --no-deps --force-reinstall "$NMS_SOURCE"
