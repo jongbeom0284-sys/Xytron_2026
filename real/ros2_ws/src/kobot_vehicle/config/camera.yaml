@@ -1,0 +1,9 @@
+/**:
+  ros__parameters:
+    video_device: /dev/videoCAM
+    image_width: 640
+    image_height: 480
+    framerate: 30.0
+    pixel_format: yuyv2rgb
+    camera_frame_id: camera
+    camera_name: kobot_camera

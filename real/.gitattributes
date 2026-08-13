@@ -1,0 +1,3 @@
+# Preserve vendored upstream text exactly; upstream contains intentional legacy whitespace.
+ros2_ws/src/vesc/** -whitespace
+ros2_ws/src/xycar_lidar/** -whitespace

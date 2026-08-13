@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+source /opt/ros/humble/setup.bash
+if [ -f "${HOME}/2026_Xytron/real/ros2_ws/install/setup.bash" ]; then
+  source "${HOME}/2026_Xytron/real/ros2_ws/install/setup.bash"
+fi
+export ROS_DOMAIN_ID=7
+export ROS_NAMESPACE=xycar
+export ROS_LOCALHOST_ONLY=1
