@@ -1,0 +1,185 @@
+.viewer-card-drive .viewer-card-body {
+  min-height: 0;
+}
+
+.motor-badge {
+  flex: none;
+  border-radius: 999px;
+  padding: 6px 9px;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.motor-badge.ok {
+  color: #047857;
+  background: #dcfce7;
+}
+
+.motor-badge.warn {
+  color: #a16207;
+  background: #fef3c7;
+}
+
+.motor-badge.bad {
+  color: #b91c1c;
+  background: #fee2e2;
+}
+
+.drive-stack {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px 12px;
+  border: 1px solid #dbeafe;
+  border-radius: 11px;
+  padding: 11px 12px;
+  background: #eff6ff;
+}
+
+.drive-stack > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.drive-stack span,
+.drive-stack-detail {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.drive-stack strong {
+  color: #1e3a8a;
+  font-size: 12px;
+}
+
+.drive-stack-detail {
+  grid-column: 1;
+  overflow: hidden;
+  margin: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.restart-motor {
+  grid-row: 1 / span 2;
+  grid-column: 2;
+  min-height: 38px;
+  border: 1px solid #93c5fd;
+  border-radius: 9px;
+  padding: 8px 11px;
+  color: #1d4ed8;
+  background: #fff;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.drive-range {
+  margin: 10px 0 0;
+  border-radius: 9px;
+  padding: 8px 10px;
+  color: #334155;
+  background: #f8fafc;
+  font-size: 11px;
+}
+
+.drive-range strong {
+  color: #1d4ed8;
+}
+
+.drive-config {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.viewer-card-drive label {
+  display: grid;
+  gap: 5px;
+  margin: 10px 0 0;
+  color: #475569;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.viewer-card-drive input,
+.viewer-card-drive select {
+  width: 100%;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  color: #172033;
+  background: #fff;
+}
+
+.drive-actions,
+.keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 9px 0 0;
+}
+
+.drive-actions button {
+  min-height: 38px;
+  padding: 8px 11px;
+  border: 1px solid #cbd5e1;
+  border-radius: 9px;
+  color: #334155;
+  background: #fff;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.drive-actions .primary {
+  border-color: #2563eb;
+  color: #fff;
+  background: #2563eb;
+}
+
+.drive-actions .danger {
+  border-color: #fecaca;
+  color: #b91c1c;
+  background: #fff1f2;
+}
+
+.keys button {
+  width: 42px;
+  height: 42px;
+}
+
+.drive-state {
+  margin: 9px 0 0;
+  border-radius: 9px;
+  padding: 9px 10px;
+  color: #334155;
+  background: #f8fafc;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.lane-frame {
+  background: #0f172a;
+}
+
+.lane-frame img {
+  object-fit: contain;
+}
+
+@media (max-width: 680px) {
+  .drive-stack {
+    grid-template-columns: 1fr;
+  }
+
+  .drive-stack-detail,
+  .restart-motor {
+    grid-row: auto;
+    grid-column: 1;
+  }
+
+  .drive-config {
+    grid-template-columns: 1fr;
+  }
+}

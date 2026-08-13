@@ -9,6 +9,6 @@
 ```
 
 - [simulation](simulation/README.md): Unity ROS-TCP 기반 시뮬레이터와 기존 미션 코드
-- [real](real/README.md): 실제 센서 드라이버와 독립형 차선 ID 인식 패키지
+- [real](real/README.md): NVIDIA Kobot용 센서 대시보드, 표시용 차선 미리보기, 웹 주행, VESC·LiDAR 드라이버
 
 두 환경의 ROS workspace를 한 터미널에서 동시에 `source`하지 않는다. 동일한 기능을 서로 다른 메시지와 토픽으로 구현하므로 환경별 터미널과 빌드 디렉터리를 분리한다.
