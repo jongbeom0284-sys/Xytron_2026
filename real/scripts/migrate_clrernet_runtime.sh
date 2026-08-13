@@ -29,7 +29,8 @@ set +u
 source /opt/ros/humble/setup.bash
 set -u
 export PYTHONPATH="/usr/lib/python3/dist-packages:${PYTHONPATH:-}"
-"$MIGRATING_VENV/bin/python" -m pip install --no-deps --force-reinstall "$NMS_SOURCE"
+"$MIGRATING_VENV/bin/python" -m pip install \
+    --no-build-isolation --no-deps --force-reinstall "$NMS_SOURCE"
 "$MIGRATING_VENV/bin/python" - <<'PY'
 import cv2
 import mmcv
