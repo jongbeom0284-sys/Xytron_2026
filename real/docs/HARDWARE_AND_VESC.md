@@ -6,7 +6,7 @@
 - VESC: HW 410, FW 6.5
 - 장치 별칭: `/dev/videoCAM`, `/dev/ttyIMU`, `/dev/ttyLIDAR`, `/dev/ttyMOTOR`, `/dev/ttySonic`
 
-`system/udev/10-kobot.rules`는 USB VID/PID를 위 별칭에 연결한다. 설치 전 실제 `udevadm info` 결과와 일치하는지 확인한다. 규칙을 복사하거나 reload하는 작업은 시스템 변경이므로 승인 후 수행한다.
+`system/udev/10-kobot.rules`는 USB VID/PID를 위 별칭에 연결한다. 카메라는 한 USB 장치가 여러 video node를 만들 수 있으므로 `ATTR{index}=="0"`인 주 영상 노드만 `/dev/videoCAM`에 연결한다. 설치 전 실제 `udevadm info` 결과와 일치하는지 확인한다. 규칙을 복사하거나 reload하는 작업은 시스템 변경이므로 승인 후 수행한다.
 
 ## ROS 측 제한값
 
