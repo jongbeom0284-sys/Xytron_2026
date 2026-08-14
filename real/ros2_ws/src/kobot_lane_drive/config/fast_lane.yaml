@@ -4,8 +4,8 @@ fast_lane_perception:
     debug_image_topic: /kobot_lane_drive/fast_lane/debug_image
     status_topic: /kobot_lane_drive/fast_lane/status
     pixel_path_topic: /kobot_lane_drive/fast_lane/pixel_path
-    max_processing_hz: 30.0
-    debug_publish_hz: 5.0
+    max_processing_hz: 60.0
+    debug_publish_hz: 2.0
     roi_top_ratio: 0.43
     roi_bottom_ratio: 0.94
     lookahead_ratio: 0.70
