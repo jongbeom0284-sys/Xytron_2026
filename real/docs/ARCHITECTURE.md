@@ -6,6 +6,11 @@
 
 `motor.launch.py`는 `armed:=true`일 때만 VESC 드라이버, Ackermann 변환기, `motor_adapter`를 실행한다. 기본값은 `false`다.
 
+`teleop.launch.py`는 기존 두 launch를 조합하는 상위 주행 대기 launch다. Kobot의
+기본 운영에서는 `kobot-sensors.service`가 실행한 센서를 재사용하고 모터 체인만
+launch 수명주기에 추가한다. 센서 서비스를 사용하지 않을 때만
+`start_sensors:=true`로 센서도 함께 실행한다. 모터 잠금 기본값은 `false`다.
+
 ## 센서와 화면 흐름
 
 ```text

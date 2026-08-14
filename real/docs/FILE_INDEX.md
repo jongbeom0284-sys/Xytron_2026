@@ -2,7 +2,7 @@
 
 이 표는 `real/`에 커밋되는 파일의 출처, 역할, 주요 입력·출력, 편집 정책을 기록한다. 생성물(`build/`, `install/`, `log/`), 캐시, 백업은 포함하지 않는다. 큰 vendored subtree는 기준 commit과 패치 경계를 한 항목으로 묶어 기록한다.
 
-총 파일 수: **432**
+총 파일 수: **434**
 
 | 경로 | 출처 | 역할 | 입력·출력 | 수정 정책 |
 |---|---|---|---|---|
@@ -44,12 +44,14 @@
 | `real/ros2_ws/src/kobot_vehicle/kobot_vehicle/ultrasonic_node.py` | Kobot 차량 실행본 (2026-08-13) | 초음파 serial parser/publisher | /dev/ttySonic → /xycar_ultrasonic | 검토·테스트 후 수정 가능 |
 | `real/ros2_ws/src/kobot_vehicle/launch/motor.launch.py` | Kobot 차량 실행본 (2026-08-13) | 잠금 기본 모터 launch | armed 인자 → VESC·변환 노드 | 검토·테스트 후 수정 가능 |
 | `real/ros2_ws/src/kobot_vehicle/launch/sensors.launch.py` | Kobot 차량 실행본 (2026-08-13) | 센서·대시보드 launch, 모터 제외 | launch 인자 → 센서 노드 | 검토·테스트 후 수정 가능 |
+| `real/ros2_ws/src/kobot_vehicle/launch/teleop.launch.py` | Kobot 프로젝트 자체 작성 | 센서 서비스 재사용 또는 센서·모터 통합 주행 대기 launch | start_sensors·armed 인자 → 기존 launch 조합 | 모터 잠금 기본값 유지 |
 | `real/ros2_ws/src/kobot_vehicle/package.xml` | Kobot 차량 실행본 (2026-08-13) | ROS package manifest | 의존성 선언 → rosdep/ament | 검토·테스트 후 수정 가능 |
 | `real/ros2_ws/src/kobot_vehicle/resource/kobot_vehicle` | Kobot 차량 실행본 (2026-08-13) | ament resource marker | ament index 입력 | 검토·테스트 후 수정 가능 |
 | `real/ros2_ws/src/kobot_vehicle/setup.cfg` | Kobot 차량 실행본 (2026-08-13) | ament Python 설치 설정 | build 설정 → 설치 경로 | 검토·테스트 후 수정 가능 |
 | `real/ros2_ws/src/kobot_vehicle/setup.py` | Kobot 차량 실행본 (2026-08-13) | Python package·entry point 정의 | ament build → 실행 파일 | 검토·테스트 후 수정 가능 |
 | `real/ros2_ws/src/kobot_vehicle/test/test_lane_preview.py` | Kobot 차량 실행본 (2026-08-13) | lane_preview 단위 테스트 | 합성 영상 → 검출·무모터 검증 | 검토·테스트 후 수정 가능 |
 | `real/ros2_ws/src/kobot_vehicle/test/test_parsers.py` | Kobot 차량 실행본 (2026-08-13) | serial parser 단위 테스트 | 예제 frame → parser 결과 | 검토·테스트 후 수정 가능 |
+| `real/ros2_ws/src/kobot_vehicle/test/test_teleop_launch.py` | Kobot 프로젝트 자체 작성 | 상위 launch 조합·잠금 기본값 회귀 테스트 | launch source → 안전 계약 검증 | launch 변경 시 함께 갱신 |
 | `real/ros2_ws/src/vesc/.github/workflows/ros2-ci.yaml` | F1TENTH vesc upstream 153998df | 실행·launch 설정 | node/launch 입력 → runtime 파라미터 | 직접 수정 지양; upstream 갱신으로 관리 |
 | `real/ros2_ws/src/vesc/.gitignore` | F1TENTH vesc upstream 153998df | 모듈 지원 파일 | 빌드·문서·runtime 지원 | 직접 수정 지양; upstream 갱신으로 관리 |
 | `real/ros2_ws/src/vesc/LICENSE` | F1TENTH vesc upstream 153998df | 모듈 지원 파일 | 빌드·문서·runtime 지원 | 직접 수정 지양; upstream 갱신으로 관리 |
