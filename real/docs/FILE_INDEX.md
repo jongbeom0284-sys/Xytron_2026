@@ -2,7 +2,7 @@
 
 이 표는 `real/`에 커밋되는 파일의 출처, 역할, 주요 입력·출력, 편집 정책을 기록한다. 생성물(`build/`, `install/`, `log/`), 캐시, 백업은 포함하지 않는다. 큰 vendored subtree는 기준 commit과 패치 경계를 한 항목으로 묶어 기록한다.
 
-총 파일 수: **435**
+총 파일 수: **441**
 
 | 경로 | 출처 | 역할 | 입력·출력 | 수정 정책 |
 |---|---|---|---|---|
@@ -22,7 +22,7 @@
 | `real/calibration/README.md` | Kobot 프로젝트 자체 작성 | 카메라 내부·외부 보정 gate | 실측 보정 → 유효 CameraInfo·TF | 추정값 금지 |
 | `real/requirements/clrernet-jetson.freeze.txt` | Kobot 평가 venv read-only snapshot | Jetson Python 환경 재현 기록 | 기존 venv → 고정 버전 목록 | 실제 호환 검증 후 갱신 |
 | `real/scripts/` | Kobot 프로젝트 자체 작성 | runtime 복제·venv 빌드·읽기 전용 preflight | 승인된 운영 입력 → 검증 결과 | 실행 전 승인 경계 확인 |
-| `real/ros2_ws/src/kobot_lane_drive/` | Kobot 통합 + 공개 알고리즘 | 좌측 차선 미터 경로·Stanley·승인 잠금 bridge | 이미지/보정/TF → debug·Path·preview·승인 시 motor | 공개 구현 provenance와 안전 gate 유지 |
+| `real/ros2_ws/src/kobot_lane_drive/` | Kobot 통합 + 공개 알고리즘 | 보정 없는 fast lane, 좌측 차선 미터 경로·Stanley·승인 잠금 bridge | 이미지 → 픽셀 경로; 이미지/보정/TF → metric Path·승인 시 motor | 공개 구현 provenance와 안전 gate 유지 |
 | `real/ros2_ws/src/kobot_lane_drive/third_party/CLRerNet/` | CLRerNet upstream `dae038f` + NMS patch | CLRerNet 추론 runtime source/config | 이미지 tensor → 차선 후보 | upstream 원문 유지; 패치는 provenance와 함께 관리 |
 | `real/ros2_ws/src/ipm/` | ros-sports/ipm Humble `2943925` | 영상점의 지면 좌표 투영 | CameraInfo·TF·영상점 → 지면점(m) | upstream 원문 유지 |
 | `real/ros2_ws/src/kobot_vehicle/config/camera.yaml` | Kobot 차량 실행본 (2026-08-13) | 카메라 파라미터 | launch → usb_cam | 검토·테스트 후 수정 가능 |
