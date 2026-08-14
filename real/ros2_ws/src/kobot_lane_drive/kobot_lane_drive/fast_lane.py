@@ -96,44 +96,31 @@ def _colour_masks(
     config: FastLaneConfig,
 ) -> tuple[np.ndarray, np.ndarray]:
     lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
-    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     lightness, channel_a, channel_b = cv2.split(lab)
-    hue, saturation, value = cv2.split(hsv)
 
     clahe = cv2.createCLAHE(
         clipLimit=config.clahe_clip_limit,
         tileGridSize=(8, 8),
     )
     normalized_l = clahe.apply(lightness)
-    opened = cv2.morphologyEx(
-        normalized_l,
-        cv2.MORPH_OPEN,
-        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (25, 25)),
-    )
-    top_hat = cv2.subtract(normalized_l, opened)
-
+    roi_values = lightness[roi > 0]
+    dynamic_white_floor = max(85.0, float(np.percentile(roi_values, 62)))
     neutral = (
         (np.abs(channel_a.astype(np.int16) - 128) <= 22)
         & (np.abs(channel_b.astype(np.int16) - 128) <= 24)
-        & (saturation <= 92)
     )
-    white_support = neutral & (lightness >= 125) & (
-        (top_hat >= 7) | (lightness >= 175)
-    )
-
-    yellow_hsv = (
-        (hue >= 13)
-        & (hue <= 42)
-        & (saturation >= 65)
-        & (value >= 90)
-    )
+    white_support = neutral & (lightness >= dynamic_white_floor)
     yellow_lab = (
-        (channel_b >= 145)
+        (channel_b >= 148)
         & (channel_a >= 98)
         & (channel_a <= 145)
         & (lightness >= 95)
+        & (
+            channel_b.astype(np.int16) - channel_a.astype(np.int16)
+            >= 22
+        )
     )
-    yellow = yellow_hsv & yellow_lab
+    yellow = yellow_lab
 
     blurred_l = cv2.GaussianBlur(normalized_l, (5, 5), 0)
     edges = cv2.Canny(blurred_l, 35, 105)
@@ -154,11 +141,11 @@ def _colour_masks(
     white_mask = cv2.bitwise_and(white_mask, roi)
     yellow_mask = cv2.bitwise_and(yellow_mask, roi)
 
-    close_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 7))
-    open_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-    white_mask = cv2.morphologyEx(white_mask, cv2.MORPH_CLOSE, close_kernel)
-    yellow_mask = cv2.morphologyEx(yellow_mask, cv2.MORPH_CLOSE, close_kernel)
-    yellow_mask = cv2.morphologyEx(yellow_mask, cv2.MORPH_OPEN, open_kernel)
+    yellow_mask = cv2.morphologyEx(
+        yellow_mask,
+        cv2.MORPH_CLOSE,
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 7)),
+    )
     return white_mask, yellow_mask
 
 
@@ -195,7 +182,6 @@ def _sliding_curve(
     if base_x is None:
         return None
     height, width = mask.shape
-    nonzero_y, nonzero_x = mask.nonzero()
     window_height = max(1, (y_bottom - y_top) // config.window_count)
     margin = max(18, int(width * config.window_margin_ratio))
     current_x = float(base_x)
@@ -204,14 +190,11 @@ def _sliding_curve(
     for index in range(config.window_count):
         y_high = y_bottom - index * window_height
         y_low = max(y_top, y_high - window_height)
-        inside = (
-            (nonzero_y >= y_low)
-            & (nonzero_y < y_high)
-            & (nonzero_x >= current_x - margin)
-            & (nonzero_x < current_x + margin)
-        )
-        xs = nonzero_x[inside]
-        ys = nonzero_y[inside]
+        x_low = max(0, int(current_x - margin))
+        x_high = min(width, int(current_x + margin))
+        local_y, local_x = np.nonzero(mask[y_low:y_high, x_low:x_high])
+        xs = local_x + x_low
+        ys = local_y + y_low
         if xs.size < config.minimum_window_pixels:
             continue
         median_x = float(np.median(xs))
@@ -369,11 +352,6 @@ def detect_fast_lane(
         state = "RIGHT_ONLY"
         center_x = right_x - expected_width * 0.5
         confidence = float(np.clip(0.25 + 0.40 * right.support_windows / config.window_count, 0.0, 0.68))
-    elif yellow_x is not None:
-        state = "YELLOW_ONLY"
-        center_x = yellow_x
-        confidence = 0.38
-
     if center_x is not None and yellow_x is not None:
         disagreement = abs(center_x - yellow_x)
         if disagreement <= width * 0.08:
