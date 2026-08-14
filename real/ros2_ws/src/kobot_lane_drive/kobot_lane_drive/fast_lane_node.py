@@ -66,8 +66,10 @@ class FastLaneNode(Node):
         self.declare_parameter("debug_image_topic", "/kobot_lane_drive/fast_lane/debug_image")
         self.declare_parameter("status_topic", "/kobot_lane_drive/fast_lane/status")
         self.declare_parameter("pixel_path_topic", "/kobot_lane_drive/fast_lane/pixel_path")
-        self.declare_parameter("max_processing_hz", 30.0)
-        self.declare_parameter("debug_publish_hz", 5.0)
+        # Keep this above the camera rate. An equal 30 Hz throttle can turn
+        # normal USB timing jitter into an unintended every-other-frame drop.
+        self.declare_parameter("max_processing_hz", 60.0)
+        self.declare_parameter("debug_publish_hz", 2.0)
         self.declare_parameter("roi_top_ratio", 0.43)
         self.declare_parameter("roi_bottom_ratio", 0.94)
         self.declare_parameter("lookahead_ratio", 0.70)
