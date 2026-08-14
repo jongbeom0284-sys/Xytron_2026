@@ -26,6 +26,22 @@ lane_preview → /lane_preview/status → dashboard 차선 상태
 
 `lane_preview`는 OpenCV HSV 색상 마스크, Canny edge, Hough 선분을 이용해 카메라 영상 위에 좌우 차선 후보를 그리는 표시 전용 노드다. CLRerNet 모델이 아니며 경로 계획이나 차량 제어를 하지 않는다. 출력 정확도는 실제 트랙 대표 영상으로 별도 검증해야 한다.
 
+## 보정 없는 빠른 차선 흐름
+
+```text
+/image_raw
+  -> LAB 밝기 정규화 + 흰색 경계/노란색 보조 mask
+  -> 좌우 외곽선 sliding-window fitting
+  -> 픽셀 lookahead 중심과 confidence
+  |-> /kobot_lane_drive/fast_lane/status
+  |-> /kobot_lane_drive/fast_lane/pixel_path
+  `-> /kobot_lane_drive/fast_lane/debug_image (기본 5 Hz)
+```
+
+이 흐름은 카메라 K/TF 없이 실행할 수 있지만 픽셀 출력만 발행한다. 미터 단위
+경로와 조향 제어의 대체물이 아니며 actuator publisher를 갖지 않는다. ROS 영상
+구독 queue는 깊이 1이고, 화면 출력은 인식 주기보다 낮게 제한한다.
+
 ## CLRerNet 좌측 차선 흐름
 
 ```text
@@ -64,6 +80,9 @@ lane_preview → /lane_preview/status → dashboard 차선 상태
 | 구분 | 이름 | 타입·역할 |
 |---|---|---|
 | 센서 입력 | `/image_raw` | `sensor_msgs/Image`, 카메라 원본 |
+| 빠른 차선 상태 | `/kobot_lane_drive/fast_lane/status` | 픽셀 검출 상태·confidence·처리시간 JSON |
+| 빠른 픽셀 경로 | `/kobot_lane_drive/fast_lane/pixel_path` | `[y_px, center_x_px, offset_px, confidence]` |
+| 빠른 차선 화면 | `/kobot_lane_drive/fast_lane/debug_image` | 저주기 mask·외곽선·lookahead overlay |
 | 센서 입력 | `/scan` | `sensor_msgs/LaserScan`, LiDAR |
 | 센서 입력 | `/imu` | `sensor_msgs/Imu` |
 | 센서 입력 | `/xycar_ultrasonic` | `std_msgs/Int32MultiArray` |

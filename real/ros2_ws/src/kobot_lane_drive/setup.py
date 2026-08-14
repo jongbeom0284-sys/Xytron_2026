@@ -22,10 +22,14 @@ data_files = [
     ("share/ament_index/resource_index/packages", ["resource/" + PACKAGE_NAME]),
     ("share/" + PACKAGE_NAME, ["package.xml", "README.md", "PROVENANCE.md"]),
     ("share/" + PACKAGE_NAME + "/launch", [
+        "launch/fast_lane_perception.launch.py",
         "launch/lane_perception.launch.py",
         "launch/track_test.launch.py",
     ]),
-    ("share/" + PACKAGE_NAME + "/config", ["config/lane_drive.yaml"]),
+    ("share/" + PACKAGE_NAME + "/config", [
+        "config/fast_lane.yaml",
+        "config/lane_drive.yaml",
+    ]),
 ]
 data_files += install_tree("third_party/CLRerNet", "third_party/CLRerNet")
 data_files += install_tree("third_party/PythonRobotics", "third_party/PythonRobotics")
@@ -45,6 +49,8 @@ setup(
     license="MIT",
     entry_points={
         "console_scripts": [
+            "fast_lane_benchmark = kobot_lane_drive.fast_lane_benchmark:main",
+            "fast_lane_perception = kobot_lane_drive.fast_lane_node:main",
             "lane_perception = kobot_lane_drive.lane_perception_node:main",
             "offline_replay = kobot_lane_drive.offline_replay:main",
             "drive_bridge = kobot_lane_drive.drive_bridge_node:main",

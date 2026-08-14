@@ -1,5 +1,30 @@
 # Kobot left-lane drive
 
+## Calibration-free fast lane baseline
+
+`fast_lane_perception.launch.py`는 체크보드, 카메라 K 행렬, TF 없이 현재
+`640x480` 영상에서 흰색 외곽선과 노란 중앙 점선을 픽셀 좌표로 검출한다.
+LAB 밝기 정규화, 밝은 중성색 경계, 노란색 보조 관측, sliding-window 강건
+다항식 fitting을 사용한다. 결과는 미터 경로나 모터 명령이 아니다.
+
+```bash
+ros2 launch kobot_lane_drive fast_lane_perception.launch.py
+```
+
+- 상태: `/kobot_lane_drive/fast_lane/status`
+- 픽셀 lookahead: `/kobot_lane_drive/fast_lane/pixel_path`
+  (`[y_px, center_x_px, offset_px, confidence]`)
+- 저주기 화면: `/kobot_lane_drive/fast_lane/debug_image`
+
+저장 프레임 benchmark는 다음처럼 실행한다.
+
+```bash
+ros2 run kobot_lane_drive fast_lane_benchmark /path/to/image_directory
+```
+
+이 경로는 빠른 인식·조명 실험용이다. 보정된 BEV와 거리 기반 제어가 준비되기
+전에는 `/xycar_motor` 또는 `/ackermann_cmd`로 연결하지 않는다.
+
 좌측 차선으로부터 `target_distance_m`를 유지하는 ROS2 Humble 패키지다. 알고리즘을
 새로 만들지 않고 다음 공개 구현을 연결한다.
 
