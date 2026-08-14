@@ -25,6 +25,17 @@ ros2 run kobot_lane_drive fast_lane_benchmark /path/to/image_directory
 이 경로는 빠른 인식·조명 실험용이다. 보정된 BEV와 거리 기반 제어가 준비되기
 전에는 `/xycar_motor` 또는 `/ackermann_cmd`로 연결하지 않는다.
 
+2026-08-14 Kobot 1차 실측:
+
+- 기존 트랙 녹화 314장: `BOTH 32`, `LEFT_ONLY 252`, `RIGHT_ONLY 14`, `LOST 16`
+- 픽셀 후보 생성률 `94.904%`; 수동 ground truth 정확도와 같은 의미는 아님
+- Jetson 오프라인 처리시간: P50 `15.625 ms`, P95 `18.092 ms`, P99 `19.853 ms`
+- 실제 `/image_raw` 상태 발행 약 `29.55 Hz`, debug 화면 약 `1.96 Hz`
+- 기존 개발용 `lane_preview`가 함께 동작한 상태의 측정이며 motor subscriber는 0
+
+현재 결과는 속도 계약을 통과했지만 단일 외곽선 복원 비율이 높고 시간 필터와
+실제 조향 오차 ground truth가 없다. 따라서 `출력 생성됨 - 정확도 미검증` 단계다.
+
 좌측 차선으로부터 `target_distance_m`를 유지하는 ROS2 Humble 패키지다. 알고리즘을
 새로 만들지 않고 다음 공개 구현을 연결한다.
 
