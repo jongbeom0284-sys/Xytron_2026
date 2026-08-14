@@ -43,17 +43,16 @@ def test_tolerates_global_brightness_change():
     assert abs(bright.center_offset_px) < 20.0
 
 
-def test_uses_yellow_only_as_low_confidence_fallback():
+def test_never_uses_yellow_without_an_outer_boundary():
     image = np.full((480, 640, 3), 65, dtype=np.uint8)
     for y_value in (435, 355, 275):
         cv2.line(image, (320, y_value + 25), (320, y_value - 25), (0, 220, 255), 10)
 
     result = detect_fast_lane(image)
 
-    assert result.state == "YELLOW_ONLY"
-    assert result.confidence < 0.50
-    assert result.center_offset_px is not None
-    assert abs(result.center_offset_px) < 8.0
+    assert result.state == "LOST"
+    assert result.confidence == 0.0
+    assert result.center_offset_px is None
 
 
 def test_blank_frame_is_lost():
