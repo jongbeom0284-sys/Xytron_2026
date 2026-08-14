@@ -2,7 +2,7 @@
 
 이 표는 `real/`에 커밋되는 파일의 출처, 역할, 주요 입력·출력, 편집 정책을 기록한다. 생성물(`build/`, `install/`, `log/`), 캐시, 백업은 포함하지 않는다. 큰 vendored subtree는 기준 commit과 패치 경계를 한 항목으로 묶어 기록한다.
 
-총 파일 수: **434**
+총 파일 수: **435**
 
 | 경로 | 출처 | 역할 | 입력·출력 | 수정 정책 |
 |---|---|---|---|---|
@@ -17,6 +17,7 @@
 | `real/docs/LANE_DRIVE_STAGE_SPEC.md` | Kobot 프로젝트 자체 작성 | 좌측 차선 거리 유지 단계·검증 계약 | 구현·실측 근거 → 단계 승인 | 단계 결과와 함께 갱신 |
 | `real/docs/OPERATIONS.md` | Kobot 프로젝트 자체 작성 | 빌드·운영·검증 절차 | 운영자 입력 → 검증 순서 | 검토·검증 후 수정 가능 |
 | `real/docs/PROVENANCE.md` | Kobot 프로젝트 자체 작성 | 원본 commit과 패치 기록 | upstream/차량 스냅샷 → 추적 정보 | 검토·검증 후 수정 가능 |
+| `real/docs/RACE_STRATEGY.md` | Kobot 프로젝트 자체 작성 | 3바퀴 시간경기·미션·실시간 성능 전략 | 규정·실측 → 구현 순서와 승급 기준 | 규정·실측 변경 시 함께 갱신 |
 | `real/models/README.md` | Kobot 프로젝트 자체 작성 | CLRerNet 가중치 출처·checksum | 모델 준비 → 무결성 검증 | 모델 파일 자체는 Git 제외 |
 | `real/calibration/README.md` | Kobot 프로젝트 자체 작성 | 카메라 내부·외부 보정 gate | 실측 보정 → 유효 CameraInfo·TF | 추정값 금지 |
 | `real/requirements/clrernet-jetson.freeze.txt` | Kobot 평가 venv read-only snapshot | Jetson Python 환경 재현 기록 | 기존 venv → 고정 버전 목록 | 실제 호환 검증 후 갱신 |
