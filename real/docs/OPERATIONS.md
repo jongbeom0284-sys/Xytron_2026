@@ -61,6 +61,25 @@ export ROS_LOCALHOST_ONLY=1
 ros2 launch kobot_vehicle sensors.launch.py
 ```
 
+Kobot의 센서 서비스가 정상 실행 중이고, 승인 후 VESC와 모터 어댑터까지 한 번에
+주행 대기 상태로 만들 때는 다음을 사용한다.
+
+```bash
+systemctl is-active kobot-sensors.service
+ros2 launch kobot_vehicle teleop.launch.py armed:=true
+```
+
+첫 명령의 결과가 `active`가 아니면 모터 단계로 넘어가지 않는다. 센서 서비스를
+사용하지 않는 독립 실행에서는 서비스를 먼저 정지한 뒤 다음처럼 센서와 모터를
+같은 launch 수명주기로 실행할 수 있다.
+
+```bash
+ros2 launch kobot_vehicle teleop.launch.py start_sensors:=true armed:=true
+```
+
+활성 센서 서비스와 `start_sensors:=true`를 동시에 사용하지 않는다. 종료 시에는
+0 명령을 보낸 뒤 `Ctrl+C`로 teleop launch를 종료하고 모터 구독자가 0인지 확인한다.
+
 대시보드의 차선 화면은 `/lane_preview/image`와 `/lane_preview/status`를 표시할 뿐 자율주행을 수행하지 않는다.
 
 `kobot_lane_drive`도 기본 센서 launch에 포함되지 않는다. 패키지 빌드, 모델 준비, launch는 각각 승인 후 수행한다. `/camera_info` K 행렬과 카메라 TF를 먼저 검증하고, 무모터 launch 후 `/kobot_lane_drive/status`, 목표 Path, 조향 미리보기와 debug 영상을 확인한다. `BLOCKED` 상태에서 모터 단계로 넘어가지 않는다.
