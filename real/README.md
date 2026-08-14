@@ -66,6 +66,6 @@ ros2 launch kobot_vehicle teleop.launch.py start_sensors:=true armed:=true
 직렬 센서 장치를 중복 점유하므로 금지한다. `teleop.launch.py`도 `armed:=false`가
 기본이며, 실제 모터 연결은 사용자 승인과 안전조치 후 명시적으로 허용한다.
 
-운영 절차와 검증 순서는 [OPERATIONS.md](docs/OPERATIONS.md), 데이터 흐름은 [ARCHITECTURE.md](docs/ARCHITECTURE.md), 하드웨어·VESC 기준은 [HARDWARE_AND_VESC.md](docs/HARDWARE_AND_VESC.md), 원본과 수정 이력은 [PROVENANCE.md](docs/PROVENANCE.md), 파일별 역할은 [FILE_INDEX.md](docs/FILE_INDEX.md)를 따른다.
+운영 절차와 검증 순서는 [OPERATIONS.md](docs/OPERATIONS.md), 데이터 흐름은 [ARCHITECTURE.md](docs/ARCHITECTURE.md), 3바퀴 시간경기·미션·실시간 성능 기준은 [RACE_STRATEGY.md](docs/RACE_STRATEGY.md), 하드웨어·VESC 기준은 [HARDWARE_AND_VESC.md](docs/HARDWARE_AND_VESC.md), 원본과 수정 이력은 [PROVENANCE.md](docs/PROVENANCE.md), 파일별 역할은 [FILE_INDEX.md](docs/FILE_INDEX.md)를 따른다.
 
 > 경고: dashboard의 모터 HTTP API에는 인증이 없다. 신뢰된 로컬망 또는 Tailscale 환경에서만 사용하고 인터넷에 직접 공개하지 않는다.
