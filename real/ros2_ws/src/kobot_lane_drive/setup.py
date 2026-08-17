@@ -23,10 +23,12 @@ data_files = [
     ("share/" + PACKAGE_NAME, ["package.xml", "README.md", "PROVENANCE.md"]),
     ("share/" + PACKAGE_NAME + "/launch", [
         "launch/fast_lane_perception.launch.py",
+        "launch/fast_lane_track_test.launch.py",
         "launch/lane_perception.launch.py",
         "launch/track_test.launch.py",
     ]),
     ("share/" + PACKAGE_NAME + "/config", [
+        "config/fast_lane_control.yaml",
         "config/fast_lane.yaml",
         "config/lane_drive.yaml",
     ]),
@@ -50,6 +52,8 @@ setup(
     entry_points={
         "console_scripts": [
             "fast_lane_benchmark = kobot_lane_drive.fast_lane_benchmark:main",
+            "fast_lane_controller = kobot_lane_drive.fast_lane_controller_node:main",
+            "fast_lane_drive_bridge = kobot_lane_drive.fast_lane_drive_bridge_node:main",
             "fast_lane_perception = kobot_lane_drive.fast_lane_node:main",
             "lane_perception = kobot_lane_drive.lane_perception_node:main",
             "offline_replay = kobot_lane_drive.offline_replay:main",

@@ -32,6 +32,16 @@ class FastLaneNode(Node):
             expected_bottom_width_ratio=float(self.get_parameter("expected_bottom_width_ratio").value),
             expected_top_width_ratio=float(self.get_parameter("expected_top_width_ratio").value),
             clahe_clip_limit=float(self.get_parameter("clahe_clip_limit").value),
+            white_s_max=int(self.get_parameter("white_s_max").value),
+            white_v_min=int(self.get_parameter("white_v_min").value),
+            white_v_percentile=float(self.get_parameter("white_v_percentile").value),
+            white_min_contrast=int(self.get_parameter("white_min_contrast").value),
+            yellow_h_low=int(self.get_parameter("yellow_h_low").value),
+            yellow_h_high=int(self.get_parameter("yellow_h_high").value),
+            yellow_s_min=int(self.get_parameter("yellow_s_min").value),
+            yellow_v_min=int(self.get_parameter("yellow_v_min").value),
+            max_white_support_ratio=float(self.get_parameter("max_white_support_ratio").value),
+            max_yellow_support_ratio=float(self.get_parameter("max_yellow_support_ratio").value),
         )
 
         self._debug_publisher = self.create_publisher(
@@ -76,6 +86,16 @@ class FastLaneNode(Node):
         self.declare_parameter("expected_bottom_width_ratio", 0.82)
         self.declare_parameter("expected_top_width_ratio", 0.30)
         self.declare_parameter("clahe_clip_limit", 1.6)
+        self.declare_parameter("white_s_max", 125)
+        self.declare_parameter("white_v_min", 140)
+        self.declare_parameter("white_v_percentile", 62.0)
+        self.declare_parameter("white_min_contrast", 12)
+        self.declare_parameter("yellow_h_low", 15)
+        self.declare_parameter("yellow_h_high", 40)
+        self.declare_parameter("yellow_s_min", 70)
+        self.declare_parameter("yellow_v_min", 80)
+        self.declare_parameter("max_white_support_ratio", 0.65)
+        self.declare_parameter("max_yellow_support_ratio", 0.45)
 
     def _on_image(self, message: Image) -> None:
         now = time.monotonic()
@@ -140,7 +160,8 @@ def main(args=None) -> None:
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":
