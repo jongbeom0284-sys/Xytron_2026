@@ -15,10 +15,12 @@ class WhiteLeftConfig:
     work_width: int = 320
     work_height: int = 240
     near_y_ratio: float = 0.80
-    far_y_ratio: float = 0.52
+    far_y_ratio: float = 0.625
     control_y_ratio: float = 0.70
     left_search_ratio: float = 0.52
     minimum_path_score: float = 0.30
+    continuation_minimum_score: float = 0.25
+    continuation_maximum_gap_rows: int = 5
     # Approved frame 1 with this detector: center 320px - left line 76px.
     desired_left_distance_ratio: float = 244.0 / 640.0
 
@@ -96,6 +98,41 @@ def _smooth_path(points: np.ndarray) -> np.ndarray:
     return np.round(np.column_stack((xs, ys))).astype(np.int32)
 
 
+def _trim_forced_continuation(
+    path: np.ndarray,
+    score: np.ndarray,
+    config: WhiteLeftConfig,
+) -> np.ndarray:
+    """Stop at a lost continuation instead of joining an unrelated bright edge."""
+    if len(path) < 3:
+        return path
+
+    control_y = int(round(score.shape[0] * config.control_y_ratio))
+    control_indices = np.flatnonzero(path[:, 1] <= control_y)
+    if not len(control_indices):
+        return path
+    continuation_start = int(control_indices[0])
+    keep = len(path)
+
+    point_scores = score[path[:, 1], path[:, 0]]
+    low_run_start: int | None = None
+    maximum_gap = max(1, int(config.continuation_maximum_gap_rows))
+    for index in range(continuation_start, len(path)):
+        if point_scores[index] < config.continuation_minimum_score:
+            if low_run_start is None:
+                low_run_start = index
+            if index - low_run_start + 1 >= maximum_gap:
+                keep = min(keep, low_run_start)
+                break
+        else:
+            low_run_start = None
+
+    # A control point must be observed rather than extrapolated from a short
+    # fragment above it.
+    minimum_keep = continuation_start + 1
+    return path[:max(minimum_keep, keep)]
+
+
 def trace_left_boundary(score: np.ndarray, config: WhiteLeftConfig) -> tuple[np.ndarray, float]:
     """Direction-aware dynamic programming from the near-left paint upward."""
     height, width = score.shape
@@ -159,6 +196,7 @@ def trace_left_boundary(score: np.ndarray, config: WhiteLeftConfig) -> tuple[np.
         x_value -= int(DELTAS[direction])
         direction = previous_direction
     path = _smooth_path(np.asarray(points[::-1], dtype=np.int32))
+    path = _trim_forced_continuation(path, score, config)
     path_score = float(np.mean(score[path[:, 1], path[:, 0]]))
     return path, path_score
 

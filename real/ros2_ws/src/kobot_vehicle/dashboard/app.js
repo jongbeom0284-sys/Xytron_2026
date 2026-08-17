@@ -21,6 +21,7 @@ let latestLane={state:'WAITING',mode:'WAITING',confidence:0,center_offset_px:0};
 let recordingState={active:false,frames:0,last_path:''};
 let motorState={usb:false,stack_running:false,stack_state:'unknown',active:false,missing_processes:[],result:'잠김',error:null};
 let recordDriveState={state:'idle',result:'대기 중',can_start:true,can_pause:false,can_resume:false,can_finish:false,recording:{frames:0}};
+let recordDriveSettings={speed:0.5};
 let driveSettings={speed:0.5,duration:10,steering:'center'};
 let driveStateText='잠김';
 let motorBusy=false;
@@ -131,7 +132,12 @@ function driveCard(){
     <div class="keys" aria-label="WASD 원격조종"><button data-drive-key="w">W</button><button data-drive-key="a">A</button><button data-drive-key="s">S</button><button data-drive-key="d">D</button></div>
     <section class="record-drive-panel" aria-label="기록 주행">
       <div><span>기록 주행 · 좌측 차선 거리 유지</span><strong class="record-drive-badge">${recordDriveLabel()}</strong></div>
-      <p class="record-drive-help">0.20 m/s · Space 일시정지/재개 · 종료는 일시정지 후 마우스</p>
+      <label class="record-drive-speed-field">기록 주행 속도
+        <select class="record-drive-speed" aria-label="기록 주행 속도">
+          ${[0.2,0.3,0.4,0.5].map(speed=>`<option value="${speed}" ${recordDriveSettings.speed===speed?'selected':''}>${speed.toFixed(2)} m/s</option>`).join('')}
+        </select>
+      </label>
+      <p class="record-drive-help">시작 전 선택 · Space 일시정지/재개 · 종료 시 별도 폴더 저장</p>
       <div class="record-drive-actions"><button class="primary" data-drive-action="record-start">기록 주행 시작</button><button data-drive-action="record-toggle">일시정지</button><button class="danger" data-drive-action="record-finish">기록 주행 종료</button></div>
       <p class="record-drive-state">${recordDriveState.result||'대기 중'}</p>
     </section>
@@ -224,6 +230,8 @@ grid.addEventListener('change',event=>{
   }
   const steering=event.target.closest('.drive-steering');
   if(steering)driveSettings.steering=steering.value;
+  const recordSpeed=event.target.closest('.record-drive-speed');
+  if(recordSpeed){recordDriveSettings.speed=Number(recordSpeed.value);refreshDriveButtons()}
 });
 
 grid.addEventListener('input',event=>{
@@ -374,6 +382,7 @@ const motor=new ROSLIB.Topic({ros,name:'/xycar_motor',messageType:'std_msgs/Floa
 let armed=false;
 const pressed=new Set();
 function validSpeed(){return driveSettings.speed>=.2&&driveSettings.speed<=2.16}
+function validRecordDriveSpeed(){return recordDriveSettings.speed>=.2&&recordDriveSettings.speed<=.5}
 function validDuration(){return driveSettings.duration>=.5&&driveSettings.duration<=300}
 function setDriveState(message){driveStateText=message;document.querySelectorAll('.drive-state').forEach(el=>el.textContent=message)}
 function refreshDriveUi(){
@@ -395,6 +404,12 @@ function refreshDriveUi(){
   const recordText=recordDriveState.error?`오류 · ${recordDriveState.error}`:`${recordDriveState.result||'대기 중'}${frames?` · ${frames}장`:''}`;
   document.querySelectorAll('.record-drive-state').forEach(el=>el.textContent=recordText);
   document.querySelectorAll('[data-drive-action="record-toggle"]').forEach(el=>el.textContent=recordDriveState.state==='paused'?'주행 재개':'일시정지');
+  const recordBusy=['starting','running','paused','ending'].includes(recordDriveState.state);
+  document.querySelectorAll('.record-drive-speed').forEach(el=>{
+    if(recordBusy&&Number.isFinite(recordDriveState.selected_speed_mps))recordDriveSettings.speed=Number(recordDriveState.selected_speed_mps);
+    el.value=recordDriveSettings.speed.toFixed(1);
+    el.disabled=recordBusy;
+  });
   const laneTopic=laneStreamTopic();
   document.querySelectorAll('.lane-stream').forEach(image=>{
     if(image.dataset.topic!==laneTopic){image.dataset.topic=laneTopic;image.src=`http://${host}:8080/stream?topic=${laneTopic}`;}
@@ -407,7 +422,7 @@ function refreshDriveButtons(){
   document.querySelectorAll('[data-drive-action="restart"]').forEach(button=>button.disabled=motorBusy||motorState.active||recordBusy||!motorState.usb);
   document.querySelectorAll('[data-drive-action="arm"]').forEach(button=>button.disabled=motorBusy||recordBusy||partial||!validSpeed());
   document.querySelectorAll('[data-drive-action="test"]').forEach(button=>button.disabled=motorBusy||recordBusy||partial||motorState.active||!validSpeed()||!validDuration());
-  document.querySelectorAll('[data-drive-action="record-start"]').forEach(button=>button.disabled=motorBusy||armed||motorState.active||motorState.stack_state!=='running'||!recordDriveState.can_start);
+  document.querySelectorAll('[data-drive-action="record-start"]').forEach(button=>button.disabled=motorBusy||armed||motorState.active||motorState.stack_state!=='running'||!recordDriveState.can_start||!validRecordDriveSpeed());
   document.querySelectorAll('[data-drive-action="record-toggle"]').forEach(button=>button.disabled=motorBusy||!(recordDriveState.can_pause||recordDriveState.can_resume));
   document.querySelectorAll('[data-drive-action="record-finish"]').forEach(button=>button.disabled=motorBusy||!recordDriveState.can_finish);
 }
@@ -440,7 +455,7 @@ async function handleDriveAction(action){
   if(action==='record-start'){
     disarm();motorBusy=true;setDriveState('기록 주행 준비 중');refreshDriveButtons();
     try{
-      recordDriveState=await api('/api/record-drive/start',{method:'POST',body:'{}'});
+      recordDriveState=await api('/api/record-drive/start',{method:'POST',body:JSON.stringify({speed_mps:recordDriveSettings.speed})});
       setDriveState('차선 인식 준비 중');toast('기록 주행 준비를 시작했습니다');
     }catch(error){setDriveState(`기록 주행 오류 · ${error.message}`);toast(`기록 주행 오류: ${error.message}`)}
     finally{motorBusy=false;refreshDriveUi()}

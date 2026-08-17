@@ -208,6 +208,18 @@
   font-size: 11px;
 }
 
+.record-drive-speed-field {
+  display: grid;
+  grid-template-columns: 1fr minmax(110px, 140px);
+  align-items: center;
+  gap: 10px;
+  margin-top: 9px;
+}
+
+.record-drive-speed-field .record-drive-speed {
+  margin: 0;
+}
+
 .record-drive-actions {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

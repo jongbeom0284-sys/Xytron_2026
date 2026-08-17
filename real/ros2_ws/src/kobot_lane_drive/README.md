@@ -9,7 +9,8 @@
 
 - 기준: 1번 사진 `y=336`, 좌측 경계 `x=76`, 영상 중심 `x=320`
 - 원하는 영상상 거리 `d`: `244 px` (`244/640 = 0.38125`)
-- 속도 상한: `0.20 m/s`
+- 웹 시작 전 선택 속도: `0.20`, `0.30`, `0.40`, `0.50 m/s`
+- 선택값은 해당 기록 주행이 끝날 때까지 고정되며 bridge 상한으로도 사용
 - 차선 한 프레임 미검출: 마지막 조향·속도 유지
 - 카메라/상태가 `0.30초` 이상 끊김: bridge가 0 명령
 - 브라우저 heartbeat가 `1.2초` 이상 끊김: 일시정지와 0 명령
@@ -28,6 +29,10 @@ ros2 launch kobot_lane_drive white_left_record_drive.launch.py armed:=false
 `armed:=true`일 때만 별도 bridge로 생성된다. 센서 launch는 `white_left_drive`를
 무모터로 상시 실행한다. 기록 주행은 이를 재사용하고 bridge만 추가한다. `fast_lane`은
 비교·보존용이며 웹 기록 주행의 제어 입력이 아니다.
+
+각 기록 주행 시작은 `~/recordings/camera/` 아래에 밀리초가 포함된 새 세션 폴더를
+만든다. 일시정지와 재개는 같은 폴더를 계속 사용하고, 종료하면 manifest를 닫아
+세션을 확정한다. 다음 시작은 이전 기록과 섞이지 않는 새 폴더를 만든다.
 
 ## Calibration-free fast lane baseline
 

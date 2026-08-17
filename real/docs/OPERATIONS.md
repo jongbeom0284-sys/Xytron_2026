@@ -113,7 +113,10 @@ ros2 launch kobot_lane_drive white_left_record_drive.launch.py armed:=false
 
 실제 기록 주행은 웹 버튼이 `armed:=true` bridge를 만들므로, 버튼을 누르기 직전에
 기존 모터 프로세스, `/xycar_motor` publisher, `/dev/ttyMOTOR` 점유와 조향 부호를
-다시 확인하고 별도 승인을 받는다. 속도 상한은 `0.20 m/s`다.
+다시 확인하고 별도 승인을 받는다. 웹에서 기록 주행 시작 전에 `0.20`, `0.30`,
+`0.40`, `0.50 m/s` 중 하나를 선택하며, 선택값은 해당 세션의 detector preview와
+bridge 상한에 함께 적용된다. 각 시작은 밀리초 단위의 새 저장 폴더를 만들고,
+일시정지·재개는 같은 폴더를 유지하며, 종료 후 다음 시작은 별도 폴더에 저장한다.
 
 `kobot_lane_drive`의 무모터 `white_left_drive`는 기본 센서 launch에 포함된다. CLRerNet
 비교 launch와 승인 잠금 motor bridge는 자동 실행되지 않는다.
@@ -140,7 +143,7 @@ ros2 launch kobot_lane_drive track_test.launch.py \
 - WASD keydown 동안 `/xycar_motor` 20 Hz 지속 발행
 - keyup, window blur, WASD 종료, 즉시 정지에서 0 명령 발행
 - 서버와 `motor_adapter`도 `2.16 m/s` 상한을 독립적으로 검사
-- 기록 주행은 `0.20 m/s` 상한, Space 일시정지/재개, 일시정지 후 마우스 종료
+- 기록 주행은 시작 전 `0.20~0.50 m/s` 선택, Space 일시정지/재개, 일시정지 후 마우스 종료
 - 기록 주행 heartbeat 단절 1.2초 시 서버 일시정지
 
 모터 API에는 인증이 없다. dashboard 포트와 rosbridge를 인터넷에 직접 노출하지 않는다.

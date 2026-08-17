@@ -34,6 +34,12 @@ class WhiteLeftDriveNode(Node):
             control_y_ratio=float(self.get_parameter("control_y_ratio").value),
             left_search_ratio=float(self.get_parameter("left_search_ratio").value),
             minimum_path_score=float(self.get_parameter("minimum_path_score").value),
+            continuation_minimum_score=float(
+                self.get_parameter("continuation_minimum_score").value
+            ),
+            continuation_maximum_gap_rows=int(
+                self.get_parameter("continuation_maximum_gap_rows").value
+            ),
             desired_left_distance_ratio=float(
                 self.get_parameter("desired_left_distance_ratio").value
             ),
@@ -90,10 +96,12 @@ class WhiteLeftDriveNode(Node):
         self.declare_parameter("work_width", 320)
         self.declare_parameter("work_height", 240)
         self.declare_parameter("near_y_ratio", 0.80)
-        self.declare_parameter("far_y_ratio", 0.52)
+        self.declare_parameter("far_y_ratio", 0.625)
         self.declare_parameter("control_y_ratio", 0.70)
         self.declare_parameter("left_search_ratio", 0.52)
         self.declare_parameter("minimum_path_score", 0.30)
+        self.declare_parameter("continuation_minimum_score", 0.25)
+        self.declare_parameter("continuation_maximum_gap_rows", 5)
         self.declare_parameter("desired_left_distance_ratio", 244.0 / 640.0)
         self.declare_parameter("speed_mps", 0.20)
         self.declare_parameter("steering_sign", -1.0)
