@@ -11,7 +11,7 @@ from .drive_command import make_legacy_command
 
 
 class DriveBridgeNode(Node):
-    """Approval-gated adapter from Stanley preview radians to Kobot motor input."""
+    """Approval-gated adapter from steering preview radians to Kobot motor input."""
 
     def __init__(self) -> None:
         super().__init__("lane_drive_bridge")

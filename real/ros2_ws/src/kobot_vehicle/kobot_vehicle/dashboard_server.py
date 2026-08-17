@@ -17,9 +17,9 @@ import rclpy
 from ament_index_python.packages import get_package_share_directory
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from sensor_msgs.msg import Image
-from std_msgs.msg import Float32MultiArray
+from std_msgs.msg import Bool, Float32MultiArray, String
 
 
 class DeviceController:
@@ -399,6 +399,239 @@ class MotorController:
             self.log_handle.close()
 
 
+class RecordDriveController:
+    """Dashboard-owned start/pause/resume/finish state for lane data drives."""
+
+    READY_MODES = {'TRACKING', 'HOLD'}
+    HEARTBEAT_TIMEOUT_SEC = 1.2
+    START_TIMEOUT_SEC = 8.0
+    MAX_SPEED_MPS = 0.20
+
+    def __init__(self, node):
+        self.node = node
+        self.lock = threading.RLock()
+        self.state = 'idle'
+        self.result = '대기 중'
+        self.error = None
+        self.process = None
+        self.log_handle = None
+        self.started_at = 0.0
+        self.last_heartbeat_at = 0.0
+        self.control_status = {}
+        self.control_status_at = 0.0
+        self.lane_status = {}
+        enable_qos = QoSProfile(depth=1)
+        enable_qos.reliability = ReliabilityPolicy.RELIABLE
+        enable_qos.durability = DurabilityPolicy.TRANSIENT_LOCAL
+        self.enable_publisher = node.create_publisher(
+            Bool,
+            '/kobot_lane_drive/record_drive/enabled',
+            enable_qos,
+        )
+        self._publish_enabled(False)
+        self.timer = node.create_timer(0.1, self._tick)
+
+    def _publish_enabled(self, enabled):
+        self.enable_publisher.publish(Bool(data=bool(enabled)))
+
+    def observe_lane_status(self, payload):
+        with self.lock:
+            self.lane_status = payload if isinstance(payload, dict) else {}
+
+    def observe_control_status(self, payload):
+        with self.lock:
+            self.control_status = payload if isinstance(payload, dict) else {}
+            self.control_status_at = time.monotonic()
+
+    def heartbeat(self):
+        with self.lock:
+            if self.state not in ('starting', 'running', 'paused'):
+                raise RuntimeError('기록 주행이 시작되지 않았습니다')
+            self.last_heartbeat_at = time.monotonic()
+            return self.status_unlocked()
+
+    def start(self):
+        with self.lock:
+            if self.state in ('starting', 'running', 'paused', 'ending'):
+                raise RuntimeError('기록 주행이 이미 실행 중입니다')
+            if self.node.recording:
+                raise RuntimeError('카메라 저장을 먼저 종료하세요')
+            if self.node.motor.active:
+                raise RuntimeError('시간 주행을 먼저 정지하세요')
+            if not self.node.motor.stack_running():
+                raise RuntimeError('모터 스택이 실행 중이지 않습니다')
+            if self.process and self.process.poll() is None:
+                raise RuntimeError('이전 차선 주행 프로세스가 남아 있습니다')
+
+            self._publish_enabled(False)
+            recording = self.node.start_recording(kind='lane_drive')
+            self.log_handle = open(
+                self.node.motor.log_dir / 'record-drive.log',
+                'ab',
+                buffering=0,
+            )
+            try:
+                self.process = subprocess.Popen(
+                    [
+                        'ros2', 'launch', 'kobot_lane_drive',
+                        'white_left_record_drive.launch.py',
+                        'armed:=true',
+                        f'max_speed_mps:={self.MAX_SPEED_MPS:.2f}',
+                    ],
+                    stdout=self.log_handle,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+            except Exception:
+                self.node.stop_recording()
+                self.log_handle.close()
+                self.log_handle = None
+                raise
+
+            now = time.monotonic()
+            self.started_at = now
+            self.last_heartbeat_at = now
+            self.control_status = {}
+            self.control_status_at = 0.0
+            self.error = None
+            self.result = '차선 인식 준비 중'
+            self.state = 'starting'
+            result = self.status_unlocked()
+            result['path'] = recording.get('path')
+            return result
+
+    def pause(self, reason='사용자 일시정지'):
+        with self.lock:
+            if self.state != 'running':
+                raise RuntimeError('주행 중일 때만 일시정지할 수 있습니다')
+            self._pause_unlocked(reason)
+            return self.status_unlocked()
+
+    def _pause_unlocked(self, reason):
+        self._publish_enabled(False)
+        self.node.motor.publish(0.0, 0.0)
+        self.node.pause_recording()
+        self.state = 'paused'
+        self.result = reason
+
+    def resume(self):
+        with self.lock:
+            if self.state != 'paused':
+                raise RuntimeError('일시정지 상태가 아닙니다')
+            if not self.process or self.process.poll() is not None:
+                raise RuntimeError('차선 주행 프로세스가 종료됐습니다')
+            if not self.node.motor.stack_running():
+                raise RuntimeError('모터 스택이 실행 중이지 않습니다')
+            self.node.resume_recording()
+            self.last_heartbeat_at = time.monotonic()
+            self._publish_enabled(True)
+            self.state = 'running'
+            self.result = '기록 주행 중'
+            return self.status_unlocked()
+
+    def emergency_pause(self, reason='즉시 정지로 일시정지'):
+        with self.lock:
+            if self.state == 'running':
+                self._pause_unlocked(reason)
+            elif self.state == 'starting':
+                self._publish_enabled(False)
+                self.node.motor.publish(0.0, 0.0)
+                self.node.pause_recording()
+                self.state = 'paused'
+                self.result = reason
+            return self.status_unlocked()
+
+    def finish(self):
+        with self.lock:
+            if self.state != 'paused':
+                raise RuntimeError('일시정지한 뒤에만 종료할 수 있습니다')
+            self.state = 'ending'
+            self._publish_enabled(False)
+            self.node.motor.publish(0.0, 0.0)
+            recording = self.node.stop_recording()
+            self._terminate_process_unlocked()
+            self.state = 'finished'
+            self.result = '기록 주행 종료'
+            result = self.status_unlocked()
+            result['path'] = recording.get('last_path')
+            result['frames'] = recording.get('frames', 0)
+            return result
+
+    def _terminate_process_unlocked(self):
+        if self.process and self.process.poll() is None:
+            try:
+                os.killpg(os.getpgid(self.process.pid), signal.SIGINT)
+                self.process.wait(timeout=3)
+            except (ProcessLookupError, subprocess.TimeoutExpired):
+                try:
+                    os.killpg(os.getpgid(self.process.pid), signal.SIGTERM)
+                    self.process.wait(timeout=2)
+                except (ProcessLookupError, subprocess.TimeoutExpired):
+                    pass
+        self.process = None
+        if self.log_handle:
+            self.log_handle.close()
+            self.log_handle = None
+
+    def _fail_unlocked(self, message):
+        self._publish_enabled(False)
+        self.node.motor.publish(0.0, 0.0)
+        if self.node.recording:
+            self.node.stop_recording()
+        self._terminate_process_unlocked()
+        self.state = 'error'
+        self.result = '기록 주행 오류'
+        self.error = message
+
+    def _tick(self):
+        with self.lock:
+            now = time.monotonic()
+            if self.state == 'starting':
+                if not self.process or self.process.poll() is not None:
+                    self._fail_unlocked('차선 주행 프로세스가 시작되지 않았습니다')
+                    return
+                control_fresh = self.control_status_at >= self.started_at
+                if control_fresh and self.control_status.get('mode') in self.READY_MODES:
+                    self._publish_enabled(True)
+                    self.state = 'running'
+                    self.result = '기록 주행 중'
+                elif now - self.started_at > self.START_TIMEOUT_SEC:
+                    self._fail_unlocked('8초 안에 유효한 차선을 확인하지 못했습니다')
+            elif self.state == 'running':
+                if not self.process or self.process.poll() is not None:
+                    self._fail_unlocked('차선 주행 프로세스가 예기치 않게 종료됐습니다')
+                elif now - self.last_heartbeat_at > self.HEARTBEAT_TIMEOUT_SEC:
+                    self._pause_unlocked('브라우저 연결 끊김으로 자동 일시정지')
+
+    def status_unlocked(self):
+        recording = self.node.recording_status()
+        return {
+            'state': self.state,
+            'result': self.result,
+            'error': self.error,
+            'speed_limit_mps': self.MAX_SPEED_MPS,
+            'can_start': self.state in ('idle', 'finished', 'error'),
+            'can_pause': self.state == 'running',
+            'can_resume': self.state == 'paused',
+            'can_finish': self.state == 'paused',
+            'recording': recording,
+            'lane': self.lane_status,
+            'control': self.control_status,
+        }
+
+    def status(self):
+        with self.lock:
+            return self.status_unlocked()
+
+    def close(self):
+        with self.lock:
+            self._publish_enabled(False)
+            self.node.motor.publish(0.0, 0.0)
+            if self.node.recording and self.node.recording_kind == 'lane_drive':
+                self.node.stop_recording()
+            self._terminate_process_unlocked()
+
+
 class DashboardNode(Node):
     def __init__(self):
         super().__init__('dashboard_server')
@@ -409,14 +642,26 @@ class DashboardNode(Node):
         self.record_root = Path(os.environ.get('KOBOT_RECORDINGS_DIR', str(Path.home() / 'recordings' / 'camera')))
         self.record_lock = threading.Lock()
         self.recording = False
+        self.recording_paused = False
+        self.recording_kind = None
         self.record_path = None
         self.last_path = None
         self.record_manifest = None
         self.record_writer = None
+        self.telemetry_manifest = None
+        self.telemetry_writer = None
+        self.latest_lane_status = {}
         self.frame_count = 0
         self.last_saved_at = 0.0
         self.record_error = None
+        self.record_drive = RecordDriveController(self)
         self.create_subscription(Image, '/image_raw', self.on_image, qos_profile_sensor_data)
+        self.create_subscription(
+            String,
+            '/kobot_lane_drive/white_left/status',
+            self.on_white_left_status,
+            10,
+        )
         self.httpd = ThreadingHTTPServer(('0.0.0.0', 8000), self._handler_class())
         self.httpd.dashboard_node = self
         self.http_thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
@@ -436,9 +681,10 @@ class DashboardNode(Node):
         with self.record_lock:
             return {'active': self.recording, 'path': str(self.record_path) if self.record_path else None,
                     'last_path': str(self.last_path) if self.last_path else None,
-                    'frames': self.frame_count, 'error': self.record_error}
+                    'frames': self.frame_count, 'paused': self.recording_paused,
+                    'kind': self.recording_kind, 'error': self.record_error}
 
-    def start_recording(self):
+    def start_recording(self, kind='camera'):
         with self.record_lock:
             if self.recording:
                 return self.recording_status_unlocked()
@@ -447,15 +693,43 @@ class DashboardNode(Node):
             self.record_path.mkdir(parents=True, exist_ok=False)
             (self.record_path / 'session.json').write_text(json.dumps({
                 'topic': '/image_raw', 'format': 'JPEG', 'target_fps': 10,
+                'kind': kind,
                 'started_at': dt.datetime.now().astimezone().isoformat(),
             }, ensure_ascii=False, indent=2), encoding='utf-8')
             self.record_manifest = open(self.record_path / 'timestamps.csv', 'w', newline='', encoding='utf-8')
             self.record_writer = csv.writer(self.record_manifest)
             self.record_writer.writerow(['filename', 'ros_time_ns'])
+            if kind == 'lane_drive':
+                self.telemetry_manifest = open(
+                    self.record_path / 'drive_telemetry.csv',
+                    'w', newline='', encoding='utf-8')
+                self.telemetry_writer = csv.writer(self.telemetry_manifest)
+                self.telemetry_writer.writerow([
+                    'wall_time', 'lane_state', 'confidence',
+                    'left_boundary_x_px', 'desired_left_distance_px',
+                    'center_offset_px', 'control_mode', 'steering_rad',
+                    'speed_mps', 'reason', 'drive_state',
+                ])
             self.frame_count = 0
             self.last_saved_at = 0.0
             self.record_error = None
             self.recording = True
+            self.recording_paused = False
+            self.recording_kind = kind
+            return self.recording_status_unlocked()
+
+    def pause_recording(self):
+        with self.record_lock:
+            if self.recording:
+                self.recording_paused = True
+            return self.recording_status_unlocked()
+
+    def resume_recording(self):
+        with self.record_lock:
+            if not self.recording:
+                raise RuntimeError('저장 세션이 종료됐습니다')
+            self.recording_paused = False
+            self.last_saved_at = 0.0
             return self.recording_status_unlocked()
 
     def stop_recording(self):
@@ -465,21 +739,30 @@ class DashboardNode(Node):
                 self.record_manifest.close()
             self.record_manifest = None
             self.record_writer = None
+            if self.telemetry_manifest:
+                self.telemetry_manifest.flush()
+                self.telemetry_manifest.close()
+            self.telemetry_manifest = None
+            self.telemetry_writer = None
             self.recording = False
+            self.recording_paused = False
             if self.record_path:
                 self.last_path = self.record_path
             result = self.recording_status_unlocked()
             self.record_path = None
+            self.recording_kind = None
             return result
 
     def recording_status_unlocked(self):
         return {'active': self.recording, 'path': str(self.record_path) if self.record_path else None,
                 'last_path': str(self.last_path) if self.last_path else None,
-                'frames': self.frame_count, 'error': self.record_error}
+                'frames': self.frame_count, 'paused': self.recording_paused,
+                'kind': self.recording_kind, 'error': self.record_error}
 
     def on_image(self, message):
         with self.record_lock:
-            if not self.recording or time.monotonic() - self.last_saved_at < 0.1:
+            if (not self.recording or self.recording_paused
+                    or time.monotonic() - self.last_saved_at < 0.1):
                 return
             self.last_saved_at = time.monotonic()
             try:
@@ -503,7 +786,39 @@ class DashboardNode(Node):
                 self.record_error = str(error)
                 self.get_logger().error(f'Camera recording failed: {error}')
 
+    @staticmethod
+    def _json_message(message):
+        try:
+            payload = json.loads(message.data)
+            return payload if isinstance(payload, dict) else {}
+        except (TypeError, ValueError):
+            return {}
+
+    def on_white_left_status(self, message):
+        payload = self._json_message(message)
+        self.latest_lane_status = payload
+        self.record_drive.observe_lane_status(payload)
+        self.record_drive.observe_control_status(payload)
+        with self.record_lock:
+            if (not self.recording or self.recording_paused
+                    or self.recording_kind != 'lane_drive'
+                    or self.telemetry_writer is None):
+                return
+            lane = self.latest_lane_status
+            self.telemetry_writer.writerow([
+                dt.datetime.now().astimezone().isoformat(),
+                lane.get('state'), lane.get('confidence'),
+                lane.get('left_boundary_x_px'),
+                lane.get('desired_left_distance_px'),
+                lane.get('center_offset_px'),
+                payload.get('mode'), payload.get('steering_rad'),
+                payload.get('speed_mps'), payload.get('reason'),
+                self.record_drive.state,
+            ])
+            self.telemetry_manifest.flush()
+
     def close_services(self):
+        self.record_drive.close()
         self.stop_recording()
         self.httpd.shutdown()
         self.httpd.server_close()
@@ -542,6 +857,8 @@ class DashboardRequestHandler(SimpleHTTPRequestHandler):
             return self._json(200, self.server.dashboard_node.recording_status())
         if path == '/api/motor':
             return self._json(200, self.server.dashboard_node.motor.status())
+        if path == '/api/record-drive':
+            return self._json(200, self.server.dashboard_node.record_drive.status())
         return super().do_GET()
 
     def do_POST(self):
@@ -557,7 +874,21 @@ class DashboardRequestHandler(SimpleHTTPRequestHandler):
                     body.get('speed_mps'), body.get('duration_sec'), body.get('steering', 'center'))
                 return self._json(200, result)
             if path == '/api/motor/stop':
+                self.server.dashboard_node.record_drive.emergency_pause()
                 return self._json(200, self.server.dashboard_node.motor.stop())
+            if path.startswith('/api/record-drive/'):
+                action = path.rsplit('/', 1)[-1]
+                controller = self.server.dashboard_node.record_drive
+                actions = {
+                    'start': controller.start,
+                    'pause': controller.pause,
+                    'resume': controller.resume,
+                    'finish': controller.finish,
+                    'heartbeat': controller.heartbeat,
+                }
+                if action not in actions:
+                    return self._json(404, {'error': '없는 기록 주행 기능입니다'})
+                return self._json(200, actions[action]())
             if path in ('/api/recording/start', '/api/recording/stop'):
                 action = path.rsplit('/', 1)[-1]
                 result = self.server.dashboard_node.start_recording() if action == 'start' else self.server.dashboard_node.stop_recording()

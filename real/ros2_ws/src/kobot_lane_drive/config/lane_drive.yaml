@@ -1,23 +1,26 @@
 lane_perception:
   ros__parameters:
     image_topic: /image_raw
-    camera_info_topic: /camera_info
     debug_image_topic: /kobot_lane_drive/debug_image
     status_topic: /kobot_lane_drive/status
-    target_path_topic: /kobot_lane_drive/target_path
     steering_preview_topic: /kobot_lane_drive/steering_preview
-    base_frame: base_link
-    use_distortion: true
     checkpoint_path: /home/xytron/2026_Xytron/real/models/clrernet_culane_dla34_ema.pth
     device: cuda:0
     max_inference_hz: 10.0
-    target_distance_m: 0.50
     minimum_lane_bottom_ratio: 0.55
-    minimum_forward_m: 0.15
-    maximum_forward_m: 4.0
-    preview_speed_mps: 0.50
-    wheelbase_m: 0.24
-    stanley_gain: 0.5
+    # Keep false until pixel_reference.json was generated from a correctly
+    # positioned image and the two x ratios below were copied here.
+    reference_ready: false
+    near_y_ratio: 0.85
+    far_y_ratio: 0.60
+    reference_near_x_ratio: -1.0
+    reference_far_x_ratio: -1.0
+    near_pid_kp: 1.0
+    near_pid_ki: 0.0
+    near_pid_kd: 0.0
+    far_pid_kp: 0.65
+    far_pid_ki: 0.0
+    far_pid_kd: 0.0
     maximum_steering_rad: 0.34
     preprocess_width: 1640
     preprocess_height: 590

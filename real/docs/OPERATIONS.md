@@ -20,6 +20,21 @@ test "$(git rev-parse HEAD)" = "$(git ls-remote origin refs/heads/main | cut -f1
 
 ## 2. 통합 workspace 빌드
 
+현재 고정 카메라 차선 패키지만 확인할 때는 더 이상 사용하지 않는 `ipm`을 빌드
+경로에 포함하지 않는다.
+
+```bash
+source /opt/ros/humble/setup.bash
+source /home/xytron/2026_Xytron/real/.venv/bin/activate
+cd /home/xytron/2026_Xytron/real/ros2_ws
+rosdep install --from-paths src/kobot_lane_drive --ignore-src -r -y
+colcon build --symlink-install --packages-select kobot_lane_drive
+colcon test --packages-select kobot_lane_drive
+colcon test-result --verbose
+```
+
+차량 전체 workspace를 함께 확인할 때만 다음 통합 명령을 사용한다.
+
 ```bash
 source /opt/ros/humble/setup.bash
 source /home/xytron/2026_Xytron/real/.venv/bin/activate
@@ -82,7 +97,22 @@ ros2 launch kobot_vehicle teleop.launch.py start_sensors:=true armed:=true
 
 대시보드의 차선 화면은 `/lane_preview/image`와 `/lane_preview/status`를 표시할 뿐 자율주행을 수행하지 않는다.
 
-`kobot_lane_drive`도 기본 센서 launch에 포함되지 않는다. 패키지 빌드, 모델 준비, launch는 각각 승인 후 수행한다. `/camera_info` K 행렬과 카메라 TF를 먼저 검증하고, 무모터 launch 후 `/kobot_lane_drive/status`, 목표 Path, 조향 미리보기와 debug 영상을 확인한다. `BLOCKED` 상태에서 모터 단계로 넘어가지 않는다.
+웹 `기록 주행`은 별도 `white_left_record_drive.launch.py`를 실행한다. 시작 전에는
+`/lane_preview/image`를 유지하고, 기록 주행 준비·실행·일시정지 중에는
+`/kobot_lane_drive/white_left/debug_image`를 표시한다. Space는 주행과 이미지 저장을
+함께 일시정지·재개하며 종료 버튼은 일시정지 상태에서 마우스로만 활성화된다.
+
+무모터 확인:
+
+```bash
+ros2 launch kobot_lane_drive white_left_record_drive.launch.py armed:=false
+```
+
+실제 기록 주행은 웹 버튼이 `armed:=true` bridge를 만들므로, 버튼을 누르기 직전에
+기존 모터 프로세스, `/xycar_motor` publisher, `/dev/ttyMOTOR` 점유와 조향 부호를
+다시 확인하고 별도 승인을 받는다. 속도 상한은 `0.20 m/s`다.
+
+`kobot_lane_drive`도 기본 센서 launch에 포함되지 않는다. 패키지 빌드, 모델 준비, launch는 각각 승인 후 수행한다. 고정 카메라 기준 사진으로 `pixel_reference.json`을 먼저 만들고 검토한 뒤 YAML에 두 x 비율을 옮긴다. 무모터 launch 후 `/kobot_lane_drive/status`, 조향 미리보기와 debug 영상을 확인한다. `BLOCKED` 상태에서 모터 단계로 넘어가지 않는다.
 
 ```bash
 ros2 launch kobot_lane_drive lane_perception.launch.py
@@ -92,10 +122,12 @@ ros2 launch kobot_lane_drive lane_perception.launch.py
 
 ```bash
 ros2 launch kobot_lane_drive track_test.launch.py \
-  calibration_ready:=true camera_x_m:=<실측> camera_y_m:=<실측> \
-  camera_z_m:=<실측> camera_roll_rad:=<실측> \
-  camera_pitch_rad:=<실측> camera_yaw_rad:=<실측> armed:=true
+  armed:=true
 ```
+
+위 명령은 실행 예시일 뿐 승인으로 간주하지 않는다. 실행 직전에 기존 모터
+프로세스, `/xycar_motor` publisher와 `/dev/ttyMOTOR` 점유를 다시 확인하고 별도
+승인을 받는다.
 
 ## 5. 웹 확인
 
@@ -104,6 +136,8 @@ ros2 launch kobot_lane_drive track_test.launch.py \
 - WASD keydown 동안 `/xycar_motor` 20 Hz 지속 발행
 - keyup, window blur, WASD 종료, 즉시 정지에서 0 명령 발행
 - 서버와 `motor_adapter`도 `2.16 m/s` 상한을 독립적으로 검사
+- 기록 주행은 `0.20 m/s` 상한, Space 일시정지/재개, 일시정지 후 마우스 종료
+- 기록 주행 heartbeat 단절 1.2초 시 서버 일시정지
 
 모터 API에는 인증이 없다. dashboard 포트와 rosbridge를 인터넷에 직접 노출하지 않는다.
 

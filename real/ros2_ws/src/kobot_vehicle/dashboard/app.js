@@ -20,6 +20,7 @@ let latestPower='대기 중';
 let latestLane={state:'대기 중',confidence:0,offset_px:0};
 let recordingState={active:false,frames:0,last_path:''};
 let motorState={usb:false,stack_running:false,stack_state:'unknown',active:false,missing_processes:[],result:'잠김',error:null};
+let recordDriveState={state:'idle',result:'대기 중',can_start:true,can_pause:false,can_resume:false,can_finish:false,recording:{frames:0}};
 let driveSettings={speed:0.5,duration:10,steering:'center'};
 let driveStateText='잠김';
 let motorBusy=false;
@@ -62,9 +63,13 @@ function cameraCard(){
     <p class="helper record-status">저장 상태 확인 중</p>`;
 }
 
+function laneStreamTopic(){
+  return ['starting','running','paused'].includes(recordDriveState.state)?'/kobot_lane_drive/white_left/debug_image':'/lane_preview/image';
+}
+
 function laneCard(){
   return `<div class="card-heading"><div><p class="eyebrow">LANE PREVIEW · MOTOR OFF</p><h3>차선 인식 화면</h3></div><span class="live-badge">LIVE</span></div>
-    <div class="camera-frame lane-frame"><img class="lane-stream" src="http://${host}:8080/stream?topic=/lane_preview/image" alt="차선 인식 결과 영상"></div>
+    <div class="camera-frame lane-frame"><img class="lane-stream" data-topic="${laneStreamTopic()}" src="http://${host}:8080/stream?topic=${laneStreamTopic()}" alt="차선 인식 결과 영상"></div>
     <div class="metric"><span>인식 상태</span><strong class="lane-status">${laneStatusText()}</strong></div>
     <p class="helper">노란색·파란색: 좌우 경계 · 초록색: 인식된 중앙 경로 · 빨간색: 카메라 중심</p>`;
 }
@@ -124,7 +129,18 @@ function driveCard(){
     </div>
     <div class="drive-actions"><button data-drive-action="arm">WASD 시작</button><button class="primary" data-drive-action="test">시간 주행 시작</button><button class="danger" data-drive-action="stop">즉시 정지</button></div>
     <div class="keys" aria-label="WASD 원격조종"><button data-drive-key="w">W</button><button data-drive-key="a">A</button><button data-drive-key="s">S</button><button data-drive-key="d">D</button></div>
+    <section class="record-drive-panel" aria-label="기록 주행">
+      <div><span>기록 주행 · 좌측 차선 거리 유지</span><strong class="record-drive-badge">${recordDriveLabel()}</strong></div>
+      <p class="record-drive-help">0.20 m/s · Space 일시정지/재개 · 종료는 일시정지 후 마우스</p>
+      <div class="record-drive-actions"><button class="primary" data-drive-action="record-start">기록 주행 시작</button><button data-drive-action="record-toggle">일시정지</button><button class="danger" data-drive-action="record-finish">기록 주행 종료</button></div>
+      <p class="record-drive-state">${recordDriveState.result||'대기 중'}</p>
+    </section>
     <p class="drive-state">${driveStateText}</p>`;
+}
+
+function recordDriveLabel(){
+  const labels={idle:'대기',starting:'준비 중',running:'주행 중',paused:'일시정지',ending:'종료 중',finished:'종료됨',error:'오류'};
+  return labels[recordDriveState.state]||recordDriveState.state;
 }
 
 function emptyCard(){
@@ -369,13 +385,29 @@ function refreshDriveUi(){
   });
   document.querySelectorAll('.drive-state').forEach(el=>el.textContent=driveStateText);
   document.querySelectorAll('[data-drive-action="arm"]').forEach(el=>el.textContent=armed?'WASD 종료':'WASD 시작');
+  document.querySelectorAll('.record-drive-badge').forEach(el=>{
+    el.textContent=recordDriveLabel();
+    el.dataset.state=recordDriveState.state;
+  });
+  const frames=recordDriveState.recording?.frames||0;
+  const recordText=recordDriveState.error?`오류 · ${recordDriveState.error}`:`${recordDriveState.result||'대기 중'}${frames?` · ${frames}장`:''}`;
+  document.querySelectorAll('.record-drive-state').forEach(el=>el.textContent=recordText);
+  document.querySelectorAll('[data-drive-action="record-toggle"]').forEach(el=>el.textContent=recordDriveState.state==='paused'?'주행 재개':'일시정지');
+  const laneTopic=laneStreamTopic();
+  document.querySelectorAll('.lane-stream').forEach(image=>{
+    if(image.dataset.topic!==laneTopic){image.dataset.topic=laneTopic;image.src=`http://${host}:8080/stream?topic=${laneTopic}`;}
+  });
   refreshDriveButtons();
 }
 function refreshDriveButtons(){
   const partial=motorState.stack_state==='partial';
-  document.querySelectorAll('[data-drive-action="restart"]').forEach(button=>button.disabled=motorBusy||motorState.active||!motorState.usb);
-  document.querySelectorAll('[data-drive-action="arm"]').forEach(button=>button.disabled=motorBusy||partial||!validSpeed());
-  document.querySelectorAll('[data-drive-action="test"]').forEach(button=>button.disabled=motorBusy||partial||motorState.active||!validSpeed()||!validDuration());
+  const recordBusy=['starting','running','paused','ending'].includes(recordDriveState.state);
+  document.querySelectorAll('[data-drive-action="restart"]').forEach(button=>button.disabled=motorBusy||motorState.active||recordBusy||!motorState.usb);
+  document.querySelectorAll('[data-drive-action="arm"]').forEach(button=>button.disabled=motorBusy||recordBusy||partial||!validSpeed());
+  document.querySelectorAll('[data-drive-action="test"]').forEach(button=>button.disabled=motorBusy||recordBusy||partial||motorState.active||!validSpeed()||!validDuration());
+  document.querySelectorAll('[data-drive-action="record-start"]').forEach(button=>button.disabled=motorBusy||armed||motorState.active||motorState.stack_state!=='running'||!recordDriveState.can_start);
+  document.querySelectorAll('[data-drive-action="record-toggle"]').forEach(button=>button.disabled=motorBusy||!(recordDriveState.can_pause||recordDriveState.can_resume));
+  document.querySelectorAll('[data-drive-action="record-finish"]').forEach(button=>button.disabled=motorBusy||!recordDriveState.can_finish);
 }
 function publish(angle,speed){motor.publish(new ROSLIB.Message({data:[angle,speed]}));setDriveState(armed?`조향 ${angle} · 속도명령 ${speed.toFixed(2)}`:'잠김')}
 function zero(){pressed.clear();publish(0,0);document.querySelectorAll('[data-drive-key]').forEach(button=>button.classList.remove('active'))}
@@ -403,6 +435,36 @@ async function handleDriveAction(action){
     finally{motorBusy=false;refreshDriveUi()}
     return;
   }
+  if(action==='record-start'){
+    disarm();motorBusy=true;setDriveState('기록 주행 준비 중');refreshDriveButtons();
+    try{
+      recordDriveState=await api('/api/record-drive/start',{method:'POST',body:'{}'});
+      setDriveState('차선 인식 준비 중');toast('기록 주행 준비를 시작했습니다');
+    }catch(error){setDriveState(`기록 주행 오류 · ${error.message}`);toast(`기록 주행 오류: ${error.message}`)}
+    finally{motorBusy=false;refreshDriveUi()}
+    return;
+  }
+  if(action==='record-toggle'){
+    const endpoint=recordDriveState.state==='paused'?'resume':'pause';
+    motorBusy=true;refreshDriveButtons();
+    try{
+      recordDriveState=await api(`/api/record-drive/${endpoint}`,{method:'POST',body:'{}'});
+      setDriveState(endpoint==='pause'?'기록 주행 일시정지':'기록 주행 재개');
+      toast(endpoint==='pause'?'주행과 저장을 일시정지했습니다':'주행과 저장을 재개했습니다');
+    }catch(error){toast(`기록 주행 오류: ${error.message}`)}
+    finally{motorBusy=false;refreshDriveUi()}
+    return;
+  }
+  if(action==='record-finish'){
+    motorBusy=true;refreshDriveButtons();
+    try{
+      recordDriveState=await api('/api/record-drive/finish',{method:'POST',body:'{}'});
+      setDriveState('기록 주행 종료');
+      toast(`기록 주행을 종료했습니다 · ${recordDriveState.frames||recordDriveState.recording?.frames||0}장`);
+    }catch(error){toast(`기록 주행 종료 오류: ${error.message}`)}
+    finally{motorBusy=false;refreshDriveUi()}
+    return;
+  }
   if(action==='restart'){
     disarm();motorBusy=true;setDriveState('모터 스택 다시 실행 중');refreshDriveButtons();
     try{motorState=await api('/api/motor/restart',{method:'POST',body:'{}'});setDriveState('모터 스택 다시 실행됨');toast('VESC 모터 스택을 다시 실행했습니다')}
@@ -420,14 +482,30 @@ async function handleDriveAction(action){
 
 grid.addEventListener('click',event=>{
   const button=event.target.closest('[data-drive-action]');
-  if(button)handleDriveAction(button.dataset.driveAction);
+  if(!button)return;
+  if(button.dataset.driveAction==='record-finish'&&event.detail===0){toast('기록 주행 종료는 일시정지 후 마우스로 누르세요');return}
+  handleDriveAction(button.dataset.driveAction);
 });
 function down(key){if(!armed||!['w','a','s','d'].includes(key))return;pressed.add(key);document.querySelectorAll(`[data-drive-key="${key}"]`).forEach(button=>button.classList.add('active'));update()}
 function up(key){pressed.delete(key);document.querySelectorAll(`[data-drive-key="${key}"]`).forEach(button=>button.classList.remove('active'));update()}
-addEventListener('keydown',event=>{if(event.target.matches('input,select,textarea'))return;const key=event.key.toLowerCase();if(event.code==='Space'){event.preventDefault();if(armed)zero();return}if(!event.repeat)down(key)});
+addEventListener('keydown',event=>{
+  if(event.target.matches('input,select,textarea'))return;
+  const key=event.key.toLowerCase();
+  if(event.code==='Space'){
+    event.preventDefault();
+    if(event.repeat)return;
+    if(recordDriveState.state==='running'||recordDriveState.state==='paused')handleDriveAction('record-toggle');
+    else if(armed)zero();
+    return;
+  }
+  if(!event.repeat)down(key);
+});
 addEventListener('keyup',event=>up(event.key.toLowerCase()));
-addEventListener('blur',disarm);
-addEventListener('pagehide',disarm);
+addEventListener('blur',()=>{disarm();if(recordDriveState.state==='running')handleDriveAction('record-toggle')});
+addEventListener('pagehide',()=>{
+  disarm();
+  if(recordDriveState.state==='running')fetch('/api/record-drive/pause',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}',keepalive:true});
+});
 grid.addEventListener('pointerdown',event=>{const button=event.target.closest('[data-drive-key]');if(!button)return;event.preventDefault();button.setPointerCapture(event.pointerId);down(button.dataset.driveKey)});
 grid.addEventListener('pointerup',event=>{const button=event.target.closest('[data-drive-key]');if(button)up(button.dataset.driveKey)});
 grid.addEventListener('pointercancel',event=>{const button=event.target.closest('[data-drive-key]');if(button)up(button.dataset.driveKey)});
@@ -441,6 +519,17 @@ async function refreshMotorTest(){
   }catch(error){}
 }
 
+async function refreshRecordDrive(){
+  try{
+    if(recordDriveState.state==='starting'||recordDriveState.state==='running'){
+      recordDriveState=await api('/api/record-drive/heartbeat',{method:'POST',body:'{}'});
+    }else{
+      recordDriveState=await api('/api/record-drive');
+    }
+    refreshDriveUi();
+  }catch(error){}
+}
+
 renderGrid();
 refreshDevices();
 refreshRecording();
@@ -448,6 +537,8 @@ refreshDeviceNav();
 requestAnimationFrame(drawLidar);
 refreshDriveButtons();
 refreshMotorTest();
+refreshRecordDrive();
 setInterval(refreshDevices,3000);
 setInterval(refreshRecording,1000);
 setInterval(refreshMotorTest,500);
+setInterval(refreshRecordDrive,500);

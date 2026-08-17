@@ -160,6 +160,84 @@
   font-weight: 700;
 }
 
+.record-drive-panel {
+  margin-top: 10px;
+  border: 1px solid #dbe3ed;
+  border-radius: 11px;
+  padding: 11px 12px;
+  background: #fff;
+}
+
+.record-drive-panel > div:first-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #172033;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.record-drive-badge {
+  border-radius: 999px;
+  padding: 5px 8px;
+  color: #475569;
+  background: #f1f5f9;
+  font-size: 10px;
+}
+
+.record-drive-badge[data-state="running"] {
+  color: #047857;
+  background: #dcfce7;
+}
+
+.record-drive-badge[data-state="paused"] {
+  color: #a16207;
+  background: #fef3c7;
+}
+
+.record-drive-badge[data-state="error"] {
+  color: #b91c1c;
+  background: #fee2e2;
+}
+
+.record-drive-help,
+.record-drive-state {
+  margin: 7px 0 0;
+  color: #64748b;
+  font-size: 11px;
+}
+
+.record-drive-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+  margin-top: 9px;
+}
+
+.record-drive-actions button {
+  min-height: 38px;
+  border: 1px solid #cbd5e1;
+  border-radius: 9px;
+  padding: 8px;
+  color: #334155;
+  background: #fff;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.record-drive-actions .primary {
+  border-color: #111827;
+  color: #fff;
+  background: #111827;
+}
+
+.record-drive-actions .danger {
+  border-color: #fecaca;
+  color: #b91c1c;
+  background: #fff1f2;
+}
+
 .lane-frame {
   background: #0f172a;
 }
@@ -180,6 +258,10 @@
   }
 
   .drive-config {
+    grid-template-columns: 1fr;
+  }
+
+  .record-drive-actions {
     grid-template-columns: 1fr;
   }
 }
