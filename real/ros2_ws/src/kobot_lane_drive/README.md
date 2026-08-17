@@ -4,8 +4,9 @@
 
 `fast_lane_perception.launch.py`는 체크보드, 카메라 K 행렬, TF 없이 현재
 `640x480` 영상에서 흰색 외곽선과 노란 중앙 점선을 픽셀 좌표로 검출한다.
-LAB 밝기 정규화, 밝은 중성색 경계, 노란색 보조 관측, sliding-window 강건
-다항식 fitting을 사용한다. 결과는 미터 경로나 모터 명령이 아니다.
+HSV 흰색·노란색 마스크, CLAHE 밝기 정규화, Canny 경계, 노란색 보조 관측,
+sliding-window 강건 다항식 fitting을 사용한다. 색상 후보가 ROI를 과도하게
+점유하면 `mask_rejected=true`로 차단한다. 결과는 미터 경로나 모터 명령이 아니다.
 
 ```bash
 ros2 launch kobot_lane_drive fast_lane_perception.launch.py
@@ -16,14 +17,40 @@ ros2 launch kobot_lane_drive fast_lane_perception.launch.py
   (`[y_px, center_x_px, offset_px, confidence]`)
 - 저주기 화면: `/kobot_lane_drive/fast_lane/debug_image`
 
+HSV와 과다 점유 차단 기준은 `config/fast_lane.yaml`에서 조정한다. 흰색은
+`white_s_max`, `white_v_min`, `white_min_contrast`, 노란색은 `yellow_h_*`,
+`yellow_s_min`, `yellow_v_min`을 사용한다. `max_white_support_ratio` 또는
+`max_yellow_support_ratio`를 넘는 프레임은 경로 후보를 발행하지 않는다.
+
 저장 프레임 benchmark는 다음처럼 실행한다.
 
 ```bash
 ros2 run kobot_lane_drive fast_lane_benchmark /path/to/image_directory
 ```
 
-이 경로는 빠른 인식·조명 실험용이다. 보정된 BEV와 거리 기반 제어가 준비되기
-전에는 `/xycar_motor` 또는 `/ackermann_cmd`로 연결하지 않는다.
+인식 노드는 빠른 인식·조명 실험용이며 직접 모터 토픽을 발행하지 않는다. 실차
+시험은 아래의 시간 필터·속도/조향 제한·명시적 잠금을 갖춘 전용 bridge만 사용한다.
+
+## Fast-lane 주행 미리보기와 잠금 bridge
+
+HSV 픽셀 경로를 조향·속도 미리보기로 변환하려면 다음 무모터 launch를 사용한다.
+
+```bash
+ros2 launch kobot_lane_drive fast_lane_track_test.launch.py armed:=false
+```
+
+- 미리보기: `/kobot_lane_drive/fast_lane/drive_preview`
+  (`[steering_rad, speed_mps, confidence]`)
+- 제어 상태: `/kobot_lane_drive/fast_lane/control_status`
+- `BOTH`는 최대 `0.70 m/s`, 한쪽 차선은 최대 `0.48 m/s`로 계산한다.
+- 순간 `LOST`와 `mask_rejected`는 0.25초 유지 후 0.50초까지 감속 정지한다.
+- 조향은 `±0.34 rad`, 변화율은 `1.20 rad/s`로 제한한다. 짧은
+  `BOTH ↔ 단일 차선` 전환은 마지막 양쪽 차선 중심을 0.30초 유지하고 이후
+  복원 중심으로 서서히 이동해 곡선에서 조향이 튀는 것을 줄인다.
+
+`armed:=false`에서는 controller와 perception에 모터 publisher가 없다. 실제 bridge는
+`armed:=true`일 때만 생성되며, 실행 전 바퀴를 띄우고 기존 `/xycar_motor`
+publisher 충돌, 모터 속도·가속도 상한과 조향 방향을 다시 확인해야 한다.
 
 2026-08-14 Kobot 1차 실측:
 

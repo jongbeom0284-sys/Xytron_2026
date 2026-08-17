@@ -12,3 +12,13 @@ fast_lane_perception:
     expected_bottom_width_ratio: 0.82
     expected_top_width_ratio: 0.30
     clahe_clip_limit: 1.6
+    white_s_max: 125
+    white_v_min: 140
+    white_v_percentile: 62.0
+    white_min_contrast: 12
+    yellow_h_low: 15
+    yellow_h_high: 40
+    yellow_s_min: 70
+    yellow_v_min: 80
+    max_white_support_ratio: 0.65
+    max_yellow_support_ratio: 0.45

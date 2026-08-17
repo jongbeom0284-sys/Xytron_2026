@@ -19,6 +19,26 @@ class FastLaneConfig:
     expected_bottom_width_ratio: float = 0.82
     expected_top_width_ratio: float = 0.30
     clahe_clip_limit: float = 1.6
+    white_s_max: int = 125
+    white_v_min: int = 140
+    white_v_percentile: float = 62.0
+    white_min_contrast: int = 12
+    yellow_h_low: int = 15
+    yellow_h_high: int = 40
+    yellow_s_min: int = 70
+    yellow_v_min: int = 80
+    # These are catastrophic-frame guards, not normal lane occupancy limits.
+    # The real curved track can legitimately put roughly one third of the ROI
+    # inside the broad low-saturation white support band.
+    max_white_support_ratio: float = 0.65
+    max_yellow_support_ratio: float = 0.45
+
+
+@dataclass(frozen=True)
+class MaskDiagnostics:
+    white_support_ratio: float
+    yellow_support_ratio: float
+    rejected: bool
 
 
 @dataclass(frozen=True)
@@ -40,6 +60,9 @@ class FastLaneResult:
     left: LaneCurve | None
     right: LaneCurve | None
     yellow_center_x_px: float | None
+    white_support_ratio: float
+    yellow_support_ratio: float
+    mask_rejected: bool
     processing_ms: float
     debug_image: np.ndarray | None
 
@@ -60,6 +83,10 @@ class FastLaneResult:
                 if self.yellow_center_x_px is None
                 else round(self.yellow_center_x_px, 2)
             ),
+            "colour_space": "HSV",
+            "white_support_ratio": round(self.white_support_ratio, 4),
+            "yellow_support_ratio": round(self.yellow_support_ratio, 4),
+            "mask_rejected": self.mask_rejected,
             "processing_ms": round(self.processing_ms, 2),
             "metric_calibrated": False,
             "motor_output": False,
@@ -94,36 +121,55 @@ def _colour_masks(
     frame: np.ndarray,
     roi: np.ndarray,
     config: FastLaneConfig,
-) -> tuple[np.ndarray, np.ndarray]:
-    lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
-    lightness, channel_a, channel_b = cv2.split(lab)
+) -> tuple[np.ndarray, np.ndarray, MaskDiagnostics]:
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    hue, saturation, value = cv2.split(hsv)
 
     clahe = cv2.createCLAHE(
         clipLimit=config.clahe_clip_limit,
         tileGridSize=(8, 8),
     )
-    normalized_l = clahe.apply(lightness)
-    roi_values = lightness[roi > 0]
-    dynamic_white_floor = max(85.0, float(np.percentile(roi_values, 62)))
-    neutral = (
-        (np.abs(channel_a.astype(np.int16) - 128) <= 22)
-        & (np.abs(channel_b.astype(np.int16) - 128) <= 24)
+    normalized_value = clahe.apply(value)
+    roi_values = value[roi > 0]
+    dynamic_white_floor = min(
+        255.0,
+        max(
+            float(config.white_v_min),
+            float(np.percentile(roi_values, config.white_v_percentile))
+            + float(config.white_min_contrast),
+        ),
     )
-    white_support = neutral & (lightness >= dynamic_white_floor)
-    yellow_lab = (
-        (channel_b >= 148)
-        & (channel_a >= 98)
-        & (channel_a <= 145)
-        & (lightness >= 95)
-        & (
-            channel_b.astype(np.int16) - channel_a.astype(np.int16)
-            >= 22
-        )
+    white_support = (
+        (saturation <= config.white_s_max)
+        & (value >= dynamic_white_floor)
+        & (roi > 0)
     )
-    yellow = yellow_lab
+    yellow = (
+        (hue >= config.yellow_h_low)
+        & (hue <= config.yellow_h_high)
+        & (saturation >= config.yellow_s_min)
+        & (value >= config.yellow_v_min)
+        & (roi > 0)
+    )
 
-    blurred_l = cv2.GaussianBlur(normalized_l, (5, 5), 0)
-    edges = cv2.Canny(blurred_l, 35, 105)
+    roi_pixel_count = max(1, int(np.count_nonzero(roi)))
+    white_support_ratio = float(np.count_nonzero(white_support)) / roi_pixel_count
+    yellow_support_ratio = float(np.count_nonzero(yellow)) / roi_pixel_count
+    rejected = (
+        white_support_ratio > config.max_white_support_ratio
+        or yellow_support_ratio > config.max_yellow_support_ratio
+    )
+
+    if rejected:
+        empty = np.zeros_like(roi)
+        return empty, empty, MaskDiagnostics(
+            white_support_ratio=white_support_ratio,
+            yellow_support_ratio=yellow_support_ratio,
+            rejected=True,
+        )
+
+    blurred_value = cv2.GaussianBlur(normalized_value, (5, 5), 0)
+    edges = cv2.Canny(blurred_value, 35, 105)
     white_band = np.where(white_support, 255, 0).astype(np.uint8)
     white_band = cv2.dilate(
         white_band,
@@ -146,7 +192,11 @@ def _colour_masks(
         cv2.MORPH_CLOSE,
         cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 7)),
     )
-    return white_mask, yellow_mask
+    return white_mask, yellow_mask, MaskDiagnostics(
+        white_support_ratio=white_support_ratio,
+        yellow_support_ratio=yellow_support_ratio,
+        rejected=False,
+    )
 
 
 def _base_peak(
@@ -287,7 +337,7 @@ def detect_fast_lane(
     image_center_x = width // 2
 
     roi = _roi_mask(height, width, y_top, y_bottom)
-    white_mask, yellow_mask = _colour_masks(frame, roi, config)
+    white_mask, yellow_mask, mask_diagnostics = _colour_masks(frame, roi, config)
     base_band_top = max(y_top, int(height * 0.72))
     left_base = _base_peak(
         white_mask,
@@ -380,7 +430,8 @@ def detect_fast_lane(
 
     processing_ms = (perf_counter() - started_at) * 1000.0
     if debug_image is not None:
-        cv2.putText(debug_image, f"{state}  conf {confidence:.2f}", (22, 36), cv2.FONT_HERSHEY_SIMPLEX, 0.68, (255, 255, 255), 2, cv2.LINE_AA)
+        state_label = "MASK REJECTED" if mask_diagnostics.rejected else state
+        cv2.putText(debug_image, f"{state_label}  conf {confidence:.2f}", (22, 36), cv2.FONT_HERSHEY_SIMPLEX, 0.68, (255, 255, 255), 2, cv2.LINE_AA)
         offset_text = "n/a" if offset is None else f"{offset:+.1f}px"
         cv2.putText(debug_image, f"offset {offset_text}  {processing_ms:.1f}ms", (22, 59), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (205, 225, 240), 1, cv2.LINE_AA)
 
@@ -392,6 +443,9 @@ def detect_fast_lane(
         left=left,
         right=right,
         yellow_center_x_px=yellow_x,
+        white_support_ratio=mask_diagnostics.white_support_ratio,
+        yellow_support_ratio=mask_diagnostics.yellow_support_ratio,
+        mask_rejected=mask_diagnostics.rejected,
         processing_ms=processing_ms,
         debug_image=debug_image,
     )
