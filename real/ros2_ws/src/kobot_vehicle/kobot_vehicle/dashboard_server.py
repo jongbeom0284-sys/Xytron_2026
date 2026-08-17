@@ -405,7 +405,9 @@ class RecordDriveController:
     READY_MODES = {'TRACKING', 'HOLD'}
     HEARTBEAT_TIMEOUT_SEC = 1.2
     START_TIMEOUT_SEC = 8.0
-    MAX_SPEED_MPS = 0.20
+    MIN_SPEED_MPS = 0.20
+    MAX_SPEED_MPS = 0.50
+    DEFAULT_SPEED_MPS = 0.50
 
     def __init__(self, node):
         self.node = node
@@ -420,6 +422,7 @@ class RecordDriveController:
         self.control_status = {}
         self.control_status_at = 0.0
         self.lane_status = {}
+        self.speed_mps = self.DEFAULT_SPEED_MPS
         enable_qos = QoSProfile(depth=1)
         enable_qos.reliability = ReliabilityPolicy.RELIABLE
         enable_qos.durability = DurabilityPolicy.TRANSIENT_LOCAL
@@ -450,7 +453,7 @@ class RecordDriveController:
             self.last_heartbeat_at = time.monotonic()
             return self.status_unlocked()
 
-    def start(self):
+    def start(self, speed_mps=None):
         with self.lock:
             if self.state in ('starting', 'running', 'paused', 'ending'):
                 raise RuntimeError('기록 주행이 이미 실행 중입니다')
@@ -463,10 +466,25 @@ class RecordDriveController:
             if self.process and self.process.poll() is None:
                 raise RuntimeError('이전 차선 주행 프로세스가 남아 있습니다')
 
+            speed_mps = self.DEFAULT_SPEED_MPS if speed_mps is None else float(speed_mps)
+            if (
+                not math.isfinite(speed_mps)
+                or not self.MIN_SPEED_MPS <= speed_mps <= self.MAX_SPEED_MPS
+            ):
+                raise ValueError(
+                    f'기록 주행 속도는 {self.MIN_SPEED_MPS:.2f}~'
+                    f'{self.MAX_SPEED_MPS:.2f} m/s로 선택하세요'
+                )
+            self.speed_mps = speed_mps
+
             self._publish_enabled(False)
-            recording = self.node.start_recording(kind='lane_drive')
+            recording = self.node.start_recording(
+                kind='lane_drive',
+                metadata={'speed_mps': self.speed_mps},
+            )
+            recording_path = Path(recording['path'])
             self.log_handle = open(
-                self.node.motor.log_dir / 'record-drive.log',
+                recording_path / 'record-drive.log',
                 'ab',
                 buffering=0,
             )
@@ -477,7 +495,7 @@ class RecordDriveController:
                         'white_left_record_drive.launch.py',
                         'armed:=true',
                         'start_perception:=false',
-                        f'max_speed_mps:={self.MAX_SPEED_MPS:.2f}',
+                        f'max_speed_mps:={self.speed_mps:.2f}',
                     ],
                     stdout=self.log_handle,
                     stderr=subprocess.STDOUT,
@@ -610,7 +628,10 @@ class RecordDriveController:
             'state': self.state,
             'result': self.result,
             'error': self.error,
-            'speed_limit_mps': self.MAX_SPEED_MPS,
+            'speed_limit_mps': self.speed_mps,
+            'speed_min_mps': self.MIN_SPEED_MPS,
+            'speed_max_mps': self.MAX_SPEED_MPS,
+            'selected_speed_mps': self.speed_mps,
             'can_start': self.state in ('idle', 'finished', 'error'),
             'can_pause': self.state == 'running',
             'can_resume': self.state == 'paused',
@@ -685,18 +706,33 @@ class DashboardNode(Node):
                     'frames': self.frame_count, 'paused': self.recording_paused,
                     'kind': self.recording_kind, 'error': self.record_error}
 
-    def start_recording(self, kind='camera'):
+    def start_recording(self, kind='camera', metadata=None):
         with self.record_lock:
             if self.recording:
                 return self.recording_status_unlocked()
-            stamp = dt.datetime.now().strftime('%Y%m%d_%H%M%S')
-            self.record_path = self.record_root / stamp
-            self.record_path.mkdir(parents=True, exist_ok=False)
-            (self.record_path / 'session.json').write_text(json.dumps({
+            stamp = dt.datetime.now().strftime('%Y%m%d_%H%M%S_%f')[:-3]
+            for suffix in range(1000):
+                name = stamp if suffix == 0 else f'{stamp}_{suffix:02d}'
+                candidate = self.record_root / name
+                try:
+                    candidate.mkdir(parents=True, exist_ok=False)
+                    self.record_path = candidate
+                    break
+                except FileExistsError:
+                    continue
+            else:
+                raise RuntimeError('새 기록 폴더를 만들 수 없습니다')
+            session = {
                 'topic': '/image_raw', 'format': 'JPEG', 'target_fps': 10,
                 'kind': kind,
                 'started_at': dt.datetime.now().astimezone().isoformat(),
-            }, ensure_ascii=False, indent=2), encoding='utf-8')
+            }
+            if metadata:
+                session.update(metadata)
+            (self.record_path / 'session.json').write_text(
+                json.dumps(session, ensure_ascii=False, indent=2),
+                encoding='utf-8',
+            )
             self.record_manifest = open(self.record_path / 'timestamps.csv', 'w', newline='', encoding='utf-8')
             self.record_writer = csv.writer(self.record_manifest)
             self.record_writer.writerow(['filename', 'ros_time_ns'])
@@ -880,8 +916,10 @@ class DashboardRequestHandler(SimpleHTTPRequestHandler):
             if path.startswith('/api/record-drive/'):
                 action = path.rsplit('/', 1)[-1]
                 controller = self.server.dashboard_node.record_drive
+                if action == 'start':
+                    body = self._read_json()
+                    return self._json(200, controller.start(body.get('speed_mps')))
                 actions = {
-                    'start': controller.start,
                     'pause': controller.pause,
                     'resume': controller.resume,
                     'finish': controller.finish,

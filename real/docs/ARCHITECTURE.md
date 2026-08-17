@@ -36,7 +36,7 @@ white_left_drive → /kobot_lane_drive/white_left/status → dashboard 차선 �
   → 매 프레임 흰색·저채도·국부 명암 ridge score
   → 차량 왼쪽의 가장 가까운 연속 흰색 경계 추적
   → 1번 사진 기준 d=244 px와 현재 경계 비교
-  → 제한된 조향 preview, 최대 0.20 m/s
+  → 제한된 조향 preview, 웹에서 선택한 0.20~0.50 m/s
   ├→ /kobot_lane_drive/white_left/debug_image
   ├→ /kobot_lane_drive/white_left/status
   └→ /kobot_lane_drive/white_left/drive_preview
@@ -48,6 +48,8 @@ white_left_drive → /kobot_lane_drive/white_left/status → dashboard 차선 �
 웹은 기록 주행 중 0.5초마다 heartbeat를 보내며 1.2초 동안 끊기면 서버가 일시정지한다.
 `fast_lane`은 이 기록 주행의 제어 입력이 아니다. 기록 주행 launch는 센서 서비스의
 상시 `white_left_drive`를 재사용하고 승인 잠금 bridge만 추가한다.
+시작할 때마다 새 기록 폴더를 만들고, 일시정지·재개는 그 폴더를 유지한다. 종료는
+CSV와 manifest를 닫아 세션을 확정하므로 다음 기록 주행의 데이터와 섞이지 않는다.
 
 ## 보정 없는 빠른 차선 흐름
 

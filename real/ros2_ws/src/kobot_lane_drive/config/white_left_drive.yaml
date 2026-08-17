@@ -9,10 +9,14 @@ white_left_drive:
     work_width: 320
     work_height: 240
     near_y_ratio: 0.80
-    far_y_ratio: 0.52
+    # Fixed-camera control only needs the nearby boundary: y=300..384 at 480p.
+    far_y_ratio: 0.625
     control_y_ratio: 0.70
     left_search_ratio: 0.52
     minimum_path_score: 0.30
+    # Stop the displayed lane when its white evidence disappears.
+    continuation_minimum_score: 0.25
+    continuation_maximum_gap_rows: 5
     # Frame 1: y=336px, left boundary x=76px, camera center=320px.
     desired_left_distance_ratio: 0.38125
     speed_mps: 0.20
