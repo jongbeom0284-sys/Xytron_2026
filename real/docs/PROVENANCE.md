@@ -17,7 +17,7 @@
 
 ### `kobot_vehicle`
 
-센서 launch와 dashboard, 웹 WASD heartbeat, 시간 주행, motor API, 속도·가속도 제한, watchdog, `lane_preview`와 테스트는 차량 프로젝트 자체 코드다. 이번 저장소 반영에서 `dashboard/app.js`의 잘못된 최대속도 표시, input `max`, client validation을 `8.00`에서 실제 상한 `2.16 m/s`로 맞췄다. `dashboard_server.py`의 firmware 설명도 실제 FW 6.5로 정정했다.
+센서 launch와 dashboard, 웹 WASD heartbeat, 시간 주행, motor API, 속도·가속도 제한과 watchdog은 차량 프로젝트 자체 코드다. 기존 HSV/Canny/Hough `lane_preview`는 90번 승인 `white_left_drive` 상시 화면으로 교체하면서 소스·entry point·테스트를 삭제했다. `dashboard/app.js`의 최대속도 표시, input `max`, client validation은 실제 상한 `2.16 m/s`와 일치한다.
 
 ### `vesc`
 
@@ -51,4 +51,4 @@ XML은 참고·비교용이고 자동 적용되지 않는다. 설정을 다시 �
 
 ## 제외 범위
 
-과거 `track_drive`, `kmu_race`, `real/drivers`, `lane_id_perception`, LiDAR 예제 CSV와 임시 로그·백업은 포함하지 않는다. `lane_preview`와 `kobot_lane_drive` 출력은 실제 차선 정확도나 미터 단위 거리 검증을 통과했다는 뜻이 아니다.
+과거 `track_drive`, `kmu_race`, `real/drivers`, `lane_id_perception`, 기존 `lane_preview`, LiDAR 예제 CSV와 임시 로그·백업은 포함하지 않는다. `kobot_lane_drive` 출력은 실제 차선 정확도나 미터 단위 거리 검증을 통과했다는 뜻이 아니다.

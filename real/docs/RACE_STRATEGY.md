@@ -123,10 +123,11 @@ ROS 구독은 가능한 경우 sensor-data QoS와 queue depth 1을 사용한다.
 
 ## 5. 경기 모드 자원 정책
 
-현재 개발용 센서 스택에서 `lane_preview`가 CPU 약 60%, dashboard가 약 13%를 사용한
-실측이 있다. 이는 디버깅에는 유용하지만 경기 상태의 기본 구성이 될 수 없다.
+과거 개발용 센서 스택에서 삭제된 `lane_preview`가 CPU 약 60%, dashboard가 약 13%를
+사용한 실측이 있었다. 현재 상시 `white_left_drive`의 자원 사용량은 Jetson 실시간
+상태에서 다시 측정해야 한다.
 
-- `dev launch`: lane preview, dashboard, web video, rosbridge와 상세 overlay를 허용한다.
+- `dev launch`: white-left debug, dashboard, web video, rosbridge와 상세 overlay를 허용한다.
 - `race launch`: 카메라, 필수 센서, 인식, FSM, 제어, 안전 watchdog, 저비용 logger만 실행한다.
 - 경기 모드에서는 화면 overlay를 기본 비활성화하고 필요하면 저주기 샘플만 저장한다.
 - 신호등 검출처럼 GPU가 필요한 작업은 해당 sector에서만 활성화한다.

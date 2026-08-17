@@ -2,7 +2,7 @@
 
 이 표는 `real/`에 커밋되는 파일의 출처, 역할, 주요 입력·출력, 편집 정책을 기록한다. 생성물(`build/`, `install/`, `log/`), 캐시, 백업은 포함하지 않는다. 큰 vendored subtree는 기준 commit과 패치 경계를 한 항목으로 묶어 기록한다.
 
-총 추적 파일 수: **453**
+총 추적 파일 수: **452**
 
 | 경로 | 출처 | 역할 | 입력·출력 | 수정 정책 |
 |---|---|---|---|---|
@@ -44,7 +44,6 @@
 | `real/ros2_ws/src/kobot_vehicle/kobot_vehicle/dashboard_server.py` | Kobot 차량 실행본 + 기록 주행 제어 | 정적 웹·장치·녹화·motor·record-drive 상태기계 | HTTP·/image_raw·white_left status → API·세션 기록·/xycar_motor | 승인·heartbeat·일시정지 gate 유지 |
 | `real/ros2_ws/src/kobot_vehicle/kobot_vehicle/figure_eight.py` | Kobot 차량 실행본 (2026-08-13) | 수동 승인용 8자 시험 publisher | 시험 파라미터 → /xycar_motor | 검토·테스트 후 수정 가능 |
 | `real/ros2_ws/src/kobot_vehicle/kobot_vehicle/imu_node.py` | Kobot 차량 실행본 (2026-08-13) | IMU serial parser/publisher | /dev/ttyIMU → /imu | 검토·테스트 후 수정 가능 |
-| `real/ros2_ws/src/kobot_vehicle/kobot_vehicle/lane_preview_node.py` | Kobot 차량 실행본 (2026-08-13) | HSV/Canny/Hough 표시 노드 | /image_raw → /lane_preview/image·status | 검토·테스트 후 수정 가능 |
 | `real/ros2_ws/src/kobot_vehicle/kobot_vehicle/motor_adapter.py` | Kobot 차량 실행본 (2026-08-13) | 차량 명령 안전 변환기 | /xycar_motor → /ackermann_cmd | 검토·테스트 후 수정 가능 |
 | `real/ros2_ws/src/kobot_vehicle/kobot_vehicle/status_node.py` | Kobot 차량 실행본 (2026-08-13) | 장치·시스템 상태 publisher | OS 상태 → /kobot/status | 검토·테스트 후 수정 가능 |
 | `real/ros2_ws/src/kobot_vehicle/kobot_vehicle/ultrasonic_node.py` | Kobot 차량 실행본 (2026-08-13) | 초음파 serial parser/publisher | /dev/ttySonic → /xycar_ultrasonic | 검토·테스트 후 수정 가능 |
@@ -55,7 +54,7 @@
 | `real/ros2_ws/src/kobot_vehicle/resource/kobot_vehicle` | Kobot 차량 실행본 (2026-08-13) | ament resource marker | ament index 입력 | 검토·테스트 후 수정 가능 |
 | `real/ros2_ws/src/kobot_vehicle/setup.cfg` | Kobot 차량 실행본 (2026-08-13) | ament Python 설치 설정 | build 설정 → 설치 경로 | 검토·테스트 후 수정 가능 |
 | `real/ros2_ws/src/kobot_vehicle/setup.py` | Kobot 차량 실행본 (2026-08-13) | Python package·entry point 정의 | ament build → 실행 파일 | 검토·테스트 후 수정 가능 |
-| `real/ros2_ws/src/kobot_vehicle/test/test_lane_preview.py` | Kobot 차량 실행본 (2026-08-13) | lane_preview 단위 테스트 | 합성 영상 → 검출·무모터 검증 | 검토·테스트 후 수정 가능 |
+| `real/ros2_ws/src/kobot_vehicle/test/test_sensor_launch.py` | Kobot 프로젝트 자체 작성 | 센서 launch 차선 노드·무모터 계약 회귀 테스트 | launch·setup source → white_left 상시 실행·legacy 제거 검증 | launch 변경 시 함께 갱신 |
 | `real/ros2_ws/src/kobot_vehicle/test/test_parsers.py` | Kobot 차량 실행본 (2026-08-13) | serial parser 단위 테스트 | 예제 frame → parser 결과 | 검토·테스트 후 수정 가능 |
 | `real/ros2_ws/src/kobot_vehicle/test/test_teleop_launch.py` | Kobot 프로젝트 자체 작성 | 상위 launch 조합·잠금 기본값 회귀 테스트 | launch source → 안전 계약 검증 | launch 변경 시 함께 갱신 |
 | `real/ros2_ws/src/vesc/.github/workflows/ros2-ci.yaml` | F1TENTH vesc upstream 153998df | 실행·launch 설정 | node/launch 입력 → runtime 파라미터 | 직접 수정 지양; upstream 갱신으로 관리 |

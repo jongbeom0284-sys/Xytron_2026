@@ -476,6 +476,7 @@ class RecordDriveController:
                         'ros2', 'launch', 'kobot_lane_drive',
                         'white_left_record_drive.launch.py',
                         'armed:=true',
+                        'start_perception:=false',
                         f'max_speed_mps:={self.MAX_SPEED_MPS:.2f}',
                     ],
                     stdout=self.log_handle,
