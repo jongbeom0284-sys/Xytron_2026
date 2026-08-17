@@ -1,4 +1,32 @@
-# Kobot left-lane drive
+# Kobot fixed-camera left-boundary follower
+
+## 현재 기록 주행: 90번 승인 흰색 좌측 경계
+
+웹의 `기록 주행 시작`은 `fast_lane`이나 `lane_preview`가 아니라, 90번 사진에서
+사용자가 승인한 흰색 좌측 경계 추적기를 실행한다. 현재 프레임마다 흰색·저채도·
+국부 명암 ridge 점수를 새로 만들고 차량 왼쪽의 가장 가까운 연속 경로를 아래에서
+위로 추적한다. 차선 형상은 프레임 사이에 누적하지 않는다.
+
+- 기준: 1번 사진 `y=336`, 좌측 경계 `x=76`, 영상 중심 `x=320`
+- 원하는 영상상 거리 `d`: `244 px` (`244/640 = 0.38125`)
+- 속도 상한: `0.20 m/s`
+- 차선 한 프레임 미검출: 마지막 조향·속도 유지
+- 카메라/상태가 `0.30초` 이상 끊김: bridge가 0 명령
+- 브라우저 heartbeat가 `1.2초` 이상 끊김: 일시정지와 0 명령
+- Space: 주행/저장을 함께 일시정지·재개
+- 종료: 일시정지 뒤 마우스로만 가능
+
+무모터 확인은 다음처럼 실행한다.
+
+```bash
+ros2 launch kobot_lane_drive white_left_record_drive.launch.py armed:=false
+```
+
+출력은 `/kobot_lane_drive/white_left/status`,
+`/kobot_lane_drive/white_left/drive_preview`,
+`/kobot_lane_drive/white_left/debug_image`다. 실제 `/xycar_motor` publisher는
+`armed:=true`일 때만 별도 bridge로 생성된다. `fast_lane`은 비교·보존용이며 웹
+기록 주행의 제어 입력이 아니다.
 
 ## Calibration-free fast lane baseline
 
@@ -63,41 +91,78 @@ publisher 충돌, 모터 속도·가속도 상한과 조향 방향을 다시 확
 현재 결과는 속도 계약을 통과했지만 단일 외곽선 복원 비율이 높고 시간 필터와
 실제 조향 오차 ground truth가 없다. 따라서 `출력 생성됨 - 정확도 미검증` 단계다.
 
-좌측 차선으로부터 `target_distance_m`를 유지하는 ROS2 Humble 패키지다. 알고리즘을
-새로 만들지 않고 다음 공개 구현을 연결한다.
+## Fixed-camera left-boundary follower
 
-- 차선 검출: 공식 CLRerNet
-- 영상점 → 지면점(m): `ros-sports/ipm`
-- 좌측 차선 평행 경로: Shapely `offset_curve`
-- 조향값: PythonRobotics Stanley controller
+고정된 카메라와 같은 트랙을 전제로, 차량 중심 바로 왼쪽의 차선을 따라가는
+ROS2 Humble 패키지다. 미터 단위 거리 `d`, 카메라 K, BEV/IPM은 사용하지 않는다.
+차량을 원하는 위치에 세운 기준 사진에서 좌측 차선의 픽셀 위치를 저장하고 같은
+위치를 유지한다.
 
-`lane_perception.launch.py`는 인식과 조향 미리보기만 실행한다. 모터 토픽을
-발행하지 않는다. `track_test.launch.py armed:=true`일 때만 별도
-`drive_bridge`가 `/xycar_motor`를 발행한다. 실제 실행에는 매번 사용자 승인과
-기존 모터 프로세스 충돌 점검이 필요하다.
+공개 구현은 다음처럼 조합한다.
 
-## 입출력
+- 차선 검출: 공식 CLRerNet 고정 커밋
+- 목표 픽셀 + PID 구조: DonkeyCar `line_follower.py` 참고
+- 가까운 행/먼 행 두 지점 구조: Waveshare `ugv_jetson` 참고
+- PID 계산: MIT `simple-pid` 2.0.1 vendored source
 
-- 입력: `/image_raw`, `/camera_info`, `base_link → default_cam` TF
-- 출력: `/kobot_lane_drive/debug_image`
+프로젝트 코드는 CLRerNet 결과에서 차량 중심 바로 왼쪽 후보를 선택하고, 두 고정
+행에서 x를 선형 보간해 공개 PID에 전달하는 연결부만 담당한다.
+
+## 입출력과 안전 상태
+
+- 입력: `/image_raw`
+- 화면: `/kobot_lane_drive/debug_image`
 - 상태: `/kobot_lane_drive/status` (`READY` 또는 `BLOCKED`)
-- 목표 경로: `/kobot_lane_drive/target_path` (`nav_msgs/Path`, m)
 - 조향 미리보기: `/kobot_lane_drive/steering_preview` (`Float32`, rad)
 
-`/camera_info`의 K 행렬이 0이거나 카메라 TF가 없거나 좌측 차선이 사라지면
-미터 거리와 조향값을 발행하지 않는다. 현재 Kobot 실기에서 확인한 K 행렬은
-전부 0이고 TF도 없으므로 카메라 보정 전 상태는 의도적으로 `BLOCKED`다.
+`lane_perception.launch.py`는 모터 토픽을 발행하지 않는다. 설정 기본값은
+`reference_ready: false`이며, 기준값을 넣기 전에는 `REFERENCE_NOT_READY`로
+차단하고 조향 미리보기를 발행하지 않는다. 좌측 차선이 사라지거나 두 샘플 행 중
+하나를 차선이 덮지 못해도 `BLOCKED`다.
 
-## 실행 단계
+`track_test.launch.py armed:=true`일 때만 별도 `drive_bridge`가
+`/xycar_motor`를 발행한다. 실제 실행에는 매번 사용자 승인과 기존 모터 프로세스,
+토픽 publisher, `/dev/ttyMOTOR` 점유 충돌 점검이 필요하다.
 
-1. 저장 영상: `offline_replay`로 CLRerNet 좌측 차선 선택을 검토한다.
-2. 실시간 무모터: 카메라 내부 보정과 장착 TF를 준비한 뒤
-   `lane_perception.launch.py`를 실행한다.
-3. 바닥 실측: 0.5/1.0/1.5m 표식에서 IPM 거리 오차를 기록한다.
-4. 바퀴를 띄운 시험: 별도 승인 후 `track_test.launch.py armed:=true`를 사용한다.
-5. 트랙 저속: 0.30m/s부터 시작하고 차선 소실 시 정지를 확인한다.
+## 기준 사진 만들기
 
-가상환경·가중치·NMS 빌드 결과는 커밋하지 않는다. 최종 가상환경 위치는
-`/home/xytron/2026_Xytron/real/.venv`다. `clrernet_eval/venv`를 복제해 먼저
-검증하고, 이전 폴더는 검증 완료 전 삭제하지 않는다. Jetson에서는 이 가상환경을
-활성화한 상태로 workspace를 빌드해 ROS entry point도 같은 Python 3.10을 쓴다.
+1. 카메라를 최종 위치에 고정한다.
+2. 트랙의 직선 구간에서 차량 진행방향을 차선과 평행하게 맞춘다.
+3. 차량의 좌측면이 좌측 차선에서 원하는 간격에 오도록 차량을 세운다.
+4. 그 프레임을 `reference.jpg`로 저장한다.
+5. 무모터 offline replay에서 기준값을 생성한다.
+
+```bash
+source /home/xytron/2026_Xytron/real/.venv/bin/activate
+cd /home/xytron/2026_Xytron/real/ros2_ws
+source install/setup.bash
+
+ros2 run kobot_lane_drive offline_replay \
+  --vendor-root src/kobot_lane_drive/third_party/CLRerNet \
+  --config src/kobot_lane_drive/third_party/CLRerNet/configs/clrernet/culane/clrernet_culane_dla34_ema.py \
+  --checkpoint /home/xytron/2026_Xytron/real/models/clrernet_culane_dla34_ema.pth \
+  --reference-image /path/to/reference.jpg \
+  --input /path/to/recorded/images \
+  --output /tmp/kobot_lane_replay
+```
+
+`/tmp/kobot_lane_replay/pixel_reference.json`의 `near_x_ratio`와
+`far_x_ratio`를 `config/lane_drive.yaml`의 `reference_near_x_ratio`,
+`reference_far_x_ratio`에 복사한 후에만 `reference_ready: true`로 바꾼다.
+도구가 YAML을 자동 수정하지 않는 이유는 잘못 고른 기준 사진이 즉시 주행 기준으로
+반영되는 것을 막기 위해서다.
+
+카메라 위치, 각도, 해상도, crop이 하나라도 바뀌면 기존 기준값은 폐기하고 다시
+만든다. 카메라가 고정된 현재 차량에서는 체커보드 보정이나 미터 환산이 필요 없다.
+
+## 검증 순서
+
+1. 여러 저장 프레임을 offline replay하고 원본과 overlay를 함께 확인한다.
+2. 직선과 모든 좌회전에서 선택한 선이 현재 차로의 좌측 경계인지 확인한다.
+3. `near_error_ratio`, `far_error_ratio`, 조향 부호와 최대값을 확인한다.
+4. 실시간 `lane_perception.launch.py`를 무모터로 실행하고 누락·지연을 기록한다.
+5. 모터 단계는 별도 승인과 충돌 점검 후 바퀴를 띄운 상태에서 시작한다.
+
+현재 Windows에는 실제 촬영본, CLRerNet 가중치와 CUDA runtime이 없으므로 단위
+테스트만 수행할 수 있다. 실제 영상 출력은 검증 전까지 반드시
+`출력 생성됨 - 정확성 미검증`으로 취급한다.

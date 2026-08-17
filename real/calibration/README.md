@@ -1,19 +1,23 @@
-# Kobot camera calibration
+# Kobot camera reference policy
 
-`kobot_camera.yaml`은 실제 `/dev/videoCAM`을 ROS `camera_calibration`으로 보정한
-결과만 둔다. 예제값이나 추정값을 복사하지 않는다.
+현재 `kobot_lane_drive`는 같은 트랙, 고정 카메라, 고정 해상도/crop 조건에서
+기준 사진의 픽셀 비율을 유지한다. 따라서 ROS 체커보드 보정, 카메라 K 행렬,
+장착 TF, 미터 거리 환산은 차선 주행의 필수 입력이 아니다.
 
-현재 차량에서 읽은 `/camera_info`는 640x480이지만 `K`, `R`, `P`가 전부 0이고
-카메라 TF도 없다. 이 상태에서 `kobot_lane_drive`는 의도적으로
-`CALIBRATION_INVALID`를 내고 미터 거리와 조향값을 만들지 않는다.
+트랙 직선 구간에서 차량을 차선과 평행하게 맞춘 뒤, 차량의 좌측면이 좌측 차선에서
+원하는 간격에 있도록 세우고 저장한 사진을 기준으로 사용한다.
+`offline_replay --reference-image ...`가 near/far 두 행의
+좌측 차선 x 비율을 `pixel_reference.json`으로 만든다. 사람이 원본과 overlay를
+확인한 뒤 두 값만 `config/lane_drive.yaml`에 옮기고 `reference_ready: true`로
+바꾼다.
 
-필수 실측값:
+다음 중 하나라도 바뀌면 이전 기준값을 사용하지 않는다.
 
-- 640x480 카메라 내부 파라미터 파일 `kobot_camera.yaml`
-- `base_link` 기준 카메라 장착 위치 x/y/z (m)
-- 카메라 장착 roll/pitch/yaw (rad)
+- 카메라 위치 또는 각도
+- 640x480 등 입력 해상도
+- resize 전 crop이나 렌즈
+- 차량 차체와 카메라의 상대 위치
+- 따라갈 트랙 차선 폭 또는 운용 방향
 
-내부 보정은 ROS2 Humble의 공개 `camera_calibration` 패키지를 사용한다. 장착
-자세는 수평 바닥에서 실측하고, `track_test.launch.py`의 `camera_*` 인자로 넣는다.
-IPM 결과가 바닥 표식의 실측 거리와 일치하는지 확인하기 전에는 `armed:=true`를
-사용하지 않는다.
+미터 단위 위치가 필요한 다른 기능에서 실제 카메라 보정을 수행할 수는 있지만,
+추정 K나 다른 카메라의 YAML을 이 픽셀 추종기에 넣지 않는다.

@@ -7,7 +7,7 @@
 | 모듈 | 출처 | 기준 |
 |---|---|---|
 | `kobot_vehicle` | Kobot 차량용 자체 작성 ROS 2 패키지 | 2026-08-13 Jetson 실행본 |
-| `kobot_lane_drive` | Kobot 통합 + 공식 공개 구현 | CLRerNet `dae038f` + IPM `2943925` + PythonRobotics `1fe4fb9` + Shapely 2.1.2 |
+| `kobot_lane_drive` | Kobot 통합 + 공식 공개 구현 | CLRerNet `dae038f` + simple-pid 2.0.1 `6e6f4b0` + DonkeyCar/Waveshare 구조 참고 |
 | `ipm` | https://github.com/ros-sports/ipm | Humble `29439254c6c1eaabfaf1e8a42345594ffd55f3b5` |
 | `vesc` | https://github.com/f1tenth/vesc | `153998df8545fe1781b975df88e411b4e71d4bfe` + 아래 4파일 패치 |
 | `xycar_lidar/YDLidar-SDK` | https://github.com/YDLIDAR/YDLidar-SDK | `16ca1f402453d1c094ada83e94200951ed2f711b` + checksum 로그 억제 1줄 |
@@ -38,7 +38,7 @@ YDLidar SDK 기준 commit에서 의미 있는 내용 변경은 `YDLidar-SDK/src/
 
 `/home/xytron/clrernet_eval`에서 확인한 CLRerNet CULane DLA34 EMA 평가 환경을 최종 저장소의 새 ROS 2 패키지로 이식했다. upstream `libs/`, `configs/`, 라이선스와 문서만 포함하고 가상환경, 데이터셋, 빌드 결과와 가중치는 제외했다.
 
-Jetson PyTorch 2.8 호환을 위해 CUDA NMS 두 소스만 패치했다. 거리/BEV/평행 경로/조향은 직접 구현하지 않고 각각 ros-sports/ipm, Shapely `offset_curve`, PythonRobotics Stanley를 호출한다. 프로젝트 코드는 ROS 인터페이스와 안전 차단, 승인 잠금 모터 형식 adapter만 담당한다.
+Jetson PyTorch 2.8 호환을 위해 CUDA NMS 두 소스만 패치했다. 현재 고정 카메라 방식은 K/BEV/IPM과 미터 거리 경로를 사용하지 않는다. DonkeyCar의 목표 픽셀 PID 구조와 Waveshare의 가까운/먼 샘플 구조를 참고하고, 실제 PID 계산은 MIT `simple-pid` 2.0.1 고정 소스를 포함한다. 프로젝트 코드는 CLRerNet 차선 선택·두 행 보간·공개 PID 연결, ROS 인터페이스와 안전 차단, 승인 잠금 모터 형식 adapter를 담당한다.
 
 ## 장치 설정 자료
 

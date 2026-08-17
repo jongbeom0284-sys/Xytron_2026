@@ -1,0 +1,35 @@
+white_left_drive:
+  ros__parameters:
+    image_topic: /image_raw
+    debug_image_topic: /kobot_lane_drive/white_left/debug_image
+    status_topic: /kobot_lane_drive/white_left/status
+    drive_preview_topic: /kobot_lane_drive/white_left/drive_preview
+    max_processing_hz: 20.0
+    debug_publish_hz: 5.0
+    work_width: 320
+    work_height: 240
+    near_y_ratio: 0.80
+    far_y_ratio: 0.52
+    control_y_ratio: 0.70
+    left_search_ratio: 0.52
+    minimum_path_score: 0.30
+    # Frame 1: y=336px, left boundary x=76px, camera center=320px.
+    desired_left_distance_ratio: 0.38125
+    speed_mps: 0.20
+    steering_sign: -1.0
+    steering_kp: 0.42
+    steering_filter_alpha: 0.35
+    max_steering_rad: 0.34
+    max_steering_rate_rad_s: 1.20
+
+white_left_drive_bridge:
+  ros__parameters:
+    armed: false
+    drive_preview_topic: /kobot_lane_drive/white_left/drive_preview
+    status_topic: /kobot_lane_drive/white_left/status
+    enable_topic: /kobot_lane_drive/record_drive/enabled
+    command_timeout_sec: 0.30
+    max_speed_mps: 0.20
+    max_steering_rad: 0.34
+    angle_scale: 0.0068
+    speed_scale: 0.08

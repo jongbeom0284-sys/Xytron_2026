@@ -26,6 +26,25 @@ lane_preview → /lane_preview/status → dashboard 차선 상태
 
 `lane_preview`는 OpenCV HSV 색상 마스크, Canny edge, Hough 선분을 이용해 카메라 영상 위에 좌우 차선 후보를 그리는 표시 전용 노드다. CLRerNet 모델이 아니며 경로 계획이나 차량 제어를 하지 않는다. 출력 정확도는 실제 트랙 대표 영상으로 별도 검증해야 한다.
 
+## 웹 기록 주행 흐름
+
+```text
+/image_raw
+  → 매 프레임 흰색·저채도·국부 명암 ridge score
+  → 차량 왼쪽의 가장 가까운 연속 흰색 경계 추적
+  → 1번 사진 기준 d=244 px와 현재 경계 비교
+  → 제한된 조향 preview, 최대 0.20 m/s
+  ├→ /kobot_lane_drive/white_left/debug_image
+  ├→ /kobot_lane_drive/white_left/status
+  └→ /kobot_lane_drive/white_left/drive_preview
+      → 승인 잠금 bridge → /xycar_motor
+```
+
+차선 형상은 누적하지 않는다. 새 프레임에서 차선이 한 번 끊기면 마지막 명령을
+유지하지만, 카메라 또는 상태가 0.30초 이상 갱신되지 않으면 bridge는 0을 보낸다.
+웹은 기록 주행 중 0.5초마다 heartbeat를 보내며 1.2초 동안 끊기면 서버가 일시정지한다.
+`lane_preview`와 `fast_lane`은 이 기록 주행의 제어 입력이 아니다.
+
 ## 보정 없는 빠른 차선 흐름
 
 ```text
@@ -45,18 +64,16 @@ lane_preview → /lane_preview/status → dashboard 차선 상태
 ## CLRerNet 좌측 차선 흐름
 
 ```text
-/image_raw → 공식 CLRerNet → 가장 가까운 좌측 경계 영상점
-/camera_info + base_link↔default_cam TF
-  → ros-sports/ipm → 좌측 경계 지면점(m)
-  → Shapely offset_curve(d) → 목표 Path(m)
-  → PythonRobotics Stanley → 조향 미리보기(rad)
+/image_raw → 공식 CLRerNet → 차량 중심 바로 왼쪽 경계 영상점
+  → 고정 near/far 행에서 x 비율 추출
+  → 기준 사진의 near/far x 비율과 비교
+  → vendored simple-pid 두 루프 → 조향 미리보기(rad)
   ├→ /kobot_lane_drive/debug_image
   ├→ /kobot_lane_drive/status
-  ├→ /kobot_lane_drive/target_path
   └→ /kobot_lane_drive/steering_preview
 ```
 
-`d`는 미터 단위다. 카메라 K 행렬이나 TF가 유효하지 않으면 `CALIBRATION_INVALID`로 차단하고 목표 경로와 조향값을 발행하지 않는다.
+카메라와 트랙이 고정되어 있으므로 미터 거리, K 행렬, BEV/IPM, TF를 사용하지 않는다. 원하는 위치에 차량을 세운 사진에서 기준 픽셀 비율을 만든다. `reference_ready=false`, 좌측 차선 소실, near/far 행 샘플 실패 중 하나라도 발생하면 `BLOCKED`이며 새 조향값을 발행하지 않는다. 카메라 위치·각도·해상도·crop이 바뀌면 기준 사진을 다시 만든다.
 
 기본 perception launch는 모터 토픽을 발행하지 않고 `sensors.launch.py`에도 자동 포함되지 않는다. 승인 잠금 `drive_bridge`만 `armed:=true`일 때 `/xycar_motor`를 발행한다.
 
@@ -80,6 +97,10 @@ lane_preview → /lane_preview/status → dashboard 차선 상태
 | 구분 | 이름 | 타입·역할 |
 |---|---|---|
 | 센서 입력 | `/image_raw` | `sensor_msgs/Image`, 카메라 원본 |
+| 기록 주행 상태 | `/kobot_lane_drive/white_left/status` | 현재 프레임 경계·d 오차·조향 JSON |
+| 기록 주행 미리보기 | `/kobot_lane_drive/white_left/drive_preview` | `[steering_rad, speed_mps, confidence]` |
+| 기록 주행 화면 | `/kobot_lane_drive/white_left/debug_image` | 승인된 좌측 경계 초록색 overlay |
+| 기록 주행 enable | `/kobot_lane_drive/record_drive/enabled` | 웹 일시정지/재개 transient-local Bool |
 | 빠른 차선 상태 | `/kobot_lane_drive/fast_lane/status` | 픽셀 검출 상태·confidence·처리시간 JSON |
 | 빠른 픽셀 경로 | `/kobot_lane_drive/fast_lane/pixel_path` | `[y_px, center_x_px, offset_px, confidence]` |
 | 빠른 차선 화면 | `/kobot_lane_drive/fast_lane/debug_image` | 저주기 mask·외곽선·lookahead overlay |
@@ -93,10 +114,9 @@ lane_preview → /lane_preview/status → dashboard 차선 상태
 | 화면 | `/lane_preview/image` | 오버레이 영상 |
 | 화면 | `/lane_preview/status` | 검출 상태 JSON 문자열 |
 | 차선 인식 입력 | `/image_raw` | CLRerNet 입력 영상 |
-| 좌측 차선 화면 | `/kobot_lane_drive/debug_image` | 좌측 경계·목표 경로·오차 overlay |
-| 좌측 차선 상태 | `/kobot_lane_drive/status` | 보정·IPM·거리·조향 상태 JSON |
-| 목표 경로 | `/kobot_lane_drive/target_path` | `nav_msgs/Path`, base_link 미터 좌표 |
-| 조향 미리보기 | `/kobot_lane_drive/steering_preview` | Stanley 조향각 rad |
+| 좌측 차선 화면 | `/kobot_lane_drive/debug_image` | 좌측 경계·near/far 점·픽셀 비율 오차 overlay |
+| 좌측 차선 상태 | `/kobot_lane_drive/status` | 기준값·측정값·픽셀 비율 오차·조향 상태 JSON |
+| 조향 미리보기 | `/kobot_lane_drive/steering_preview` | simple-pid 조향각 rad |
 
 ## HTTP API
 
@@ -106,5 +126,8 @@ dashboard server는 정적 화면과 다음 API를 제공한다.
 - `GET /api/recording`, `POST /api/recording/start`, `POST /api/recording/stop`
 - `GET /api/motor`, `POST /api/motor/arm`, `POST /api/motor/restart`
 - `POST /api/motor/test`, `POST /api/motor/stop`
+- `GET /api/record-drive`, `POST /api/record-drive/start`
+- `POST /api/record-drive/pause`, `POST /api/record-drive/resume`
+- `POST /api/record-drive/finish`, `POST /api/record-drive/heartbeat`
 
 인증·권한 검사가 없으므로 접근 가능한 사용자는 모터 스택을 시작하거나 명령할 수 있다. 신뢰된 로컬망/Tailscale에서만 사용한다.
