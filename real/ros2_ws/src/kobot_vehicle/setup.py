@@ -28,7 +28,6 @@ setup(
         'dashboard_server = kobot_vehicle.dashboard_server:main',
         'motor_adapter = kobot_vehicle.motor_adapter:main',
         'figure_eight = kobot_vehicle.figure_eight:main',
-        'lane_preview = kobot_vehicle.lane_preview_node:main',
         'lidar_avoidance = kobot_vehicle.LidarAvoidance:main',
         'lane_follow = kobot_vehicle.Lane_follow:main',
     ]},

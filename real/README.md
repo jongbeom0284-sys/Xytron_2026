@@ -1,8 +1,8 @@
 # NVIDIA Kobot 실제 차량 기준판
 
-이 디렉터리는 NVIDIA Jetson 차량 `kobot`에서 함께 개발할 ROS 2 Humble 기준판이다. 센서 대시보드, 표시 전용 `lane_preview`, VESC/LiDAR 드라이버와 공개 구현 기반 고정 카메라 좌측 경계 추종 패키지를 포함한다.
+이 디렉터리는 NVIDIA Jetson 차량 `kobot`에서 함께 개발할 ROS 2 Humble 기준판이다. 센서 대시보드, 90번 승인 방식의 무모터 좌측 경계 화면, VESC/LiDAR 드라이버와 고정 카메라 좌측 경계 추종 패키지를 포함한다.
 
-현재 웹 기록 주행은 90번 사진에서 승인한 흰색 좌측 경계를 매 프레임 새로 추적하고, 1번 사진에서 얻은 영상상 거리 `d=244 px`를 유지한다. `fast_lane`과 `lane_preview`는 제어 입력이 아니다. CLRerNet·simple-pid 구현은 비교·후속 검증용으로 함께 보존한다. 기본 launch는 무모터이며 실제 출력 bridge는 명시적인 `armed:=true`와 사용자 승인 때만 실행된다. `track_drive`, `kmu_race`, 과거 평가 폴더는 최종 개발 위치가 아니다.
+현재 차선 화면과 웹 기록 주행은 모두 90번 사진에서 승인한 흰색 좌측 경계를 매 프레임 새로 추적하고, 1번 사진에서 얻은 영상상 거리 `d=244 px`를 사용한다. 기존 `lane_preview`는 삭제했다. CLRerNet·simple-pid 구현은 비교·후속 검증용으로 함께 보존한다. 기본 센서 launch의 `white_left_drive`는 무모터이며 실제 출력 bridge는 명시적인 `armed:=true`와 사용자 승인 때만 실행된다. `track_drive`, `kmu_race`, 과거 평가 폴더는 최종 개발 위치가 아니다.
 
 ## 구조
 
@@ -21,7 +21,7 @@ real/
 └─ system/
 ```
 
-- `kobot_vehicle`: 센서 launch, 대시보드, 웹 주행, 모터 어댑터, `lane_preview`
+- `kobot_vehicle`: 센서 launch, 대시보드, 웹 주행, 모터 어댑터
 - `kobot_lane_drive`: 좌측 차선 검출, 고정 픽셀 기준, PID 조향 미리보기, 승인 잠금 drive bridge
 - `ipm`: 이전 미터 경로 검토 때 가져온 공개 패키지이며 현재 차선 주행 runtime에서는 사용하지 않음
 - `vesc`: F1TENTH ROS 2 VESC 드라이버와 Kobot FW 6.5 호환 패치

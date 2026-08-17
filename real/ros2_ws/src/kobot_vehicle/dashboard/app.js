@@ -17,7 +17,7 @@ let latestImu='-';
 let latestMotor='확인 중';
 let latestHost='kobot';
 let latestPower='대기 중';
-let latestLane={state:'대기 중',confidence:0,offset_px:0};
+let latestLane={state:'WAITING',mode:'WAITING',confidence:0,center_offset_px:0};
 let recordingState={active:false,frames:0,last_path:''};
 let motorState={usb:false,stack_running:false,stack_state:'unknown',active:false,missing_processes:[],result:'잠김',error:null};
 let recordDriveState={state:'idle',result:'대기 중',can_start:true,can_pause:false,can_resume:false,can_finish:false,recording:{frames:0}};
@@ -64,14 +64,14 @@ function cameraCard(){
 }
 
 function laneStreamTopic(){
-  return ['starting','running','paused'].includes(recordDriveState.state)?'/kobot_lane_drive/white_left/debug_image':'/lane_preview/image';
+  return '/kobot_lane_drive/white_left/debug_image';
 }
 
 function laneCard(){
-  return `<div class="card-heading"><div><p class="eyebrow">LANE PREVIEW · MOTOR OFF</p><h3>차선 인식 화면</h3></div><span class="live-badge">LIVE</span></div>
+  return `<div class="card-heading"><div><p class="eyebrow">WHITE LEFT · MOTOR OFF</p><h3>좌측 차선 인식</h3></div><span class="live-badge">LIVE</span></div>
     <div class="camera-frame lane-frame"><img class="lane-stream" data-topic="${laneStreamTopic()}" src="http://${host}:8080/stream?topic=${laneStreamTopic()}" alt="차선 인식 결과 영상"></div>
     <div class="metric"><span>인식 상태</span><strong class="lane-status">${laneStatusText()}</strong></div>
-    <p class="helper">노란색·파란색: 좌우 경계 · 초록색: 인식된 중앙 경로 · 빨간색: 카메라 중심</p>`;
+    <p class="helper">초록색: 현재 프레임에서 추적한 좌측 흰색 차선 · 화면 확인 중 모터 출력 없음</p>`;
 }
 
 function lidarCard(){
@@ -196,8 +196,10 @@ function refreshDynamicValues(){
 }
 
 function laneStatusText(){
-  const labels={both:'양쪽 차선',left_only:'왼쪽만',right_only:'오른쪽만',no_lane:'차선 없음'};
-  return `${labels[latestLane.state]||latestLane.state} · 신뢰도 ${Number(latestLane.confidence||0).toFixed(2)} · 중심 ${Number(latestLane.offset_px||0)>=0?'+':''}${Number(latestLane.offset_px||0)}px`;
+  const labels={TRACKING:'추적 중',HOLD:'차선 끊김 · 이전값 유지',WAITING:'차선 대기',ERROR:'오류'};
+  const mode=latestLane.mode||latestLane.state||'WAITING';
+  const offset=Number(latestLane.center_offset_px||0);
+  return `${labels[mode]||mode} · 신뢰도 ${Number(latestLane.confidence||0).toFixed(2)} · d 오차 ${offset>=0?'+':''}${offset.toFixed(0)}px`;
 }
 
 document.querySelector('.layout-switch').addEventListener('click',event=>{
@@ -344,7 +346,7 @@ new ROSLIB.Topic({ros,name:'/imu',messageType:'sensor_msgs/Imu'}).subscribe(mess
 
 new ROSLIB.Topic({ros,name:'/scan',messageType:'sensor_msgs/LaserScan'}).subscribe(message=>{latestScan=message;refreshDynamicValues()});
 
-new ROSLIB.Topic({ros,name:'/lane_preview/status',messageType:'std_msgs/String'}).subscribe(message=>{
+new ROSLIB.Topic({ros,name:'/kobot_lane_drive/white_left/status',messageType:'std_msgs/String'}).subscribe(message=>{
   try{latestLane=JSON.parse(message.data);refreshDynamicValues()}catch(error){}
 });
 

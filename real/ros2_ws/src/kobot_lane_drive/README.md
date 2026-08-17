@@ -2,7 +2,7 @@
 
 ## 현재 기록 주행: 90번 승인 흰색 좌측 경계
 
-웹의 `기록 주행 시작`은 `fast_lane`이나 `lane_preview`가 아니라, 90번 사진에서
+웹의 차선 화면과 `기록 주행 시작`은 `fast_lane`이 아니라, 90번 사진에서
 사용자가 승인한 흰색 좌측 경계 추적기를 실행한다. 현재 프레임마다 흰색·저채도·
 국부 명암 ridge 점수를 새로 만들고 차량 왼쪽의 가장 가까운 연속 경로를 아래에서
 위로 추적한다. 차선 형상은 프레임 사이에 누적하지 않는다.
@@ -25,8 +25,9 @@ ros2 launch kobot_lane_drive white_left_record_drive.launch.py armed:=false
 출력은 `/kobot_lane_drive/white_left/status`,
 `/kobot_lane_drive/white_left/drive_preview`,
 `/kobot_lane_drive/white_left/debug_image`다. 실제 `/xycar_motor` publisher는
-`armed:=true`일 때만 별도 bridge로 생성된다. `fast_lane`은 비교·보존용이며 웹
-기록 주행의 제어 입력이 아니다.
+`armed:=true`일 때만 별도 bridge로 생성된다. 센서 launch는 `white_left_drive`를
+무모터로 상시 실행한다. 기록 주행은 이를 재사용하고 bridge만 추가한다. `fast_lane`은
+비교·보존용이며 웹 기록 주행의 제어 입력이 아니다.
 
 ## Calibration-free fast lane baseline
 
@@ -86,7 +87,7 @@ publisher 충돌, 모터 속도·가속도 상한과 조향 방향을 다시 확
 - 픽셀 후보 생성률 `94.904%`; 수동 ground truth 정확도와 같은 의미는 아님
 - Jetson 오프라인 처리시간: P50 `15.625 ms`, P95 `18.092 ms`, P99 `19.853 ms`
 - 실제 `/image_raw` 상태 발행 약 `29.55 Hz`, debug 화면 약 `1.96 Hz`
-- 기존 개발용 `lane_preview`가 함께 동작한 상태의 측정이며 motor subscriber는 0
+- 당시 삭제 전 legacy `lane_preview`가 함께 동작한 상태의 측정이며 motor subscriber는 0
 
 현재 결과는 속도 계약을 통과했지만 단일 외곽선 복원 비율이 높고 시간 필터와
 실제 조향 오차 ground truth가 없다. 따라서 `출력 생성됨 - 정확도 미검증` 단계다.

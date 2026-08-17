@@ -15,12 +15,18 @@ def generate_launch_description():
         "white_left_drive.yaml",
     )
     armed = LaunchConfiguration("armed")
+    start_perception = LaunchConfiguration("start_perception")
     max_speed_mps = LaunchConfiguration("max_speed_mps")
     return LaunchDescription([
         DeclareLaunchArgument(
             "armed",
             default_value="false",
             description="Must be true before the motor bridge process exists.",
+        ),
+        DeclareLaunchArgument(
+            "start_perception",
+            default_value="true",
+            description="Start white-left perception in this launch.",
         ),
         DeclareLaunchArgument(
             "max_speed_mps",
@@ -32,6 +38,7 @@ def generate_launch_description():
             executable="white_left_drive",
             name="white_left_drive",
             parameters=[config, {"speed_mps": max_speed_mps}],
+            condition=IfCondition(start_perception),
             output="screen",
         ),
         Node(

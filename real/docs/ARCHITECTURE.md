@@ -2,7 +2,7 @@
 
 ## 실행 경계
 
-`sensors.launch.py`는 카메라, 초음파, IMU, LiDAR, 상태 수집, `lane_preview`, web video server, rosbridge, dashboard server를 실행한다. VESC와 모터 변환기는 실행하지 않는다.
+`sensors.launch.py`는 카메라, 초음파, IMU, LiDAR, 상태 수집, 무모터 `white_left_drive`, web video server, rosbridge, dashboard server를 실행한다. VESC, 모터 변환기, `white_left_drive_bridge`는 실행하지 않는다.
 
 `motor.launch.py`는 `armed:=true`일 때만 VESC 드라이버, Ackermann 변환기, `motor_adapter`를 실행한다. 기본값은 `false`다.
 
@@ -15,16 +15,19 @@ launch 수명주기에 추가한다. 센서 서비스를 사용하지 않을 때
 
 ```text
 /dev/videoCAM → usb_cam → /image_raw ─┬→ web_video_server → 전방 카메라 화면
-                                      ├→ lane_preview → /lane_preview/image
+                                      ├→ white_left_drive → white_left debug·status·preview
                                       └→ dashboard_server → 녹화 API
 /dev/ttyLIDAR → xycar_lidar → /scan → dashboard LiDAR 화면
 /dev/ttyIMU → imu_node → /imu → dashboard IMU 화면
 /dev/ttySonic → ultrasonic_node → /xycar_ultrasonic → dashboard 초음파 화면
 status_node → /kobot/status → dashboard 장치 상태
-lane_preview → /lane_preview/status → dashboard 차선 상태
+white_left_drive → /kobot_lane_drive/white_left/status → dashboard 차선 상태
 ```
 
-`lane_preview`는 OpenCV HSV 색상 마스크, Canny edge, Hough 선분을 이용해 카메라 영상 위에 좌우 차선 후보를 그리는 표시 전용 노드다. CLRerNet 모델이 아니며 경로 계획이나 차량 제어를 하지 않는다. 출력 정확도는 실제 트랙 대표 영상으로 별도 검증해야 한다.
+기존 HSV/Canny/Hough `lane_preview` 노드와 토픽은 삭제했다. 차선 카드는 항상
+`/kobot_lane_drive/white_left/debug_image`와 `/kobot_lane_drive/white_left/status`만
+사용한다. 센서 launch가 실행하는 `white_left_drive`는 조향 미리보기까지만 계산하고
+모터 publisher를 갖지 않는다.
 
 ## 웹 기록 주행 흐름
 
@@ -43,7 +46,8 @@ lane_preview → /lane_preview/status → dashboard 차선 상태
 차선 형상은 누적하지 않는다. 새 프레임에서 차선이 한 번 끊기면 마지막 명령을
 유지하지만, 카메라 또는 상태가 0.30초 이상 갱신되지 않으면 bridge는 0을 보낸다.
 웹은 기록 주행 중 0.5초마다 heartbeat를 보내며 1.2초 동안 끊기면 서버가 일시정지한다.
-`lane_preview`와 `fast_lane`은 이 기록 주행의 제어 입력이 아니다.
+`fast_lane`은 이 기록 주행의 제어 입력이 아니다. 기록 주행 launch는 센서 서비스의
+상시 `white_left_drive`를 재사용하고 승인 잠금 bridge만 추가한다.
 
 ## 보정 없는 빠른 차선 흐름
 
@@ -111,8 +115,6 @@ lane_preview → /lane_preview/status → dashboard 차선 상태
 | 변환 | `/ackermann_cmd` | Ackermann 명령 |
 | VESC 출력 | `/commands/motor/speed` | ERPM 명령 |
 | VESC 출력 | `/commands/servo/position` | servo position 명령 |
-| 화면 | `/lane_preview/image` | 오버레이 영상 |
-| 화면 | `/lane_preview/status` | 검출 상태 JSON 문자열 |
 | 차선 인식 입력 | `/image_raw` | CLRerNet 입력 영상 |
 | 좌측 차선 화면 | `/kobot_lane_drive/debug_image` | 좌측 경계·near/far 점·픽셀 비율 오차 overlay |
 | 좌측 차선 상태 | `/kobot_lane_drive/status` | 기준값·측정값·픽셀 비율 오차·조향 상태 JSON |

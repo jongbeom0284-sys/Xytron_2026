@@ -95,12 +95,15 @@ ros2 launch kobot_vehicle teleop.launch.py start_sensors:=true armed:=true
 활성 센서 서비스와 `start_sensors:=true`를 동시에 사용하지 않는다. 종료 시에는
 0 명령을 보낸 뒤 `Ctrl+C`로 teleop launch를 종료하고 모터 구독자가 0인지 확인한다.
 
-대시보드의 차선 화면은 `/lane_preview/image`와 `/lane_preview/status`를 표시할 뿐 자율주행을 수행하지 않는다.
+대시보드의 차선 화면은 항상 `/kobot_lane_drive/white_left/debug_image`와
+`/kobot_lane_drive/white_left/status`를 사용한다. 기존 `lane_preview` 실행 파일과
+토픽은 없다. 센서 launch의 `white_left_drive`는 무모터이며 화면 확인만으로 차량을
+움직이지 않는다.
 
-웹 `기록 주행`은 별도 `white_left_record_drive.launch.py`를 실행한다. 시작 전에는
-`/lane_preview/image`를 유지하고, 기록 주행 준비·실행·일시정지 중에는
-`/kobot_lane_drive/white_left/debug_image`를 표시한다. Space는 주행과 이미지 저장을
-함께 일시정지·재개하며 종료 버튼은 일시정지 상태에서 마우스로만 활성화된다.
+웹 `기록 주행`은 별도 `white_left_record_drive.launch.py`를
+`start_perception:=false`로 실행해 상시 인식 노드를 재사용하고 승인 잠금 bridge만
+추가한다. Space는 주행과 이미지 저장을 함께 일시정지·재개하며 종료 버튼은
+일시정지 상태에서 마우스로만 활성화된다.
 
 무모터 확인:
 
@@ -112,7 +115,8 @@ ros2 launch kobot_lane_drive white_left_record_drive.launch.py armed:=false
 기존 모터 프로세스, `/xycar_motor` publisher, `/dev/ttyMOTOR` 점유와 조향 부호를
 다시 확인하고 별도 승인을 받는다. 속도 상한은 `0.20 m/s`다.
 
-`kobot_lane_drive`도 기본 센서 launch에 포함되지 않는다. 패키지 빌드, 모델 준비, launch는 각각 승인 후 수행한다. 고정 카메라 기준 사진으로 `pixel_reference.json`을 먼저 만들고 검토한 뒤 YAML에 두 x 비율을 옮긴다. 무모터 launch 후 `/kobot_lane_drive/status`, 조향 미리보기와 debug 영상을 확인한다. `BLOCKED` 상태에서 모터 단계로 넘어가지 않는다.
+`kobot_lane_drive`의 무모터 `white_left_drive`는 기본 센서 launch에 포함된다. CLRerNet
+비교 launch와 승인 잠금 motor bridge는 자동 실행되지 않는다.
 
 ```bash
 ros2 launch kobot_lane_drive lane_perception.launch.py
