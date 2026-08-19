@@ -29,7 +29,7 @@ Jetson 이관 스크립트가 함께 들어 있다. 가중치 `.pth` 자체는 `
 |---|---|---|
 | `Lane_follow.py` | HSV 노란 단일선 슬라이딩 윈도우 + PID. `/xycar_motor` 직접 발행 | 점선 외삽(GHOST/PREDICT) 로직이 `yellow_center.py` 로 이관됐다 |
 | `Lane_follow_white.py.bak` | 위의 흰선 버전 | 참고용 |
-| `LidarAvoidance.py` | 라이다 단독 회피. `/xycar_motor` 직접 발행 | 각도 보정(+pi, 좌측 양수)이 `obstacle_lidar.py` 로 이관됐다 |
+| `LidarAvoidance.py` | 라이다 단독 회피. `/xycar_motor` 직접 발행 | 좌표 규약(좌측 양수)만 `obstacle_lidar.py` 가 물려받았다. 각도 보정값 `+pi` 는 라이다가 차 위에 있다는 가정이라 틀렸고, 실측으로 `-2.1217` 로 다시 잡았다 |
 | `figure_eight.py` | 8자 주행 시험 패턴 | 필요하면 되살린다 |
 
 `Lane_follow.py` 와 `LidarAvoidance.py` 는 `/xycar_motor` 를 직접 발행한다.
