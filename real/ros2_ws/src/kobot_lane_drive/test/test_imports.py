@@ -13,7 +13,11 @@ import pytest
 import kobot_lane_drive
 
 # ROS 런타임이나 CUDA 가 있어야만 import 되는 모듈은 시험 환경에서 건너뛴다.
-NEEDS_RUNTIME = {"twinmixing_center_node", "twinmixing_center_drive_bridge_node"}
+NEEDS_RUNTIME = {
+    "twinmixing_center_node",
+    "twinmixing_center_drive_bridge_node",
+    "cone_corridor_drive_node",
+}
 
 
 def _module_names():

@@ -237,6 +237,53 @@ twinmixing_center_drive:
     # 조향 변화율 제한. 곡선에서 풀락까지 0.26초.
     max_steering_rate_rad_s: 1.8
 
+    # =====================================================================
+    # 라바콘 통로 주행 (S자 및 90도 좌회전 코너)
+    # =====================================================================
+    cone_corridor_width_m: 0.80             # 통로 전체 폭 (약 80cm)
+    cone_single_wall_fallback_margin_m: 0.40 # 단측 벽만 감지 시 가상 중심 오프셋 (통로 반폭)
+    cone_corridor_width_min_m: 0.55         # 통로 폭 최소 유효 범위 (노이즈 배제 게이팅)
+    cone_corridor_width_max_m: 1.05         # 통로 폭 최대 유효 범위 (먼 벽 배제 게이팅)
+    cone_forward_min_m: 0.25                # 전방 탐색 최소 거리
+    cone_forward_max_m: 2.00                # 전방 탐색 최대 거리
+    cone_lateral_max_m: 1.20                # 횡방향 최대 탐색 거리 (외부 벽 배제)
+    cone_slice_step_m: 0.15                 # 전방 거리 슬라이스 분할 간격
+    cone_target_lookahead_m: 0.48           # 목표점 Lookahead 거리 (S자/90도 즉각 추종)
+    cone_drive_speed_mps: 0.25              # 라바콘 기본 주행 속도
+    cone_corner_speed_mps: 0.20             # 급커브/90도 선회 시 감속 속도
+    cone_detection_min_slices: 3            # 유효 슬라이스 최소 개수
+    cone_detection_min_total_points: 4   # 라바콘 감지 인정 최소 점수
+    cone_steering_filter_alpha: 0.40        # 조향 저역통과 필터 (잔떨림 제거)
+    cone_max_steering_rate_rad_s: 1.8       # 조향 변화율 제한 (급조향 방지)
+
+# 라바콘 단독 주행 노드 전용 파라미터 (모든 튜닝 변수)
+cone_corridor_drive:
+  ros__parameters:
+    cone_corridor_width_m: 0.80             # 통로 전체 폭 (약 80cm)
+    cone_single_wall_fallback_margin_m: 0.40 # 단측 벽만 감지 시 가상 중심 오프셋 (통로 반폭)
+    cone_corridor_width_min_m: 0.50         # 통로 폭 최소 유효 범위
+    cone_corridor_width_max_m: 1.25         # 통로 폭 최대 유효 범위 (1.25m 이내 양측 콘 모두 인정)
+    cone_forward_min_m: 0.20                # 전방 탐색 최소 거리 (범퍼 앞 20cm)
+    cone_forward_max_m: 1.60                # 전방 탐색 최대 거리 (1.6m — 코너 선회 구간 전체 포착)
+    cone_lateral_max_m: 0.85                # 횡방향 최대 탐색 거리 (좌우 85cm 넉넉히 수용)
+    cone_cluster_distance_tolerance_m: 0.12 # 유클리드 군집화 거리 임계값 (12cm)
+    cone_min_cluster_points: 3              # 라바콘 최소 반사점 (잡음 제거)
+    cone_max_cluster_points: 25             # 라바콘 최대 반사점
+    cone_min_cluster_span_m: 0.03           # 라바콘 최소 외경
+    cone_max_cluster_span_m: 0.25           # 라바콘 최대 외경 (25cm 초과 긴 벽 완전 차단)
+    cone_max_link_distance_m: 0.50          # 라바콘 간 최대 연결 거리 (50cm 초과 시 대각선 오연결 차단)
+    cone_slice_step_m: 0.10                 # 전방 거리 슬라이스 분할 간격 (10cm 촘촘하게)
+    cone_target_lookahead_m: 0.65           # 목표점 Lookahead 거리 (코너 중앙 최적화: 0.65m)
+    cone_steering_gain: 1.7                 # 조향 추종 게인 (부드러운 적정 선회각)
+    cone_heading_gain: 0.15                 # 코너 벽면 곡률 피드포워드 게인 (인코스 파고들기 완화)
+    cone_drive_speed_mps: 0.30              # 라바콘 기본 주행 속도 (모터 기동 토크 확보: 0.30 m/s)
+    cone_corner_speed_mps: 0.25             # 급커브 선회 감속 속도 (최소 구동 속도: 0.25 m/s)
+    cone_detection_min_slices: 2            # 유효 슬라이스 최소 개수
+    cone_detection_min_total_points: 3      # 라바콘 감지 인정 최소 점수
+    cone_steering_filter_alpha: 0.60        # 조향 저역통과 필터 (빠른 코너 반응성 확보)
+    cone_max_steering_rate_rad_s: 2.5       # 조향 변화율 제한 (급선회 조향 허용)
+    lidar_angle_offset_rad: -2.1217         # 라이다 센서 전방 보정 각도
+
 # 실제 모터로 나가는 유일한 노드. armed 없이는 프로세스조차 생기지 않는다.
 twinmixing_center_drive_bridge:
   ros__parameters:

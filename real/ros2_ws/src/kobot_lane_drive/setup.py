@@ -23,6 +23,7 @@ data_files = [
     ("share/" + PACKAGE_NAME, ["package.xml", "README.md", "PROVENANCE.md"]),
     ("share/" + PACKAGE_NAME + "/launch", [
         "launch/twinmixing_center_record_drive.launch.py",
+        "launch/cone_corridor_drive.launch.py",
     ]),
     ("share/" + PACKAGE_NAME + "/config", [
         "config/twinmixing_center.yaml",
@@ -46,6 +47,7 @@ setup(
         "console_scripts": [
             "twinmixing_center_drive = kobot_lane_drive.twinmixing_center_node:main",
             "twinmixing_center_drive_bridge = kobot_lane_drive.twinmixing_center_drive_bridge_node:main",
+            "cone_corridor_drive = kobot_lane_drive.cone_corridor_drive_node:main",
             "recording_lane_viewer = kobot_lane_drive.recording_lane_viewer:main",
         ],
     },
