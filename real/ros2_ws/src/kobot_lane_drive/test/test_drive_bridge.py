@@ -15,4 +15,4 @@ def test_converts_preview_radians_to_existing_motor_adapter_contract():
 
 
 def test_clamps_legacy_command():
-    assert make_legacy_command(-1.0, 9.0, 0.0068, 0.08, True, True) == [50.0, 50.0]
+    assert make_legacy_command(-1.0, 9.0, 0.0068, 0.08, True, True) == [70.0, 50.0]

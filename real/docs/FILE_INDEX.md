@@ -35,13 +35,13 @@
 | `real/ros2_ws/src/kobot_vehicle/config/lidar.yaml` | Kobot 차량 실행본 (2026-08-13) | LiDAR 파라미터 | launch → xycar_lidar | 검토·테스트 후 수정 가능 |
 | `real/ros2_ws/src/kobot_vehicle/config/ultrasonic.yaml` | Kobot 차량 실행본 (2026-08-13) | 초음파 파라미터 | launch → ultrasonic_node | 검토·테스트 후 수정 가능 |
 | `real/ros2_ws/src/kobot_vehicle/config/vesc.yaml` | Kobot 차량 실행본 (2026-08-13) | VESC 포트·명령 제한 | launch → vesc_driver | 검토·테스트 후 수정 가능 |
-| `real/ros2_ws/src/kobot_vehicle/dashboard/app.js` | Kobot 차량 실행본 + 기록 주행 UI | 대시보드·WASD 20 Hz·기록 주행 Space pause/resume | HTTP/ROSBridge 입력 → DOM·/xycar_motor·record-drive API | 검토·테스트 후 수정 가능 |
+| `real/ros2_ws/src/kobot_vehicle/dashboard/app.js` | Kobot 차량 실행본 + 기록 주행·복구 UI | 대시보드·WASD 20 Hz·기록 주행·MJPEG 재연결·센서 복구 | HTTP/ROSBridge 입력 → DOM·/xycar_motor·record-drive/recovery API | 검토·테스트 후 수정 가능 |
 | `real/ros2_ws/src/kobot_vehicle/dashboard/drive.css` | Kobot 차량 실행본 (2026-08-13) | 주행 카드 스타일 | 주행 DOM → 화면 스타일 | 검토·테스트 후 수정 가능 |
 | `real/ros2_ws/src/kobot_vehicle/dashboard/index.html` | Kobot 차량 실행본 (2026-08-13) | 대시보드 HTML 진입점 | 브라우저 요청 → 화면 골격 | 검토·테스트 후 수정 가능 |
 | `real/ros2_ws/src/kobot_vehicle/dashboard/roslib.min.js` | roslibjs vendored minified asset | vendored roslib 브라우저 client | WebSocket → ROS topic API | 직접 수정 금지; upstream 교체 |
 | `real/ros2_ws/src/kobot_vehicle/dashboard/style.css` | Kobot 차량 실행본 (2026-08-13) | 대시보드 공통 스타일 | HTML class → 화면 스타일 | 검토·테스트 후 수정 가능 |
 | `real/ros2_ws/src/kobot_vehicle/kobot_vehicle/__init__.py` | Kobot 차량 실행본 (2026-08-13) | Python package marker | Python import 입력 | 검토·테스트 후 수정 가능 |
-| `real/ros2_ws/src/kobot_vehicle/kobot_vehicle/dashboard_server.py` | Kobot 차량 실행본 + 기록 주행 제어 | 정적 웹·장치·녹화·motor·record-drive 상태기계 | HTTP·/image_raw·white_left status → API·세션 기록·/xycar_motor | 승인·heartbeat·일시정지 gate 유지 |
+| `real/ros2_ws/src/kobot_vehicle/kobot_vehicle/dashboard_server.py` | Kobot 차량 실행본 + 기록 주행·복구 제어 | 정적 웹·장치·녹화·motor·record-drive·센서 복구 상태기계 | HTTP·/image_raw·white_left status → API·세션 기록·/xycar_motor·프로세스 재시작 | 승인·heartbeat·일시정지·모터 선종료 gate 유지 |
 | `real/ros2_ws/src/kobot_vehicle/kobot_vehicle/figure_eight.py` | Kobot 차량 실행본 (2026-08-13) | 수동 승인용 8자 시험 publisher | 시험 파라미터 → /xycar_motor | 검토·테스트 후 수정 가능 |
 | `real/ros2_ws/src/kobot_vehicle/kobot_vehicle/imu_node.py` | Kobot 차량 실행본 (2026-08-13) | IMU serial parser/publisher | /dev/ttyIMU → /imu | 검토·테스트 후 수정 가능 |
 | `real/ros2_ws/src/kobot_vehicle/kobot_vehicle/motor_adapter.py` | Kobot 차량 실행본 (2026-08-13) | 차량 명령 안전 변환기 | /xycar_motor → /ackermann_cmd | 검토·테스트 후 수정 가능 |
@@ -324,4 +324,5 @@
 | `real/ros2_ws/src/xycar_lidar/startup/initenv.sh` | Kobot LiDAR ROS 2 wrapper (2026-08-13) | 모듈 지원 파일 | 빌드·문서·runtime 지원 | 실장·빌드 검증 후 수정 가능 |
 | `real/system/env/kobot_env.sh.example` | Kobot 프로젝트 자체 작성 | ROS 2 환경 예제 | shell source → ROS 환경변수 | 검토·검증 후 수정 가능 |
 | `real/system/systemd/kobot-sensors.service.example` | Kobot 프로젝트 자체 작성 | 센서 dashboard 서비스 예제 | systemd → sensors.launch.py | 검토·검증 후 수정 가능 |
+| `real/system/sudoers/kobot-sensors` | Kobot 프로젝트 자체 작성 | 센서 dashboard 서비스 제한 NOPASSWD 규칙 | xytron 운영 명령 → kobot-sensors.service start/stop/restart | root 0440·visudo 검사 후 설치; 명령 범위 확대 금지 |
 | `real/system/udev/10-kobot.rules` | Kobot 프로젝트 자체 작성 | USB 장치 고정 별칭 규칙 | USB VID/PID → /dev 별칭 | 검토·검증 후 수정 가능 |

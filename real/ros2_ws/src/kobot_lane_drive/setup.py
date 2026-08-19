@@ -26,17 +26,20 @@ data_files = [
         "launch/fast_lane_track_test.launch.py",
         "launch/lane_perception.launch.py",
         "launch/track_test.launch.py",
+        "launch/twinmixing_center_record_drive.launch.py",
         "launch/white_left_record_drive.launch.py",
     ]),
     ("share/" + PACKAGE_NAME + "/config", [
         "config/fast_lane_control.yaml",
         "config/fast_lane.yaml",
         "config/lane_drive.yaml",
+        "config/twinmixing_center.yaml",
         "config/white_left_drive.yaml",
     ]),
 ]
 data_files += install_tree("third_party/CLRerNet", "third_party/CLRerNet")
 data_files += install_tree("third_party/simple_pid", "third_party/simple_pid")
+data_files += install_tree("third_party/TwinMixing", "third_party/TwinMixing")
 data_files += install_tree("patches", "patches")
 
 
@@ -49,7 +52,7 @@ setup(
     zip_safe=False,
     maintainer="xytron",
     maintainer_email="xytron@kobot.local",
-    description="Fixed-camera white-left pixel follower with gated drive bridge",
+    description="TwinMixing CUDA center-line follower with gated drive bridge",
     license="MIT",
     entry_points={
         "console_scripts": [
@@ -60,8 +63,11 @@ setup(
             "lane_perception = kobot_lane_drive.lane_perception_node:main",
             "offline_replay = kobot_lane_drive.offline_replay:main",
             "drive_bridge = kobot_lane_drive.drive_bridge_node:main",
+            "twinmixing_center_drive = kobot_lane_drive.twinmixing_center_node:main",
+            "twinmixing_center_drive_bridge = kobot_lane_drive.twinmixing_center_drive_bridge_node:main",
             "white_left_drive = kobot_lane_drive.white_left_drive_node:main",
             "white_left_drive_bridge = kobot_lane_drive.white_left_drive_bridge_node:main",
+            "recording_lane_viewer = kobot_lane_drive.recording_lane_viewer:main",
         ],
     },
 )

@@ -17,13 +17,34 @@ white_left_drive:
     # Stop the displayed lane when its white evidence disappears.
     continuation_minimum_score: 0.25
     continuation_maximum_gap_rows: 5
+    # Stop a displayed path instead of following a sharp false continuation.
+    sharp_turn_window_rows: 5
+    maximum_turn_angle_deg: 60.0
+    # Bright-stripe edge pair and smooth-curve fit, calibrated at 640x480.
+    edge_gradient_threshold: 25.0
+    stripe_minimum_width_ratio: 0.00625
+    stripe_maximum_width_ratio: 0.04375
+    stripe_minimum_contrast: 7.0
+    stripe_maximum_saturation: 115.0
+    ransac_iterations: 1200
+    ransac_residual_ratio: 0.0109375
+    ransac_minimum_inliers: 12
+    # A boundary must move toward the image center as it rises through the ROI.
+    minimum_inward_progress_ratio: 0.01875
+    maximum_bottom_slope_error_ratio: 0.125
+    bottom_extrapolation_ratio: 0.125
     # Frame 1: y=336px, left boundary x=76px, camera center=320px.
     desired_left_distance_ratio: 0.38125
-    speed_mps: 0.20
+    # With only one boundary, target 180px from it instead of the BOTH value 244px.
+    single_lane_distance_ratio: 0.28125
+    speed_mps: 0.50
     steering_sign: -1.0
     steering_kp: 0.42
+    # Keep the controller gain unchanged; amplify only the requested angle.
+    steering_output_gain: 4.0
     steering_filter_alpha: 0.35
-    max_steering_rad: 0.34
+    # User-selected test limit: legacy +/-70; 70 * 0.0068 = 0.476 rad.
+    max_steering_rad: 0.476
     max_steering_rate_rad_s: 1.20
 
 white_left_drive_bridge:
@@ -33,7 +54,7 @@ white_left_drive_bridge:
     status_topic: /kobot_lane_drive/white_left/status
     enable_topic: /kobot_lane_drive/record_drive/enabled
     command_timeout_sec: 0.30
-    max_speed_mps: 0.20
-    max_steering_rad: 0.34
+    max_speed_mps: 0.50
+    max_steering_rad: 0.476
     angle_scale: 0.0068
     speed_scale: 0.08

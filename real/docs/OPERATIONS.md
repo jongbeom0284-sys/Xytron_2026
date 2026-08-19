@@ -100,6 +100,10 @@ ros2 launch kobot_vehicle teleop.launch.py start_sensors:=true armed:=true
 토픽은 없다. 센서 launch의 `white_left_drive`는 무모터이며 화면 확인만으로 차량을
 움직이지 않는다.
 
+debug 화면은 동일한 y 범위의 좌·우 대칭 ROI, 화면 중앙, 좌우 `d=244px` 기준점,
+현재 프레임의 좌측 초록 경계와 우측 자홍 경계를 함께 표시한다. 이 단계의 실제 조향은
+기존 좌측 경계 기준을 유지하며, 우측 결과는 ID·단독 추종 적용 전 시각 검증용이다.
+
 웹 `기록 주행`은 별도 `white_left_record_drive.launch.py`를
 `start_perception:=false`로 실행해 상시 인식 노드를 재사용하고 승인 잠금 bridge만
 추가한다. Space는 주행과 이미지 저장을 함께 일시정지·재개하며 종료 버튼은
@@ -117,6 +121,10 @@ ros2 launch kobot_lane_drive white_left_record_drive.launch.py armed:=false
 `0.40`, `0.50 m/s` 중 하나를 선택하며, 선택값은 해당 세션의 detector preview와
 bridge 상한에 함께 적용된다. 각 시작은 밀리초 단위의 새 저장 폴더를 만들고,
 일시정지·재개는 같은 폴더를 유지하며, 종료 후 다음 시작은 별도 폴더에 저장한다.
+
+좌측 차선 제어의 `steering_kp=0.42`는 유지한다. 2026-08-17 정지 조향 시험에서
+확인한 `/xycar_motor` `-30~+30` 범위에 맞춰 `steering_output_gain=2.0`을 적용하고,
+최종 조향은 `max_steering_rad=0.204`로 제한한다. VESC 서보 gain/offset은 변경하지 않는다.
 
 `kobot_lane_drive`의 무모터 `white_left_drive`는 기본 센서 launch에 포함된다. CLRerNet
 비교 launch와 승인 잠금 motor bridge는 자동 실행되지 않는다.
@@ -145,6 +153,10 @@ ros2 launch kobot_lane_drive track_test.launch.py \
 - 서버와 `motor_adapter`도 `2.16 m/s` 상한을 독립적으로 검사
 - 기록 주행은 시작 전 `0.20~0.50 m/s` 선택, Space 일시정지/재개, 일시정지 후 마우스 종료
 - 기록 주행 heartbeat 단절 1.2초 시 서버 일시정지
+- `화면·센서 복구 > 영상 새로고침`은 브라우저의 기존 MJPEG 연결만 닫고 다시 연다. ROS 노드와 모터에는 손대지 않는다.
+- 카메라·차선 인식·영상 서버·LiDAR·초음파·IMU는 각각 재시작하거나, 영상 묶음/전체 센서 묶음으로 재시작할 수 있다.
+- 실제 구성요소 재시작은 녹화·기록 주행·시간 주행 중에는 거부된다. 모터 스택이 남아 있으면 0 명령 후 종료한 다음 센서를 재시작한다.
+- WASD 무장·시간 주행·기록 주행 시작은 dashboard 외 `/xycar_motor` publisher가 하나라도 있으면 거부한다. 이전 teleop 노드를 종료한 뒤 다시 시도한다.
 
 모터 API에는 인증이 없다. dashboard 포트와 rosbridge를 인터넷에 직접 노출하지 않는다.
 
@@ -163,6 +175,12 @@ ros2 launch kobot_lane_drive track_test.launch.py \
 `motor.launch.py`의 `armed:=false` 기본값을 바꾸지 않는다.
 
 ## 7. systemd와 udev
+
+센서 대시보드 서비스 재가동 때 비밀번호를 저장하거나 명령줄에 넣지 않는다. 최초 한
+번만 관리자가 `real/system/sudoers/kobot-sensors`를
+`/etc/sudoers.d/kobot-sensors`에 root 소유·`0440` 권한으로 설치하고 `visudo -cf`로
+검사한다. 이 규칙은 `kobot-sensors.service`의 start/stop/restart만 허용하며 다른 sudo
+명령이나 모터 서비스 권한은 열지 않는다.
 
 `system/systemd/kobot-sensors.service.example`과 `system/env/kobot_env.sh.example`은 설치 예제다. 저장소 checkout만으로 복사·enable·start되지 않는다. 실제 경로와 사용자·그룹을 검토한 뒤 승인받아 설치한다. 서비스는 sensor launch만 실행하고 모터를 실행하지 않는다.
 

@@ -78,3 +78,44 @@ def test_white_left_drive_bridge_requires_explicit_arming():
     assert 'default_value="false"' in launch
     assert "IfCondition(armed)" in launch
     assert 'self.create_publisher(\n            Float32MultiArray,\n            "/xycar_motor"' in bridge
+
+
+def test_white_left_steering_uses_verified_angle_multiplier_and_limit():
+    package_root = Path(__file__).parents[1]
+    node = (
+        package_root / "kobot_lane_drive" / "white_left_drive_node.py"
+    ).read_text(encoding="utf-8")
+    bridge = (
+        package_root / "kobot_lane_drive" / "white_left_drive_bridge_node.py"
+    ).read_text(encoding="utf-8")
+    config = (package_root / "config" / "white_left_drive.yaml").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'declare_parameter("steering_kp", 0.42)' in node
+    assert 'declare_parameter("steering_output_gain", 4.0)' in node
+    assert 'declare_parameter("single_lane_distance_ratio", 180.0 / 640.0)' in node
+    assert '* float(self.get_parameter("steering_output_gain").value)' in node
+    assert 'declare_parameter("max_steering_rad", 0.476)' in node
+    assert 'declare_parameter("max_steering_rad", 0.476)' in bridge
+    assert "steering_kp: 0.42" in config
+    assert "steering_output_gain: 4.0" in config
+    assert "single_lane_distance_ratio: 0.28125" in config
+    assert config.count("max_steering_rad: 0.476") == 2
+
+
+def test_white_lane_control_uses_both_sides_and_stops_when_lost():
+    package_root = Path(__file__).parents[1]
+    node = (
+        package_root / "kobot_lane_drive" / "white_left_drive_node.py"
+    ).read_text(encoding="utf-8")
+    bridge = (
+        package_root / "kobot_lane_drive" / "white_left_drive_bridge_node.py"
+    ).read_text(encoding="utf-8")
+
+    assert "select_lane_control" in node
+    assert 'payload["used_lane"] = used_lane' in node
+    assert '"mode": "HOLD"' in node
+    assert '"reason": "both_lanes_lost_hold_last"' in node
+    assert 'READY_MODES = {"TRACKING", "HOLD"}' in bridge
+    assert 'maximum_speed = float(self.get_parameter("max_speed_mps").value)' in bridge

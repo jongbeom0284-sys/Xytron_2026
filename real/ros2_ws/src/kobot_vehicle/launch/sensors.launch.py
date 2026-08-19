@@ -1,5 +1,5 @@
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, SetEnvironmentVariable
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -15,15 +15,26 @@ def generate_launch_description():
     ultrasonic = LaunchConfiguration('ultrasonic')
     imu = LaunchConfiguration('imu')
     lidar = LaunchConfiguration('lidar')
+    torch_site = os.environ.get(
+        'KOBOT_TORCH_SITE',
+        '/home/xytron/.venvs/twinmixing/lib/python3.10/site-packages',
+    )
+    inherited_pythonpath = os.environ.get('PYTHONPATH', '')
+    pythonpath = torch_site + (os.pathsep + inherited_pythonpath if inherited_pythonpath else '')
     return LaunchDescription([
+        SetEnvironmentVariable('PYTHONPATH', pythonpath),
         DeclareLaunchArgument('camera', default_value='true'),
         DeclareLaunchArgument('ultrasonic', default_value='true'),
         DeclareLaunchArgument('imu', default_value='true'),
         DeclareLaunchArgument('lidar', default_value='true'),
         Node(package='usb_cam', executable='usb_cam_node_exe', name='camera',
              parameters=[os.path.join(config, 'camera.yaml')], condition=IfCondition(camera)),
-        Node(package='kobot_lane_drive', executable='white_left_drive',
-             name='white_left_drive', condition=IfCondition(camera), output='screen'),
+        Node(package='kobot_lane_drive', executable='twinmixing_center_drive',
+             name='twinmixing_center_drive',
+             parameters=[os.path.join(
+                 get_package_share_directory('kobot_lane_drive'),
+                 'config', 'twinmixing_center.yaml')],
+             condition=IfCondition(camera), output='screen'),
         Node(package='kobot_vehicle', executable='ultrasonic_node',
              parameters=[os.path.join(config, 'ultrasonic.yaml')], condition=IfCondition(ultrasonic)),
         Node(package='kobot_vehicle', executable='imu_node',
