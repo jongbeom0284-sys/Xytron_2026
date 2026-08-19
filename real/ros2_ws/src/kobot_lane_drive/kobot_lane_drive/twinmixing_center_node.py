@@ -100,6 +100,8 @@ class TwinMixingCenterNode(Node):
         self._last_speed_mps = 0.0
         self._last_cross_error = 0.0
         self._last_tangent = 0.0
+        self._last_normalized_error = 0.0
+        self._error_rate = 0.0
         self._last_valid_preview: tuple[float, float, float] | None = None
         self._fps = 0.0
 
@@ -231,7 +233,9 @@ class TwinMixingCenterNode(Node):
         # 4.0 은 오차 91px 만에 최대 조향에 닿아 오버슈트를 키웠다. 절반으로 낮추고
         # 부족한 반응은 차선 기울기 항이 메운다.
         self.declare_parameter("steering_output_gain", 2.0)
-        self.declare_parameter("steering_heading_gain", 1.0)
+        # 화면 기울기 항은 쓰지 않는다. 원근이 섞여 가로오차와 반대로 작용했다.
+        self.declare_parameter("steering_kd", 0.35)
+        self.declare_parameter("steering_rate_filter_alpha", 0.30)
         self.declare_parameter("steering_near_y_ratio", 0.76)
         self.declare_parameter("steering_minimum_span_ratio", 0.06)
         self.declare_parameter("steering_filter_alpha", 0.35)
@@ -418,16 +422,32 @@ class TwinMixingCenterNode(Node):
     def _tracking_steering(
         self, cross_error_px: float, tangent_rad: float, width: int, now: float
     ) -> float:
+        """가로오차 비례 + 그 오차의 시간 미분.
+
+        미분 항이 감쇠다. 차가 중앙으로 다가오는 중이면 오차가 줄고 있으므로 미분이
+        음수가 되어 조향을 미리 푼다. 중앙에 닿을 때 조향이 이미 0 에 가까워야
+        그대로 지나쳐 반대편으로 넘어가지 않는다.
+
+        화면 속 차선 기울기는 쓰지 않는다. 원근 때문에 나란히 선 차도 기울기가
+        음수로 나와 가로오차와 반대로 작용한다. 실제로 그것 때문에 조향 부호가
+        뒤집힌 주행이 있었다.
+        """
         dt = 0.05 if self._last_control_at <= 0.0 else max(
             0.001, min(0.20, now - self._last_control_at)
         )
         self._last_control_at = now
         normalized_error = cross_error_px / max(1.0, width * 0.5)
+
+        raw_rate = (normalized_error - self._last_normalized_error) / dt
+        self._last_normalized_error = normalized_error
+        alpha = float(self.get_parameter("steering_rate_filter_alpha").value)
+        self._error_rate += alpha * (raw_rate - self._error_rate)
+
         target = float(self.get_parameter("steering_sign").value) * (
             float(self.get_parameter("steering_kp").value)
             * float(self.get_parameter("steering_output_gain").value)
             * normalized_error
-            + float(self.get_parameter("steering_heading_gain").value) * tangent_rad
+            + float(self.get_parameter("steering_kd").value) * self._error_rate
         )
         maximum = float(self.get_parameter("max_steering_rad").value)
         target = max(-maximum, min(maximum, target))
@@ -615,6 +635,7 @@ class TwinMixingCenterNode(Node):
             "maneuvers_enabled": bool(self.get_parameter("maneuvers_enabled").value),
             "cross_error_px": rounded(self._last_cross_error),
             "lane_tangent_deg": rounded(math.degrees(self._last_tangent)),
+            "error_rate": rounded(self._error_rate, 3),
             "steering_rad": round(float(steering), 5),
             "speed_mps": round(float(preview[1]), 3),
             "inference_ms": round(inference_ms, 2),
