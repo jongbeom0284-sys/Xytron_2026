@@ -280,6 +280,41 @@ def extract_center_path(
     return _fit_path(region_samples, region_widths, region_lane_supported, attempted_rows, width, height, config, "REGION_CENTER")
 
 
+def _lane_side_masks(
+    driving: np.ndarray, fitted_points: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """중앙선을 기준으로 주행 영역을 좌/우 차선으로 가른다 (화면 표시용)."""
+    height, width = driving.shape
+    center_x = np.full(height, np.nan, dtype=np.float64)
+    if fitted_points is not None and len(fitted_points) >= 2:
+        ys = np.clip(fitted_points[:, 1].astype(int), 0, height - 1)
+        center_x[ys] = fitted_points[:, 0]
+        known = np.flatnonzero(~np.isnan(center_x))
+        if known.size >= 2:
+            rows = np.arange(height)
+            center_x = np.interp(rows, known, center_x[known], left=np.nan, right=np.nan)
+    valid = ~np.isnan(center_x)
+    if not valid.any():
+        empty = np.zeros_like(driving)
+        return empty, empty
+    columns = np.arange(width)[None, :]
+    boundary = np.where(valid, center_x, -1.0)[:, None]
+    inside = valid[:, None]
+    left = driving & inside & (columns < boundary)
+    right = driving & inside & (columns > boundary)
+    return left, right
+
+
+def _tint(overlay: np.ndarray, mask: np.ndarray, colour, strength: float) -> None:
+    if not np.any(mask):
+        return
+    layer = np.zeros_like(overlay)
+    layer[:] = colour
+    overlay[mask] = cv2.addWeighted(
+        overlay[mask], 1.0 - strength, layer[mask], strength, 0
+    )
+
+
 def render_overlay(
     frame: np.ndarray,
     driving_mask: np.ndarray,
@@ -290,22 +325,27 @@ def render_overlay(
     fps: float,
     device_name: str,
     control_mode: str | None = None,
+    yellow_mask: np.ndarray | None = None,
+    decision=None,
+    occupancy=None,
+    sectors=None,
 ) -> np.ndarray:
     overlay = frame.copy()
     driving = driving_mask.astype(bool)
     lane = lane_mask.astype(bool)
-    if np.any(driving):
-        blue = np.zeros_like(overlay)
-        blue[:] = (255, 0, 0)
-        overlay[driving] = cv2.addWeighted(
-            frame[driving], 0.42, blue[driving], 0.58, 0
-        )
-    if np.any(lane):
-        green = np.zeros_like(overlay)
-        green[:] = (0, 255, 0)
-        overlay[lane] = cv2.addWeighted(
-            overlay[lane], 0.35, green[lane], 0.65, 0
-        )
+
+    # 좌/우 차선을 서로 다른 색으로 칠하고, 지금 쓰는 차선을 진하게 한다.
+    left_lane, right_lane = _lane_side_masks(driving, result.fitted_points)
+    active = None if decision is None else decision.state
+    left_strength = 0.58 if active == "SHIFT_LEFT" else 0.34
+    right_strength = 0.58 if active == "SHIFT_RIGHT" else 0.34
+    _tint(overlay, left_lane, (200, 90, 0), left_strength)
+    _tint(overlay, right_lane, (150, 60, 190), right_strength)
+    _tint(overlay, driving & ~left_lane & ~right_lane, (255, 0, 0), 0.45)
+
+    _tint(overlay, lane, (0, 255, 0), 0.55)
+    if yellow_mask is not None:
+        _tint(overlay, yellow_mask.astype(bool), (0, 235, 255), 0.92)
 
     for x, y in result.raw_points[::2]:
         cv2.circle(overlay, (int(x), int(y)), 2, (0, 165, 255), -1, cv2.LINE_AA)
@@ -329,24 +369,20 @@ def render_overlay(
         )
     anchor = (frame.shape[1] // 2, frame.shape[0] - 1)
     if result.lookahead is not None:
+        target_x = (
+            int(round(decision.target_x_px)) if decision is not None else result.lookahead[0]
+        )
+        target = (target_x, result.lookahead[1])
         cv2.arrowedLine(
-            overlay,
-            anchor,
-            result.lookahead,
-            (255, 255, 255),
-            3,
-            cv2.LINE_AA,
-            tipLength=0.08,
+            overlay, anchor, target, (255, 255, 255), 3, cv2.LINE_AA, tipLength=0.08
         )
-        cv2.drawMarker(
-            overlay,
-            result.lookahead,
-            (0, 0, 255),
-            cv2.MARKER_CROSS,
-            24,
-            4,
-            cv2.LINE_AA,
-        )
+        cv2.drawMarker(overlay, target, (0, 0, 255), cv2.MARKER_CROSS, 24, 4, cv2.LINE_AA)
+        if decision is not None and target_x != result.lookahead[0]:
+            # 중앙선 자체 위치도 같이 보여줘야 왜 비켜섰는지 읽힌다.
+            cv2.drawMarker(
+                overlay, result.lookahead, (0, 255, 255), cv2.MARKER_TILTED_CROSS, 18, 2,
+                cv2.LINE_AA,
+            )
 
     direction = "CENTER"
     if result.center_offset_px is not None:
@@ -355,17 +391,40 @@ def render_overlay(
         elif result.center_offset_px < -6:
             direction = "LEFT"
     legacy_angle = steering_rad / 0.0068
+
+    drive_line = decision.state if decision is not None else "-"
+    blocked = decision.blocked_side if decision is not None else None
+    lidar_text = "LIDAR -"
+    if sectors is not None:
+        def metres(value):
+            return "-" if value is None else f"{value:.2f}m"
+
+        lidar_text = (
+            f"LIDAR L {metres(sectors.left_m)}  F {metres(sectors.front_m)}  "
+            f"R {metres(sectors.right_m)}"
+        )
+    lane_text = "LANES -"
+    if occupancy is not None and occupancy.measured_rows > 0:
+        lane_text = (
+            f"LANES L {occupancy.left_width_px:.0f}px  R {occupancy.right_width_px:.0f}px"
+            + (f"  NARROW {occupancy.narrow_side.upper()}" if occupancy.narrow_side else "")
+        )
+
     lines = [
-        f"TwinMixing CUDA | {device_name}" + (f" | CONTROL {control_mode}" if control_mode else ""),
-        f"STATE {result.state}  {result.path_source}  CONF {result.confidence:.2f}  {inference_ms:.1f} ms  {fps:.1f} FPS",
+        f"TwinMixing CUDA | {device_name}" + (f" | {control_mode}" if control_mode else ""),
+        f"SOURCE {result.path_source}  CONF {result.confidence:.2f}  "
+        f"{inference_ms:.1f} ms  {fps:.1f} FPS",
+        f"DRIVE LINE {drive_line}" + (f"  BLOCKED {blocked.upper()}" if blocked else ""),
         (
             f"TARGET {direction}  OFFSET {result.center_offset_px:+.1f}px  "
             f"HEADING {result.heading_deg:+.1f}deg"
             if result.center_offset_px is not None and result.heading_deg is not None
             else "TARGET LOST"
         ),
+        lane_text,
+        lidar_text,
         f"STEERING {steering_rad:+.3f} rad  LEGACY {legacy_angle:+.1f}",
-        "BLUE area | GREEN model lane | YELLOW center | CYAN vehicle path | RED target",
+        "YELLOW center | ORANGE left lane | PURPLE right lane | RED target",
     ]
     box_height = 22 * len(lines) + 14
     cv2.rectangle(overlay, (8, 8), (min(frame.shape[1] - 8, 760), box_height), (0, 0, 0), -1)
