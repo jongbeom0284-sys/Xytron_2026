@@ -21,6 +21,8 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profi
 from sensor_msgs.msg import Image
 from std_msgs.msg import Bool, Float32MultiArray, String
 
+from kobot_vehicle.camera_control import CameraControl
+
 
 class DeviceController:
     DEVICE_INFO = {
@@ -29,13 +31,26 @@ class DeviceController:
         'ultrasonic': ('/dev/ttySonic', 'ultrasonic_node', 'kobot_vehicle', 'ultrasonic_node', 'ultrasonic.yaml', []),
         'imu': ('/dev/ttyIMU', 'imu_node', 'kobot_vehicle', 'imu_node', 'imu.yaml', []),
     }
+    SOFTWARE_INFO = {
+        'lane': (
+            'twinmixing_center_drive',
+            ['ros2', 'run', 'kobot_lane_drive', 'twinmixing_center_drive'],
+        ),
+        'video': (
+            'web_video_server',
+            [
+                'ros2', 'run', 'web_video_server', 'web_video_server',
+                '--ros-args', '-p', 'port:=8080',
+            ],
+        ),
+    }
 
     def __init__(self, config_dir):
         self.config_dir = Path(config_dir)
         self.log_dir = Path.home() / '.local' / 'state' / 'kobot'
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self.started = {}
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
 
     @staticmethod
     def _processes():
@@ -51,7 +66,12 @@ class DeviceController:
                 yield int(entry.name), args
 
     def pids(self, name):
-        executable = self.DEVICE_INFO[name][1]
+        if name in self.DEVICE_INFO:
+            executable = self.DEVICE_INFO[name][1]
+        elif name in self.SOFTWARE_INFO:
+            executable = self.SOFTWARE_INFO[name][0]
+        else:
+            raise KeyError(name)
         return [pid for pid, args in self._processes() if any(Path(arg).name == executable for arg in args)]
 
     def status(self):
@@ -61,17 +81,45 @@ class DeviceController:
             result[name] = {'usb': os.path.exists(info[0]), 'running': bool(pids), 'pid': pids[0] if pids else None}
         return result
 
+    def component_status(self):
+        result = self.status()
+        for name in self.SOFTWARE_INFO:
+            pids = self.pids(name)
+            result[name] = {
+                'usb': None,
+                'running': bool(pids),
+                'pid': pids[0] if pids else None,
+            }
+        return result
+
+    def _command(self, name):
+        if name in self.DEVICE_INFO:
+            info = self.DEVICE_INFO[name]
+            return [
+                'ros2', 'run', info[2], info[3], '--ros-args', *info[5],
+                '--params-file', str(self.config_dir / info[4]),
+            ]
+        if name in self.SOFTWARE_INFO:
+            command = list(self.SOFTWARE_INFO[name][1])
+            if name == 'lane':
+                lane_config = (
+                    Path(get_package_share_directory('kobot_lane_drive'))
+                    / 'config' / 'twinmixing_center.yaml'
+                )
+                command.extend(['--ros-args', '--params-file', str(lane_config)])
+            return command
+        raise KeyError(name)
+
     def connect(self, name):
         with self.lock:
-            info = self.DEVICE_INFO[name]
             if self.pids(name):
                 return '이미 실행 중입니다'
-            if not os.path.exists(info[0]):
+            if name in self.DEVICE_INFO and not os.path.exists(self.DEVICE_INFO[name][0]):
                 raise RuntimeError('USB 장치가 인식되지 않았습니다')
             previous = self.started.pop(name, None)
             if previous:
                 previous[1].close()
-            command = ['ros2', 'run', info[2], info[3], '--ros-args', *info[5], '--params-file', str(self.config_dir / info[4])]
+            command = self._command(name)
             log_handle = open(self.log_dir / f'{name}.log', 'ab', buffering=0)
             process = subprocess.Popen(command, stdout=log_handle, stderr=subprocess.STDOUT, start_new_session=True)
             self.started[name] = (process, log_handle)
@@ -99,16 +147,46 @@ class DeviceController:
                     os.kill(pid, signal.SIGTERM)
                 except ProcessLookupError:
                     pass
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline and self.pids(name):
+                time.sleep(0.1)
+            if self.pids(name):
+                raise RuntimeError(f'{name} 프로세스를 종료하지 못했습니다')
             tracked = self.started.pop(name, None)
             if tracked:
                 tracked[1].close()
             return '연결을 해제했습니다'
 
     def reconnect(self, name):
-        self.disconnect(name)
-        time.sleep(0.4)
-        self.connect(name)
+        self.reconnect_many([name])
         return '재연결했습니다'
+
+    def reconnect_many(self, names):
+        names = list(dict.fromkeys(names))
+        if not names:
+            raise ValueError('재시작할 구성요소가 없습니다')
+        unknown = [
+            name for name in names
+            if name not in self.DEVICE_INFO and name not in self.SOFTWARE_INFO
+        ]
+        if unknown:
+            raise ValueError(f'알 수 없는 구성요소: {", ".join(unknown)}')
+        missing_devices = [
+            name for name in names
+            if name in self.DEVICE_INFO
+            and not os.path.exists(self.DEVICE_INFO[name][0])
+        ]
+        if missing_devices:
+            raise RuntimeError(
+                f'USB 장치가 없습니다: {", ".join(missing_devices)}'
+            )
+        with self.lock:
+            for name in reversed(names):
+                self.disconnect(name)
+            time.sleep(0.4)
+            for name in names:
+                self.connect(name)
+        return names
 
     def close(self):
         for name in list(self.started):
@@ -288,6 +366,7 @@ class MotorController:
             time.sleep(0.05)
 
     def arm(self):
+        self.node.ensure_exclusive_motor_publisher()
         self.ensure_stack()
         self.publish_zero(0.4)
         return self.status()
@@ -317,6 +396,7 @@ class MotorController:
         with self.lock:
             if self.active:
                 raise RuntimeError('이미 시간 주행 테스트가 실행 중입니다')
+            self.node.ensure_exclusive_motor_publisher()
             self.ensure_stack()
             self.stop_event.clear()
             self.active = True
@@ -356,6 +436,19 @@ class MotorController:
         self.publish_zero(1.0)
         self.last_result = '즉시 정지'
         return self.status()
+
+    def shutdown_stack(self):
+        with self.lock:
+            if self.active:
+                raise RuntimeError('시간 주행을 먼저 정지하세요')
+            self.stop_event.set()
+            self.publish_zero(0.6)
+            self._stop_stack()
+            self.active = False
+            self.speed_mps = 0.0
+            self.last_result = '복구 작업 전 모터 스택 종료'
+            self.error = None
+            return self.status()
 
     def status(self):
         pids = self.stack_pids()
@@ -463,6 +556,7 @@ class RecordDriveController:
                 raise RuntimeError('시간 주행을 먼저 정지하세요')
             if not self.node.motor.stack_running():
                 raise RuntimeError('모터 스택이 실행 중이지 않습니다')
+            self.node.ensure_exclusive_motor_publisher()
             if self.process and self.process.poll() is None:
                 raise RuntimeError('이전 차선 주행 프로세스가 남아 있습니다')
 
@@ -492,7 +586,7 @@ class RecordDriveController:
                 self.process = subprocess.Popen(
                     [
                         'ros2', 'launch', 'kobot_lane_drive',
-                        'white_left_record_drive.launch.py',
+                        'twinmixing_center_record_drive.launch.py',
                         'armed:=true',
                         'start_perception:=false',
                         f'max_speed_mps:={self.speed_mps:.2f}',
@@ -655,11 +749,17 @@ class RecordDriveController:
 
 
 class DashboardNode(Node):
+    RECOVERY_GROUPS = {
+        'media': ('camera', 'lane', 'video'),
+        'all': ('camera', 'lane', 'video', 'lidar', 'ultrasonic', 'imu'),
+    }
+
     def __init__(self):
         super().__init__('dashboard_server')
         share = Path(get_package_share_directory('kobot_vehicle'))
         self.dashboard_dir = share / 'dashboard'
         self.devices = DeviceController(share / 'config')
+        self.camera_controls = CameraControl()
         self.motor = MotorController(self)
         self.record_root = Path(os.environ.get('KOBOT_RECORDINGS_DIR', str(Path.home() / 'recordings' / 'camera')))
         self.record_lock = threading.Lock()
@@ -677,11 +777,15 @@ class DashboardNode(Node):
         self.last_saved_at = 0.0
         self.record_error = None
         self.record_drive = RecordDriveController(self)
+        self.recovery_lock = threading.Lock()
+        self.recovery_result = '복구 대기 중'
+        self.recovery_error = None
+        self.recovery_last_scope = None
         self.create_subscription(Image, '/image_raw', self.on_image, qos_profile_sensor_data)
         self.create_subscription(
             String,
-            '/kobot_lane_drive/white_left/status',
-            self.on_white_left_status,
+            '/kobot_lane_drive/twinmixing_center/status',
+            self.on_twinmixing_center_status,
             10,
         )
         self.httpd = ThreadingHTTPServer(('0.0.0.0', 8000), self._handler_class())
@@ -698,6 +802,84 @@ class DashboardNode(Node):
                 super().__init__(*args, directory=dashboard_dir, **kwargs)
 
         return Handler
+
+    def foreign_motor_publishers(self):
+        publishers = []
+        try:
+            endpoint_infos = self.get_publishers_info_by_topic('/xycar_motor')
+        except Exception as error:
+            raise RuntimeError(
+                f'/xycar_motor 발행자 확인 실패: {error}'
+            ) from error
+        for endpoint in endpoint_infos:
+            if endpoint.node_name == self.get_name():
+                continue
+            namespace = endpoint.node_namespace.rstrip('/')
+            full_name = f'{namespace}/{endpoint.node_name}' if namespace else f'/{endpoint.node_name}'
+            publishers.append(full_name)
+        return sorted(set(publishers))
+
+    def ensure_exclusive_motor_publisher(self):
+        publishers = self.foreign_motor_publishers()
+        if publishers:
+            raise RuntimeError(
+                '다른 /xycar_motor 발행자를 먼저 종료하세요: '
+                + ', '.join(publishers)
+            )
+
+    def recovery_status(self):
+        return {
+            'busy': self.recovery_lock.locked(),
+            'result': self.recovery_result,
+            'error': self.recovery_error,
+            'last_scope': self.recovery_last_scope,
+            'components': self.devices.component_status(),
+            'motor': self.motor.status(),
+        }
+
+    def restart_components(self, names, scope):
+        if not self.recovery_lock.acquire(blocking=False):
+            raise RuntimeError('다른 복구 작업이 진행 중입니다')
+        try:
+            record_state = self.record_drive.status().get('state')
+            if record_state in ('starting', 'running', 'paused', 'ending'):
+                raise RuntimeError('기록 주행을 종료한 뒤 재시작하세요')
+            if self.recording:
+                raise RuntimeError('카메라 저장을 종료한 뒤 재시작하세요')
+            if self.motor.active:
+                raise RuntimeError('시간 주행을 먼저 정지하세요')
+            missing_devices = [
+                name for name in names
+                if name in DeviceController.DEVICE_INFO
+                and not os.path.exists(DeviceController.DEVICE_INFO[name][0])
+            ]
+            if missing_devices:
+                raise RuntimeError(
+                    f'USB 장치가 없습니다: {", ".join(missing_devices)}'
+                )
+
+            self.recovery_last_scope = scope
+            self.recovery_result = '모터 안전 정지 확인 중'
+            self.recovery_error = None
+            if self.motor.stack_pids():
+                self.motor.shutdown_stack()
+
+            self.recovery_result = '구성요소 재시작 중'
+            restarted = self.devices.reconnect_many(names)
+            self.recovery_result = '복구 완료'
+            status = self.recovery_status()
+            status['busy'] = False
+            return {
+                **status,
+                'message': f'{", ".join(restarted)} 재시작 완료',
+                'restarted': restarted,
+            }
+        except Exception as error:
+            self.recovery_error = str(error)
+            self.recovery_result = '복구 실패'
+            raise
+        finally:
+            self.recovery_lock.release()
 
     def recording_status(self):
         with self.record_lock:
@@ -743,8 +925,9 @@ class DashboardNode(Node):
                 self.telemetry_writer = csv.writer(self.telemetry_manifest)
                 self.telemetry_writer.writerow([
                     'wall_time', 'lane_state', 'confidence',
-                    'left_boundary_x_px', 'desired_left_distance_px',
-                    'center_offset_px', 'control_mode', 'steering_rad',
+                    'lookahead_x_px', 'lookahead_y_px',
+                    'center_offset_px', 'heading_deg',
+                    'control_mode', 'steering_rad',
                     'speed_mps', 'reason', 'drive_state',
                 ])
             self.frame_count = 0
@@ -831,7 +1014,7 @@ class DashboardNode(Node):
         except (TypeError, ValueError):
             return {}
 
-    def on_white_left_status(self, message):
+    def on_twinmixing_center_status(self, message):
         payload = self._json_message(message)
         self.latest_lane_status = payload
         self.record_drive.observe_lane_status(payload)
@@ -845,9 +1028,10 @@ class DashboardNode(Node):
             self.telemetry_writer.writerow([
                 dt.datetime.now().astimezone().isoformat(),
                 lane.get('state'), lane.get('confidence'),
-                lane.get('left_boundary_x_px'),
-                lane.get('desired_left_distance_px'),
+                lane.get('lookahead_x_px'),
+                lane.get('lookahead_y_px'),
                 lane.get('center_offset_px'),
+                lane.get('heading_deg'),
                 payload.get('mode'), payload.get('steering_rad'),
                 payload.get('speed_mps'), payload.get('reason'),
                 self.record_drive.state,
@@ -890,12 +1074,19 @@ class DashboardRequestHandler(SimpleHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == '/api/devices':
             return self._json(200, {'devices': self.server.dashboard_node.devices.status()})
+        if path == '/api/camera/controls':
+            try:
+                return self._json(200, self.server.dashboard_node.camera_controls.status())
+            except Exception as error:
+                return self._json(409, {'error': str(error)})
         if path == '/api/recording':
             return self._json(200, self.server.dashboard_node.recording_status())
         if path == '/api/motor':
             return self._json(200, self.server.dashboard_node.motor.status())
         if path == '/api/record-drive':
             return self._json(200, self.server.dashboard_node.record_drive.status())
+        if path == '/api/recovery':
+            return self._json(200, self.server.dashboard_node.recovery_status())
         return super().do_GET()
 
     def do_POST(self):
@@ -903,6 +1094,11 @@ class DashboardRequestHandler(SimpleHTTPRequestHandler):
         try:
             if path == '/api/motor/arm':
                 return self._json(200, self.server.dashboard_node.motor.arm())
+            if path == '/api/camera/controls':
+                return self._json(
+                    200,
+                    self.server.dashboard_node.camera_controls.apply(self._read_json()),
+                )
             if path == '/api/motor/restart':
                 return self._json(200, self.server.dashboard_node.motor.restart())
             if path == '/api/motor/test':
@@ -931,6 +1127,20 @@ class DashboardRequestHandler(SimpleHTTPRequestHandler):
             if path in ('/api/recording/start', '/api/recording/stop'):
                 action = path.rsplit('/', 1)[-1]
                 result = self.server.dashboard_node.start_recording() if action == 'start' else self.server.dashboard_node.stop_recording()
+                return self._json(200, result)
+            if path.startswith('/api/recovery/component/'):
+                name = path.rsplit('/', 1)[-1]
+                allowed = set(DeviceController.DEVICE_INFO) | set(DeviceController.SOFTWARE_INFO)
+                if name not in allowed:
+                    return self._json(404, {'error': '알 수 없는 복구 구성요소입니다'})
+                result = self.server.dashboard_node.restart_components([name], f'component:{name}')
+                return self._json(200, result)
+            if path.startswith('/api/recovery/group/'):
+                group = path.rsplit('/', 1)[-1]
+                groups = self.server.dashboard_node.RECOVERY_GROUPS
+                if group not in groups:
+                    return self._json(404, {'error': '알 수 없는 복구 그룹입니다'})
+                result = self.server.dashboard_node.restart_components(groups[group], f'group:{group}')
                 return self._json(200, result)
             parts = path.strip('/').split('/')
             if len(parts) == 4 and parts[:2] == ['api', 'devices']:

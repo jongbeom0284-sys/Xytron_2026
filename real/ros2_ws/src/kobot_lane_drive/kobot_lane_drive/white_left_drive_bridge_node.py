@@ -71,8 +71,8 @@ class WhiteLeftDriveBridgeNode(Node):
             "enable_topic", "/kobot_lane_drive/record_drive/enabled"
         )
         self.declare_parameter("command_timeout_sec", 0.30)
-        self.declare_parameter("max_speed_mps", 0.20)
-        self.declare_parameter("max_steering_rad", 0.34)
+        self.declare_parameter("max_speed_mps", 0.50)
+        self.declare_parameter("max_steering_rad", 0.476)
         self.declare_parameter("angle_scale", 0.0068)
         self.declare_parameter("speed_scale", 0.08)
 
@@ -81,15 +81,15 @@ class WhiteLeftDriveBridgeNode(Node):
             self._preview = None
             return
         steering = float(message.data[0])
-        speed = float(message.data[1])
-        if not math.isfinite(steering) or not math.isfinite(speed):
+        preview_speed = float(message.data[1])
+        if not math.isfinite(steering) or not math.isfinite(preview_speed):
             self._preview = None
             return
         maximum_steering = float(self.get_parameter("max_steering_rad").value)
         maximum_speed = float(self.get_parameter("max_speed_mps").value)
         self._preview = (
             max(-maximum_steering, min(maximum_steering, steering)),
-            max(0.0, min(maximum_speed, speed)),
+            max(0.0, maximum_speed),
         )
         self._preview_at = time.monotonic()
 

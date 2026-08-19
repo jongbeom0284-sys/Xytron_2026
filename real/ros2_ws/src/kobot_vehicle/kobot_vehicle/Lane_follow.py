@@ -32,7 +32,8 @@ def find_single_peak(hist, min_height=10):
     return None
 
 class Config:
-    DEBUG_MODE = True
+    USE_GUI = True         # GUI 창(cv2.imshow, Trackbar) 띄우기 활성화
+    PUBLISH_DEBUG = True   # /debug/lane_image 토픽 퍼블리시 여부
     IMAGE_WIDTH = 640
     IMAGE_HEIGHT = 480
     
@@ -43,13 +44,25 @@ class Config:
     ROI_TOP_RATIO = 0.5 
     LOOKAHEAD_RATIO = 0.6  
     
-    # PID 제어 (오버슈팅 방지를 위해 Kp 약간 하향)
-    Kp = 0.2
+    # PID 제어
+    Kp = 0.15
     Ki = 0.0000
-    Kd = 0.15
+    Kd = 0.05
     
-    EMA_ALPHA_ANGLE = 0.3 
-    EMA_ALPHA_SPEED = 0.1 # 속도는 조향각보다 훨씬 부드럽게 변하도록(관성) 설정
+    # error 이동평균 필터: 최근 N개 프레임의 error를 평균내어 노이즈 제거
+    ERROR_BUFFER_SIZE = 5
+    
+    EMA_ALPHA_ANGLE = 0.4
+    EMA_ALPHA_SPEED = 0.1
+    
+    # 적응형 피팅: 데이터 부족 시 2차 곡선 대신 1차 직선 사용
+    MIN_PIXELS_QUADRATIC = 80   # 2차 피팅에 필요한 최소 픽셀 수
+    MIN_WINDOWS_QUADRATIC = 3   # 2차 피팅에 필요한 최소 활성 윈도우 수
+    MAX_CURVATURE = 0.005       # 2차 계수(a) 절대값 상한 (초과 시 직선으로 되돌림)
+    
+    # 궤적 외삽: 점선 끊김 구간에서 최근 추세 기반 위치 예측
+    TARGET_X_BUFFER_SIZE = 10   # 최근 target_x 기록 버퍼 크기
+    GHOST_MAX_FRAMES = 20       # 점선 끊김 시 최대 예측 프레임 수
     
     BASE_SPEED = 30.0
     MIN_SPEED = 15.0
@@ -73,35 +86,38 @@ class TrackDriveNode(Node):
         self.camera_sub = self.create_subscription(CompressedImage, "/image_raw/compressed", self.image_callback, qos, callback_group=self.cam_cb_group)
         self.motor_pub = self.create_publisher(Float32MultiArray, "/xycar_motor", 10)
         
-        # 노란색 HSV 기본 프리셋
-        self.declare_parameter('h_low', 15)
+        # 노란색 HSV 기본 프리셋 (실측 튜닝값)
+        self.declare_parameter('h_low', 25)
         self.declare_parameter('h_high', 40)
-        self.declare_parameter('s_low', 80)
-        self.declare_parameter('s_high', 255)
-        self.declare_parameter('v_low', 80)
+        self.declare_parameter('s_low', 61)
+        self.declare_parameter('s_high', 120)
+        self.declare_parameter('v_low', 190)
         self.declare_parameter('v_high', 255)
 
-        if Config.DEBUG_MODE:
+        if Config.PUBLISH_DEBUG:
             self.debug_pub = self.create_publisher(Image, "/debug/lane_image", 10)
             
+        if Config.USE_GUI:
             cv2.namedWindow("Trackbars", cv2.WINDOW_NORMAL)
             cv2.resizeWindow("Trackbars", 400, 300)
-            cv2.createTrackbar("H_MIN", "Trackbars", 15, 180, nothing)
+            cv2.createTrackbar("H_MIN", "Trackbars", 25, 180, nothing)
             cv2.createTrackbar("H_MAX", "Trackbars", 40, 180, nothing)
-            cv2.createTrackbar("S_MIN", "Trackbars", 80, 255, nothing)
-            cv2.createTrackbar("S_MAX", "Trackbars", 255, 255, nothing)
-            cv2.createTrackbar("V_MIN", "Trackbars", 80, 255, nothing)
+            cv2.createTrackbar("S_MIN", "Trackbars", 61, 255, nothing)
+            cv2.createTrackbar("S_MAX", "Trackbars", 120, 255, nothing)
+            cv2.createTrackbar("V_MIN", "Trackbars", 190, 255, nothing)
             cv2.createTrackbar("V_MAX", "Trackbars", 255, 255, nothing)
 
         self.prev_error = 0.0
         self.integral_error = 0.0
         self.last_time = time.time()
+        self.error_buffer = []  # error 이동평균 버퍼
         
         self.prev_ema_angle = 0.0
-        self.prev_ema_speed = 0.0 # [추가] 속도 EMA 변수
+        self.prev_ema_speed = 0.0
         
         self.prev_target_x = None
         self.blind_count = 0
+        self.target_x_buffer = []  # 궤적 외삽용 최근 target_x 기록
         
         self.current_speed = 0.0
         self.current_angle = 0.0
@@ -129,7 +145,7 @@ class TrackDriveNode(Node):
         
         cropped_height = cv_img.shape[0]
         
-        if Config.DEBUG_MODE:
+        if Config.USE_GUI:
             h_l = cv2.getTrackbarPos("H_MIN", "Trackbars")
             h_h = cv2.getTrackbarPos("H_MAX", "Trackbars")
             s_l = cv2.getTrackbarPos("S_MIN", "Trackbars")
@@ -156,7 +172,7 @@ class TrackDriveNode(Node):
         nonzerox = np.array(nonzero[1])
         
         out_img = None
-        if Config.DEBUG_MODE:
+        if Config.PUBLISH_DEBUG or Config.USE_GUI:
             out_img = cv_img.copy()
 
         histogram = np.sum(yellow_mask, axis=0)
@@ -165,6 +181,7 @@ class TrackDriveNode(Node):
         x_current = p1
         window_height = int(cropped_height // Config.NWINDOWS)
         lane_inds = []
+        active_windows = 0
         
         for window in range(Config.NWINDOWS):
             win_y_low = cropped_height - (window + 1) * window_height
@@ -174,7 +191,7 @@ class TrackDriveNode(Node):
                 win_x_low = max(0, x_current - Config.MARGIN)
                 win_x_high = min(Config.IMAGE_WIDTH, x_current + Config.MARGIN)
                 
-                if Config.DEBUG_MODE:
+                if Config.PUBLISH_DEBUG or Config.USE_GUI:
                     cv2.rectangle(out_img, (win_x_low, win_y_low), (win_x_high, win_y_high), (0, 255, 0), 2)
                     
                 good_inds = ((nonzeroy >= win_y_low) & (nonzeroy < win_y_high) & (nonzerox >= win_x_low) & (nonzerox < win_x_high)).nonzero()[0]
@@ -183,6 +200,7 @@ class TrackDriveNode(Node):
                 # 점선의 경우 픽셀이 없으면 이전 윈도우의 x_current를 그대로 유지하여 연결!
                 if len(good_inds) > Config.MINPIX:
                     x_current = int(np.mean(nonzerox[good_inds]))
+                    active_windows += 1
         
         lane_inds = np.concatenate(lane_inds) if lane_inds else []
         valid_lane = len(lane_inds) > Config.MINPIX * 2
@@ -193,27 +211,62 @@ class TrackDriveNode(Node):
         status_txt = "LANE LOST"
         lookahead_y = int(cropped_height * (1.0 - Config.LOOKAHEAD_RATIO))
 
-        lane_fit = np.polyfit(laney, lanex, 2) if valid_lane else None
-        
+        # ── 적응형 피팅: 데이터 양에 따라 2차(곡선) 또는 1차(직선) 자동 선택 ──
+        lane_fit = None
         if valid_lane:
+            if len(lane_inds) >= Config.MIN_PIXELS_QUADRATIC and active_windows >= Config.MIN_WINDOWS_QUADRATIC:
+                lane_fit = np.polyfit(laney, lanex, 2)
+                # 곡률 안전장치: 물리적으로 불가능한 급커브 감지 시 직선으로 되돌림
+                if abs(lane_fit[0]) > Config.MAX_CURVATURE:
+                    fit_1d = np.polyfit(laney, lanex, 1)
+                    lane_fit = np.array([0.0, fit_1d[0], fit_1d[1]])
+                    status_txt = "TRACKING (LINEAR/CURV)"
+                else:
+                    status_txt = "TRACKING (CURVE)"
+            else:
+                # 데이터 부족: 직선 피팅 (과적합 방지)
+                fit_1d = np.polyfit(laney, lanex, 1)
+                lane_fit = np.array([0.0, fit_1d[0], fit_1d[1]])
+                status_txt = "TRACKING (LINEAR)"
+        
+        if valid_lane and lane_fit is not None:
             target_x = int(lane_fit[0]*lookahead_y**2 + lane_fit[1]*lookahead_y + lane_fit[2])
-            status_txt = "MONORAIL TRACKING"
+            target_x = max(0, min(Config.IMAGE_WIDTH - 1, target_x))
             self.prev_target_x = target_x
             self.blind_count = 0
+            # 궤적 버퍼에 기록 (점선 끊김 시 외삽에 사용)
+            self.target_x_buffer.append(target_x)
+            if len(self.target_x_buffer) > Config.TARGET_X_BUFFER_SIZE:
+                self.target_x_buffer.pop(0)
         else:
-            if self.prev_target_x is not None and self.blind_count < 15:
+            # ── 궤적 외삽: 점선 끊김 시 최근 추세를 연장하여 다음 위치 예측 ──
+            if len(self.target_x_buffer) >= 3 and self.blind_count < Config.GHOST_MAX_FRAMES:
+                recent = self.target_x_buffer[-min(5, len(self.target_x_buffer)):]
+                dx_per_frame = (recent[-1] - recent[0]) / max(len(recent) - 1, 1)
+                predicted_x = int(self.target_x_buffer[-1] + dx_per_frame * (self.blind_count + 1))
+                predicted_x = max(0, min(Config.IMAGE_WIDTH - 1, predicted_x))
+                target_x = predicted_x
+                self.blind_count += 1
+                status_txt = f"PREDICT ({self.blind_count})"
+            elif self.prev_target_x is not None and self.blind_count < Config.GHOST_MAX_FRAMES:
                 target_x = self.prev_target_x
                 self.blind_count += 1
-                status_txt = f"GHOST MODE ({self.blind_count})"
+                status_txt = f"GHOST ({self.blind_count})"
             else:
                 target_x = None
                 status_txt = "LANE LOST"
             
         if target_x is not None:
             # 렌즈 정중앙(IMAGE_WIDTH//2)과 타겟과의 거리를 바로 Error로 사용 (모노레일)
-            error = target_x - (Config.IMAGE_WIDTH // 2)
+            raw_error = target_x - (Config.IMAGE_WIDTH // 2)
         else:
-            error = self.prev_error
+            raw_error = self.prev_error
+
+        # 이동평균 필터: 최근 N프레임의 error를 평균내어 노이즈(점선 깜빡임 등) 제거
+        self.error_buffer.append(raw_error)
+        if len(self.error_buffer) > Config.ERROR_BUFFER_SIZE:
+            self.error_buffer.pop(0)
+        error = sum(self.error_buffer) / len(self.error_buffer)
 
         dt = max(current_time - self.last_time, 0.001)
         
@@ -228,7 +281,8 @@ class TrackDriveNode(Node):
         self.prev_ema_angle = filtered_angle
         self.last_time = current_time
         
-        angle_clamped = float(max(-100.0, min(100.0, filtered_angle)))
+        # [수정] 조향각 제한을 기존 -100~100에서 자율주행 차량 표준인 -50~50으로 강력히 제한 (VESC 에러 원인)
+        angle_clamped = float(max(-50.0, min(50.0, filtered_angle)))
         
         # [수정] 조향각에 따른 이상적인 목표 속도 계산
         target_speed = float(max(Config.MIN_SPEED, min(Config.BASE_SPEED, Config.BASE_SPEED - abs(angle_clamped) * Config.SPEED_DECAY)))
@@ -246,9 +300,9 @@ class TrackDriveNode(Node):
 
         self.get_logger().info(f"State: {status_txt}, TargetX: {target_x}, Steer: {angle_clamped:.1f}, Speed: {filtered_speed:.1f}", throttle_duration_sec=2.0)
         
-        if Config.DEBUG_MODE and out_img is not None:
+        if out_img is not None:
             ploty = np.linspace(0, cropped_height - 1, cropped_height)
-            if valid_lane:
+            if lane_fit is not None:
                 pts = np.array([np.transpose(np.vstack([lane_fit[0]*ploty**2 + lane_fit[1]*ploty + lane_fit[2], ploty]))], np.int32)
                 cv2.polylines(out_img, pts, False, (0, 255, 255), 3)
                 
@@ -262,11 +316,13 @@ class TrackDriveNode(Node):
             cv2.putText(out_img, f"Angle: {angle_clamped:.1f}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
             cv2.putText(out_img, f"Speed: {filtered_speed:.1f}", (10, 85), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
             
-            self.debug_pub.publish(self.bridge.cv2_to_imgmsg(out_img, encoding="bgr8"))
+            if Config.PUBLISH_DEBUG:
+                self.debug_pub.publish(self.bridge.cv2_to_imgmsg(out_img, encoding="bgr8"))
             
-            cv2.imshow("Yellow_Mask (HSV_Cropped)", yellow_mask)
-            cv2.imshow("Lane_Control (Cropped)", out_img)
-            cv2.waitKey(1)
+            if Config.USE_GUI:
+                cv2.imshow("Yellow_Mask (HSV_Cropped)", yellow_mask)
+                cv2.imshow("Lane_Control (Cropped)", out_img)
+                cv2.waitKey(1)
 
 def main(args=None):
     rclpy.init(args=args)

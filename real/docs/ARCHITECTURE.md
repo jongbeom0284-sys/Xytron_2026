@@ -29,6 +29,12 @@ white_left_drive → /kobot_lane_drive/white_left/status → dashboard 차선 �
 사용한다. 센서 launch가 실행하는 `white_left_drive`는 조향 미리보기까지만 계산하고
 모터 publisher를 갖지 않는다.
 
+`white_left_drive`는 픽셀 오차에 `steering_kp=0.42`를 적용한 뒤 별도
+`steering_output_gain=2.0`으로 조향 요구량을 증폭한다. 최종 preview는 정지 시험에서
+확인한 legacy angle `-30~+30`에 해당하는 `-0.204~+0.204 rad`로 제한된다.
+같은 detector를 좌우 반전해 우측 ROI에도 적용하며, debug 영상에는 양쪽 현재 프레임
+경계와 차량 중심으로부터 같은 `d=244px` 기준을 표시한다. 과거 경계 형상은 누적하지 않는다.
+
 ## 웹 기록 주행 흐름
 
 ```text
@@ -133,5 +139,15 @@ dashboard server는 정적 화면과 다음 API를 제공한다.
 - `GET /api/record-drive`, `POST /api/record-drive/start`
 - `POST /api/record-drive/pause`, `POST /api/record-drive/resume`
 - `POST /api/record-drive/finish`, `POST /api/record-drive/heartbeat`
+- `GET /api/recovery`, 현재 복구 작업과 구성요소 실행 상태
+- `POST /api/recovery/component/<name>`, 선택한 센서·차선·영상 서버만 재시작
+- `POST /api/recovery/group/media`, 카메라·차선·영상 서버 묶음 재시작
+- `POST /api/recovery/group/all`, 전체 센서 묶음 재시작
+
+브라우저의 `영상 새로고침`은 API를 호출하지 않고 기존 MJPEG 연결을 닫은 뒤
+cache-busting URL로 다시 연결한다. 서버의 실제 재시작 API는 녹화·기록 주행·시간
+주행 중에는 거부하며, 모터 스택이 있으면 0 명령과 스택 종료를 선행한다.
+WASD 무장·시간 주행·기록 주행 시작 전에는 ROS 그래프의 `/xycar_motor` publisher를
+확인하고 `dashboard_server` 이외의 publisher가 있으면 시작을 거부한다.
 
 인증·권한 검사가 없으므로 접근 가능한 사용자는 모터 스택을 시작하거나 명령할 수 있다. 신뢰된 로컬망/Tailscale에서만 사용한다.

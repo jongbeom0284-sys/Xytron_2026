@@ -30,3 +30,12 @@ def test_record_drive_sessions_are_unique_and_pause_keeps_the_open_session():
     assert "self.node.pause_recording()" in server
     assert "self.node.resume_recording()" in server
     assert "recording = self.node.stop_recording()" in server
+
+
+def test_drive_start_rejects_foreign_motor_publishers():
+    server, _ = _sources()
+
+    assert "def foreign_motor_publishers(self):" in server
+    assert "self.get_publishers_info_by_topic('/xycar_motor')" in server
+    assert server.count("self.node.ensure_exclusive_motor_publisher()") >= 3
+    assert "다른 /xycar_motor 발행자를 먼저 종료하세요" in server

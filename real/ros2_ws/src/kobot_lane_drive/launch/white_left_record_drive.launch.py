@@ -30,7 +30,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "max_speed_mps",
-            default_value="0.20",
+            default_value="0.50",
             description="Hard speed cap for the recording drive.",
         ),
         Node(

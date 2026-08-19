@@ -10,7 +10,13 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
 from std_msgs.msg import Float32MultiArray, String
 
-from .white_left_boundary import WhiteLeftConfig, detect_white_left_boundary
+from .white_left_boundary import (
+    WhiteLeftConfig,
+    detect_white_left_boundary,
+    detect_white_right_boundary,
+    render_dual_roi_overlay,
+    select_lane_control,
+)
 
 
 def _move_towards(current: float, target: float, maximum_step: float) -> float:
@@ -40,8 +46,50 @@ class WhiteLeftDriveNode(Node):
             continuation_maximum_gap_rows=int(
                 self.get_parameter("continuation_maximum_gap_rows").value
             ),
+            sharp_turn_window_rows=int(
+                self.get_parameter("sharp_turn_window_rows").value
+            ),
+            maximum_turn_angle_deg=float(
+                self.get_parameter("maximum_turn_angle_deg").value
+            ),
+            edge_gradient_threshold=float(
+                self.get_parameter("edge_gradient_threshold").value
+            ),
+            stripe_minimum_width_ratio=float(
+                self.get_parameter("stripe_minimum_width_ratio").value
+            ),
+            stripe_maximum_width_ratio=float(
+                self.get_parameter("stripe_maximum_width_ratio").value
+            ),
+            stripe_minimum_contrast=float(
+                self.get_parameter("stripe_minimum_contrast").value
+            ),
+            stripe_maximum_saturation=float(
+                self.get_parameter("stripe_maximum_saturation").value
+            ),
+            ransac_iterations=int(
+                self.get_parameter("ransac_iterations").value
+            ),
+            ransac_residual_ratio=float(
+                self.get_parameter("ransac_residual_ratio").value
+            ),
+            ransac_minimum_inliers=int(
+                self.get_parameter("ransac_minimum_inliers").value
+            ),
+            minimum_inward_progress_ratio=float(
+                self.get_parameter("minimum_inward_progress_ratio").value
+            ),
+            maximum_bottom_slope_error_ratio=float(
+                self.get_parameter("maximum_bottom_slope_error_ratio").value
+            ),
+            bottom_extrapolation_ratio=float(
+                self.get_parameter("bottom_extrapolation_ratio").value
+            ),
             desired_left_distance_ratio=float(
                 self.get_parameter("desired_left_distance_ratio").value
+            ),
+            single_lane_distance_ratio=float(
+                self.get_parameter("single_lane_distance_ratio").value
             ),
         )
         self._last_started_at = 0.0
@@ -102,12 +150,28 @@ class WhiteLeftDriveNode(Node):
         self.declare_parameter("minimum_path_score", 0.30)
         self.declare_parameter("continuation_minimum_score", 0.25)
         self.declare_parameter("continuation_maximum_gap_rows", 5)
+        self.declare_parameter("sharp_turn_window_rows", 5)
+        self.declare_parameter("maximum_turn_angle_deg", 60.0)
+        self.declare_parameter("edge_gradient_threshold", 25.0)
+        self.declare_parameter("stripe_minimum_width_ratio", 4.0 / 640.0)
+        self.declare_parameter("stripe_maximum_width_ratio", 28.0 / 640.0)
+        self.declare_parameter("stripe_minimum_contrast", 7.0)
+        self.declare_parameter("stripe_maximum_saturation", 115.0)
+        self.declare_parameter("ransac_iterations", 1200)
+        self.declare_parameter("ransac_residual_ratio", 7.0 / 640.0)
+        self.declare_parameter("ransac_minimum_inliers", 12)
+        self.declare_parameter("minimum_inward_progress_ratio", 12.0 / 640.0)
+        self.declare_parameter("maximum_bottom_slope_error_ratio", 80.0 / 640.0)
+        self.declare_parameter("bottom_extrapolation_ratio", 80.0 / 640.0)
         self.declare_parameter("desired_left_distance_ratio", 244.0 / 640.0)
-        self.declare_parameter("speed_mps", 0.20)
+        self.declare_parameter("single_lane_distance_ratio", 180.0 / 640.0)
+        self.declare_parameter("speed_mps", 0.50)
         self.declare_parameter("steering_sign", -1.0)
         self.declare_parameter("steering_kp", 0.42)
+        self.declare_parameter("steering_output_gain", 4.0)
         self.declare_parameter("steering_filter_alpha", 0.35)
-        self.declare_parameter("max_steering_rad", 0.34)
+        # User-selected test limit: 70 units * 0.0068 rad/unit = 0.476 rad.
+        self.declare_parameter("max_steering_rad", 0.476)
         self.declare_parameter("max_steering_rate_rad_s", 1.20)
 
     def _tracking_steering(self, offset_px: float, width: int, now: float) -> float:
@@ -119,6 +183,7 @@ class WhiteLeftDriveNode(Node):
         target = (
             float(self.get_parameter("steering_sign").value)
             * float(self.get_parameter("steering_kp").value)
+            * float(self.get_parameter("steering_output_gain").value)
             * normalized_error
         )
         maximum = float(self.get_parameter("max_steering_rad").value)
@@ -152,26 +217,34 @@ class WhiteLeftDriveNode(Node):
             result = detect_white_left_boundary(
                 frame,
                 config=self._config,
-                render_debug=publish_debug,
+                render_debug=False,
             )
+            right_result = detect_white_right_boundary(frame, config=self._config)
             payload = result.status()
-            if result.state == "READY" and result.center_offset_px is not None:
+            payload.update(right_result.status())
+            used_lane, center_offset, selected_confidence = select_lane_control(
+                result,
+                right_result,
+                frame.shape[1] * self._config.single_lane_distance_ratio,
+            )
+            payload["used_lane"] = used_lane
+            if center_offset is not None:
                 steering = self._tracking_steering(
-                    result.center_offset_px,
+                    center_offset,
                     frame.shape[1],
                     now,
                 )
                 preview = (
                     steering,
                     float(self.get_parameter("speed_mps").value),
-                    result.confidence,
+                    selected_confidence,
                 )
                 self._last_valid_preview = preview
                 payload.update({
                     "mode": "TRACKING",
                     "steering_rad": round(steering, 5),
                     "speed_mps": round(preview[1], 3),
-                    "reason": "white_left_boundary",
+                    "reason": f"edge_pair_ransac_{used_lane.lower()}",
                 })
             elif self._last_valid_preview is not None:
                 preview = self._last_valid_preview
@@ -179,7 +252,7 @@ class WhiteLeftDriveNode(Node):
                     "mode": "HOLD",
                     "steering_rad": round(preview[0], 5),
                     "speed_mps": round(preview[1], 3),
-                    "reason": "fresh_lane_miss_hold_last",
+                    "reason": "both_lanes_lost_hold_last",
                 })
             else:
                 preview = (0.0, 0.0, 0.0)
@@ -190,9 +263,15 @@ class WhiteLeftDriveNode(Node):
                     "reason": "no_valid_lane_yet",
                 })
             self._publish(payload, preview)
-            if publish_debug and result.debug_image is not None:
+            if publish_debug:
+                overlay = render_dual_roi_overlay(
+                    frame,
+                    self._config,
+                    result,
+                    right_result,
+                )
                 debug = self._bridge.cv2_to_imgmsg(
-                    result.debug_image,
+                    overlay,
                     encoding="bgr8",
                 )
                 debug.header = message.header

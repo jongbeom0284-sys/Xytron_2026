@@ -1,0 +1,6 @@
+# Allow the xytron operator to manage only the non-motor sensor dashboard service.
+Cmnd_Alias KOBOT_SENSOR_SERVICE = /usr/bin/systemctl start kobot-sensors.service, \
+    /usr/bin/systemctl stop kobot-sensors.service, \
+    /usr/bin/systemctl restart kobot-sensors.service
+
+xytron ALL=(root) NOPASSWD: KOBOT_SENSOR_SERVICE

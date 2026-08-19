@@ -1,7 +1,20 @@
 from glob import glob
+from pathlib import Path
 from setuptools import find_packages, setup
 
 package_name = 'kobot_vehicle'
+
+
+def install_dashboard_tree():
+    groups = {}
+    root = Path('dashboard')
+    for path in root.rglob('*'):
+        if not path.is_file():
+            continue
+        relative_parent = path.relative_to(root).parent
+        target = str(Path('share') / package_name / 'dashboard' / relative_parent)
+        groups.setdefault(target, []).append(str(path))
+    return sorted(groups.items())
 
 setup(
     name=package_name,
@@ -12,8 +25,7 @@ setup(
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/launch', glob('launch/*.launch.py')),
         ('share/' + package_name + '/config', glob('config/*.yaml')),
-        ('share/' + package_name + '/dashboard', glob('dashboard/*')),
-    ],
+    ] + install_dashboard_tree(),
     install_requires=['setuptools'],
     tests_require=['pytest'],
     zip_safe=True,

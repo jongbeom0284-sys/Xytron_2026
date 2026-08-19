@@ -13,6 +13,6 @@ def make_legacy_command(
         return [0.0, 0.0]
     if angle_scale <= 0.0 or speed_scale <= 0.0:
         raise ValueError("motor adapter scales must be positive")
-    legacy_angle = max(-50.0, min(50.0, -steering_rad / angle_scale))
+    legacy_angle = max(-70.0, min(70.0, -steering_rad / angle_scale))
     legacy_speed = max(0.0, min(50.0, speed_mps / speed_scale))
     return [legacy_angle, legacy_speed]
