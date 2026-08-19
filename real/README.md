@@ -1,71 +1,82 @@
-# NVIDIA Kobot 실제 차량 기준판
+# NVIDIA Kobot 실차 기준판
 
-이 디렉터리는 NVIDIA Jetson 차량 `kobot`에서 함께 개발할 ROS 2 Humble 기준판이다. 센서 대시보드, 90번 승인 방식의 무모터 좌측 경계 화면, VESC/LiDAR 드라이버와 고정 카메라 좌측 경계 추종 패키지를 포함한다.
+Jetson Orin NX 차량 `kobot` 에서 실제로 도는 코드다. ROS 2 Humble.
 
-현재 차선 화면과 웹 기록 주행은 모두 90번 사진에서 승인한 흰색 좌측 경계를 매 프레임 새로 추적하고, 1번 사진에서 얻은 영상상 거리 `d=244 px`를 사용한다. 기존 `lane_preview`는 삭제했다. CLRerNet·simple-pid 구현은 비교·후속 검증용으로 함께 보존한다. 기본 센서 launch의 `white_left_drive`는 무모터이며 실제 출력 bridge는 명시적인 `armed:=true`와 사용자 승인 때만 실행된다. `track_drive`, `kmu_race`, 과거 평가 폴더는 최종 개발 위치가 아니다.
+차선 인식은 **TwinMixing** 하나만 상시 실행한다. 주행 목표선은 노란 중앙선을
+1순위로 고르고, 한쪽 차선이 막히면 반대편 차선으로 비켜섰다가 중앙으로 돌아온다.
+규칙 전문은 [docs/DRIVING_POLICY.md](docs/DRIVING_POLICY.md).
+
+이전 검출기(흰선·fast_lane·CLRerNet)와 시뮬레이터는 저장소 최상위 `legacy/` 에 있다.
 
 ## 구조
 
 ```text
 real/
-├─ AGENTS.md
-├─ README.md
-├─ docs/
-├─ ros2_ws/src/
-│  ├─ kobot_vehicle/
-│  ├─ kobot_lane_drive/
-│  ├─ ipm/
-│  ├─ vesc/
-│  └─ xycar_lidar/
-├─ config/vesc_tool/
-└─ system/
+├── AGENTS.md            작업 규칙
+├── docs/                FOLDERS · DRIVING_POLICY · ARCHITECTURE · OPERATIONS
+│                        · HARDWARE_AND_VESC · PROVENANCE
+├── ros2_ws/src/
+│  ├── kobot_lane_drive/ 차선 인식과 주행 판단 (새 주행 로직은 전부 여기)
+│  ├── kobot_vehicle/    센서 노드 · 모터 어댑터 · 웹 대시보드
+│  ├── vesc/             f1tenth VESC 드라이버 + FW 6.5 패치
+│  └── xycar_lidar/      YDLidar SDK + ROS 2 wrapper
+├── config/vesc_tool/    VESC 설정 백업 XML (참고용, 자동 적용 금지)
+├── scripts/             빌드 · 사전점검
+└── system/              udev · systemd · sudoers · env 설치 예제
 ```
 
-- `kobot_vehicle`: 센서 launch, 대시보드, 웹 주행, 모터 어댑터
-- `kobot_lane_drive`: 좌측 차선 검출, 고정 픽셀 기준, PID 조향 미리보기, 승인 잠금 drive bridge
-- `ipm`: 이전 미터 경로 검토 때 가져온 공개 패키지이며 현재 차선 주행 runtime에서는 사용하지 않음
-- `vesc`: F1TENTH ROS 2 VESC 드라이버와 Kobot FW 6.5 호환 패치
-- `xycar_lidar`: ROS 2 LiDAR 노드와 vendored YDLidar SDK
-- `config/vesc_tool`: 장치 자동 기록용이 아닌 VESC Tool 백업·비교 XML
-- `system`: udev 규칙과 설치하지 않은 환경·systemd 예제
+폴더별 소유물은 [docs/FOLDERS.md](docs/FOLDERS.md) 한 곳에 있다.
 
 ## 빠른 시작
 
 ```bash
-cd ~/2026_Xytron/real/ros2_ws
-source /opt/ros/humble/setup.bash
-rosdep install --from-paths src --ignore-src -r -y
-colcon build --symlink-install
-source install/setup.bash
-export ROS_DOMAIN_ID=7 ROS_NAMESPACE=xycar ROS_LOCALHOST_ONLY=1
+cd ~/2026_Xytron
+real/scripts/build_jetson.sh
+source ~/kobot_env.sh
 ros2 launch kobot_vehicle sensors.launch.py
 ```
 
-`sensors.launch.py`는 모터를 실행하지 않는다. 모터 launch는 기본적으로 잠겨 있다.
+`sensors.launch.py` 는 카메라, 라이다, IMU, 초음파, TwinMixing 인식,
+web_video_server(8080), rosbridge(9090), 대시보드(8000)를 띄운다. **모터는 없다.**
+
+Kobot 은 부팅 시 `kobot-sensors.service` 가 같은 launch 를 실행한다. 서비스가
+돌고 있으면 위 명령을 또 실행하지 않는다 — 카메라와 직렬 장치를 중복 점유한다.
+
+## 모터
 
 ```bash
-ros2 launch kobot_vehicle motor.launch.py          # armed=false, 모터 노드 미실행
+ros2 launch kobot_vehicle motor.launch.py            # armed=false, 모터 노드 미실행
 ros2 launch kobot_vehicle motor.launch.py armed:=true  # 승인과 안전조치 후에만
+ros2 launch kobot_vehicle teleop.launch.py armed:=true # 센서 재사용 + 모터 체인
 ```
 
-Kobot은 부팅 시 `kobot-sensors.service`가 센서와 dashboard를 실행한다. 센서를
-중복 실행하지 않고 VESC와 모터 어댑터까지 한 번에 주행 대기 상태로 만들려면 다음
-상위 launch를 사용한다.
+`/xycar_motor` 를 발행하는 파일은 승인 잠금 bridge 하나뿐이고, 단위 시험이 이를
+강제한다. 인식 노드에 모터 publisher 를 추가하지 않는다.
+
+## 테스트 주행
+
+웹 대시보드(`:8000`)의 `기록 주행` 패널에서 속도와 **장애물 회피 허용** 여부를
+고르고 시작한다. 회피는 기본 꺼짐이다. 중앙선 추종부터 확인한 뒤 켠다.
+절차는 [docs/OPERATIONS.md](docs/OPERATIONS.md) 7절.
+
+## 차 없이 검증하기
+
+지난 주행 녹화에 현재 인식 코드를 그대로 돌릴 수 있다.
 
 ```bash
-ros2 launch kobot_vehicle teleop.launch.py armed:=true
+ros2 run kobot_lane_drive recording_lane_viewer --prepare-session <세션> --prepare-only
 ```
 
-센서 서비스가 정지된 독립 개발 환경에서만 센서도 같은 프로세스에서 실행한다.
+## 문서
 
-```bash
-ros2 launch kobot_vehicle teleop.launch.py start_sensors:=true armed:=true
-```
+| 문서 | 무엇을 답하나 |
+|---|---|
+| [FOLDERS.md](docs/FOLDERS.md) | 무엇이 어디에 있나 |
+| [DRIVING_POLICY.md](docs/DRIVING_POLICY.md) | 차가 어떤 규칙으로 달리나 |
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | 노드·토픽·데이터 흐름 |
+| [OPERATIONS.md](docs/OPERATIONS.md) | 빌드·검증·테스트 주행 절차 |
+| [HARDWARE_AND_VESC.md](docs/HARDWARE_AND_VESC.md) | 하드웨어와 VESC 기준값 |
+| [PROVENANCE.md](docs/PROVENANCE.md) | 외부 원본과 우리가 고친 범위 |
 
-`kobot-sensors.service`가 실행 중일 때 `start_sensors:=true`를 사용하면 카메라와
-직렬 센서 장치를 중복 점유하므로 금지한다. `teleop.launch.py`도 `armed:=false`가
-기본이며, 실제 모터 연결은 사용자 승인과 안전조치 후 명시적으로 허용한다.
-
-운영 절차와 검증 순서는 [OPERATIONS.md](docs/OPERATIONS.md), 데이터 흐름은 [ARCHITECTURE.md](docs/ARCHITECTURE.md), 3바퀴 시간경기·미션·실시간 성능 기준은 [RACE_STRATEGY.md](docs/RACE_STRATEGY.md), 하드웨어·VESC 기준은 [HARDWARE_AND_VESC.md](docs/HARDWARE_AND_VESC.md), 원본과 수정 이력은 [PROVENANCE.md](docs/PROVENANCE.md), 파일별 역할은 [FILE_INDEX.md](docs/FILE_INDEX.md)를 따른다.
-
-> 경고: dashboard의 모터 HTTP API에는 인증이 없다. 신뢰된 로컬망 또는 Tailscale 환경에서만 사용하고 인터넷에 직접 공개하지 않는다.
+> 경고: 대시보드의 모터 HTTP API 에는 인증이 없다. 신뢰된 로컬망이나 Tailscale
+> 안에서만 쓰고 인터넷에 직접 공개하지 않는다.
