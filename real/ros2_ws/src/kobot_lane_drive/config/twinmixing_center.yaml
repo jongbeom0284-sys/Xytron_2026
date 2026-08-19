@@ -267,24 +267,24 @@ cone_corridor_drive:
     cone_corridor_width_min_m: 0.50         # 통로 폭 최소 유효 범위
     cone_corridor_width_max_m: 1.25         # 통로 폭 최대 유효 범위 (1.25m 이내 양측 콘 모두 인정)
     cone_forward_min_m: 0.15                # 전방 탐색 최소 거리 (범퍼 앞 15cm — 회전 시 근접 콘 포착)
-    cone_forward_max_m: 1.60                # 전방 탐색 최대 거리 (1.6m — 코너 선회 구간 전체 포착)
-    cone_lateral_max_m: 1.00                # 횡방향 최대 탐색 거리 (좌우 100cm 넉넉히 수용)
+    cone_forward_max_m: 2.50                # 전방 탐색 최대 거리 (2.5m — 다중 룩어헤드 장거리 코너 탈출구 전체 포착)
+    cone_lateral_max_m: 1.20                # 횡방향 최대 탐색 거리 (좌우 120cm 초광각 시야)
     cone_cluster_distance_tolerance_m: 0.12 # 유클리드 군집화 거리 임계값 (12cm)
     cone_min_cluster_points: 2              # 라바콘 최소 반사점 완화 (회전 중 반사점 감소 대응)
     cone_max_cluster_points: 25             # 라바콘 최대 반사점
     cone_min_cluster_span_m: 0.03           # 라바콘 최소 외경
     cone_max_cluster_span_m: 0.25           # 라바콘 최대 외경 (25cm 초과 긴 벽 완전 차단)
-    cone_max_link_distance_m: 0.50          # 라바콘 간 최대 연결 거리 (50cm 초과 시 대각선 오연결 차단)
-    cone_slice_step_m: 0.10                 # 전방 거리 슬라이스 분할 간격 (10cm 촘촘하게)
-    cone_target_lookahead_m: 0.72           # 목표점 Lookahead 거리 (고속 안정화: 0.72m)
-    cone_steering_gain: 1.8                 # 조향 추종 게인 (고속 언더스티어 원천 차단)
-    cone_heading_gain: 0.18                 # 코너 벽면 곡률 피드포워드 게인
-    cone_drive_speed_mps: 0.70              # 최고 직선 속도 (0.70 m/s, 약 8.8 단위)
-    cone_corner_speed_mps: 0.55             # 최고 코너 속도 (0.55 m/s, 약 6.9 단위)
+    cone_max_link_distance_m: 0.55          # 라바콘 간 최대 연결 거리 (고속 주행 55cm 연속 체이닝)
+    cone_slice_step_m: 0.10                 # 전방 거리 슬라이스 분할 간격 (10cm 촘촘하게 25단계 다중 피팅)
+    cone_target_lookahead_m: 0.85           # 목표점 Lookahead 거리 (다중 2차 곡선 피팅 기준: 0.85m)
+    cone_steering_gain: 1.9                 # 조향 추종 게인 (초고속 언더스티어 원천 차단)
+    cone_heading_gain: 0.20                 # 코너 벽면 곡률 피드포워드 게인
+    cone_drive_speed_mps: 0.80              # 최고 직선 속도 (0.80 m/s, 약 10.0 단위)
+    cone_corner_speed_mps: 0.70             # 노브레이크 코너 속도 (0.70 m/s, 약 8.8 단위)
     cone_detection_min_slices: 1            # 유효 슬라이스 최소 개수 (단일 슬라이스 지속 추종)
     cone_detection_min_total_points: 2      # 라바콘 감지 인정 최소 점수
-    cone_steering_filter_alpha: 0.70        # 조향 저역통과 필터 (고속 즉각 반응)
-    cone_max_steering_rate_rad_s: 4.5       # 조향 변화율 제한 (초고속 선회 민첩성 확보)
+    cone_steering_filter_alpha: 0.75        # 조향 저역통과 필터 (초고속 즉각 반응)
+    cone_max_steering_rate_rad_s: 5.0       # 조향 변화율 제한 (초고속 레이싱 민첩 조향)
     lidar_angle_offset_rad: -2.1217         # 라이다 센서 전방 보정 각도
 
 # 실제 모터로 나가는 유일한 노드. armed 없이는 프로세스조차 생기지 않는다.
@@ -297,7 +297,7 @@ twinmixing_center_drive_bridge:
     enable_topic: /kobot_lane_drive/record_drive/enabled
     # 인식이나 상태가 이만큼 끊기면 0 을 보낸다.
     command_timeout_sec: 0.30
-    max_speed_mps: 0.75
+    max_speed_mps: 0.85
     max_steering_rad: 0.476
     # /xycar_motor 형식으로 바꾸는 계수. legacy 각 = -조향rad / angle_scale
     angle_scale: 0.0068

@@ -687,8 +687,8 @@ function drawOneLidar(canvas){
     return chain;
   }
 
-  const leftRoots = allCones.filter(c => c.meanX > 0.05 && c.meanY <= 0.75);
-  const rightRoots = allCones.filter(c => c.meanX < -0.05 && c.meanY <= 0.75);
+  const leftRoots = allCones.filter(c => c.meanX > 0.05 && c.meanY <= 1.20);
+  const rightRoots = allCones.filter(c => c.meanX < -0.05 && c.meanY <= 1.20);
 
   const rightDist = rightRoots.length ? Math.min(...rightRoots.map(c => Math.hypot(c.meanX, c.meanY))) : Infinity;
   const leftDist = leftRoots.length ? Math.min(...leftRoots.map(c => Math.hypot(c.meanX, c.meanY))) : Infinity;

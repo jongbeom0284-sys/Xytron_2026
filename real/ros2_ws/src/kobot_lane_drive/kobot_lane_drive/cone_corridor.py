@@ -303,10 +303,35 @@ def compute_target_point(
     target_lookahead_m: float,
     fallback_margin_m: float,
 ) -> tuple[float, float, float]:
-    """슬라이스들의 중심점들을 가중 평균하여 부드러운 목표 (x, y) 및 신뢰도를 산출한다."""
+    """다중 슬라이스 중심점들을 2차 다항식 곡선으로 피팅하여 최적 룩어헤드 목표점 (x, y) 및 신뢰도를 산출한다."""
     valid_slices = [s for s in slices if s.center_x_m is not None]
     if not valid_slices:
         return 0.0, target_lookahead_m, 0.0
+
+    both_count = sum(1 for s in valid_slices if not s.is_interpolated)
+    confidence = min(1.0, (both_count * 2.0 + len(valid_slices)) / (len(slices) * 1.2 + 1e-6))
+
+    # 근거리 슬라이스(y <= 1.5m)만 2차 다항식 피팅에 사용
+    # (원거리 노이즈 콘 혼입으로 인한 곡률 출렁/조향 흔들림 원천 차단)
+    FIT_MAX_Y = 1.50
+    fit_slices = [s for s in valid_slices if s.y_m <= FIT_MAX_Y]
+
+    if len(fit_slices) >= 3:
+        ys = np.array([float(s.y_m) for s in fit_slices])
+        xs = np.array([float(s.center_x_m) for s in fit_slices])
+        # 룩어헤드 지점 주변에 가중치 집중
+        weights = 1.0 / (np.abs(ys - target_lookahead_m) + 0.25)
+        try:
+            poly = np.polyfit(ys, xs, 2, w=weights)
+            c2, c1, c0 = float(poly[0]), float(poly[1]), float(poly[2])
+            # 곡률 계수 클램프 (비현실적 급곡률 차단: 최대 반경 ~0.25m 이상)
+            c2 = float(clamp(c2, -2.0, 2.0))
+            ld = float(target_lookahead_m)
+            target_x = float(c2 * ld * ld + c1 * ld + c0)
+            target_y = ld
+            return target_x, target_y, confidence
+        except Exception:
+            pass
 
     INTERP_PENALTY = 0.50  # 단측 벽 추종 시에도 목표점이 정상 유도되도록 적절한 가중치 부여
 
@@ -326,9 +351,6 @@ def compute_target_point(
     total_weight = sum(weights)
     target_x = float(sum(w * x for w, x in zip(weights, xs)) / total_weight)
     target_y = float(sum(w * y for w, y in zip(weights, ys)) / total_weight)
-
-    both_count = sum(1 for s in valid_slices if not s.is_interpolated)
-    confidence = min(1.0, (both_count * 2.0 + len(valid_slices)) / (len(slices) * 1.5 + 1e-6))
 
     return target_x, target_y, confidence
 
@@ -394,9 +416,9 @@ def analyze_cone_corridor(
     if total_count < config.detection_min_total_points or not cone_centers:
         return EMPTY_CORRIDOR_RESULT
 
-    # 좌/우 시작 후보 콘 (차량 전방 근거리 0.75m 이내 실제 좌측/우측 콘만 루트로 선정)
-    left_roots = [c for c in cone_centers if c[0] > 0.05 and c[1] <= 0.75]
-    right_roots = [c for c in cone_centers if c[0] < -0.05 and c[1] <= 0.75]
+    # 좌/우 시작 후보 콘 (차량 전방 1.20m 이내 — 고속 주행 시에도 루트 안정 확보)
+    left_roots = [c for c in cone_centers if c[0] > 0.05 and c[1] <= 1.20]
+    right_roots = [c for c in cone_centers if c[0] < -0.05 and c[1] <= 1.20]
 
     # 우측/좌측 벽면 독립 체이닝 및 상호 배제
     # (코너 선회 시 반대편으로 휘어지는 외벽 콘들이 양쪽 벽에 중복 할당되는 현상 원천 방지)
