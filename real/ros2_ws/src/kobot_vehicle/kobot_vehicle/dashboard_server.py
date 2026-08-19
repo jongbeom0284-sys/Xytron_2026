@@ -934,6 +934,7 @@ class DashboardNode(Node):
                     'wall_time', 'lane_state', 'confidence',
                     'lookahead_x_px', 'lookahead_y_px',
                     'center_offset_px', 'heading_deg',
+                    'cross_error_px', 'error_rate', 'lane_tangent_deg',
                     'control_mode', 'steering_rad',
                     'speed_mps', 'reason', 'drive_state',
                 ])
@@ -1039,6 +1040,9 @@ class DashboardNode(Node):
                 lane.get('lookahead_y_px'),
                 lane.get('center_offset_px'),
                 lane.get('heading_deg'),
+                lane.get('cross_error_px'),
+                lane.get('error_rate'),
+                lane.get('lane_tangent_deg'),
                 payload.get('mode'), payload.get('steering_rad'),
                 payload.get('speed_mps'), payload.get('reason'),
                 self.record_drive.state,

@@ -377,48 +377,27 @@ class TwinMixingCenterNode(Node):
     # ------------------------------------------------------------------ 제어
 
     def _steering_terms(self, result, decision, width: int, height: int):
-        """가로오차와 차선 기울기를 함께 낸다.
+        """비례 항에 쓸 가로오차와, 참고용 차선 기울기를 낸다.
 
-        가로오차만 쓰면 차가 중앙에 닿는 순간 조향이 0 이 되는데, 그때도 차는 아직
-        비스듬히 가고 있어 그대로 반대편으로 넘어간다. 그래서 S 자로 진동한다.
-        중앙에 닿을 때 조향과 방향이 함께 0 이 되려면 도착 전에 조향을 풀어야 하고,
-        그 판단 근거가 차선 기울기다.
+        가로오차는 lookahead 기준이다. 차 바로 앞(near 행)에서 재면 곡선에 들어설 때
+        차선이 아직 차 밑에 있어 오차가 0 으로 나오고, 차가 이미 선을 벗어난 뒤에야
+        반응한다. 곡선이 온다는 사실은 먼 쪽에만 나타나므로 미리 보기가 필요하다.
 
-        둘 다 맞춘 경로의 양 끝에서 잰다. 아래끝은 차에 가장 가까운 실측 지점이고
-        위끝은 차선이 가는 방향이다. 중앙선이 점선이라 경로 길이가 프레임마다
-        달라지므로, 고정 행에서 재면 경로가 거기까지 안 내려온 프레임에서 통째로
-        폴백해 기울기가 0 이 된다.
-
-        회피로 옆 차선에 가 있으면 그 이동량을 아래끝에도 같이 적용한다.
+        기울기는 제어에 쓰지 않는다. 원근 때문에 나란히 선 차도 음수로 나와 가로오차와
+        반대로 작용한 적이 있다. 화면 표시와 진단용으로만 계산한다.
         """
-        fallback = (float(decision.target_x_px) - width * 0.5, 0.0)
+        cross_error = float(decision.target_x_px) - width * 0.5
+
+        tangent = 0.0
         points = result.fitted_points
-        if result.lookahead is None or points is None or len(points) < 4:
-            return fallback
-
-        bottom_y = float(points[:, 1].max())
-        top_y = float(points[:, 1].min())
-        minimum_span = max(
-            20.0, height * float(self.get_parameter("steering_minimum_span_ratio").value)
-        )
-        if bottom_y - top_y < minimum_span:
-            return fallback
-
-        # 경로가 차 앞까지 길게 내려오면 그중 가까운 쪽만 쓴다. 먼 구간까지 한 직선으로
-        # 이으면 코너에서 기울기가 실제보다 완만하게 나온다.
-        cap = height * float(self.get_parameter("steering_near_y_ratio").value)
-        near_y = min(bottom_y, cap)
-        if near_y - top_y < minimum_span:
-            near_y = bottom_y
-
-        near_path_x = path_x_at(points, near_y)
-        far_path_x = path_x_at(points, top_y)
-        if near_path_x is None or far_path_x is None:
-            return fallback
-
-        lateral_shift = float(decision.target_x_px) - float(result.lookahead[0])
-        cross_error = near_path_x + lateral_shift - width * 0.5
-        tangent = math.atan2(far_path_x - near_path_x, near_y - top_y)
+        if points is not None and len(points) >= 4:
+            bottom_y = float(points[:, 1].max())
+            top_y = float(points[:, 1].min())
+            if bottom_y - top_y >= 20.0:
+                bottom_x = path_x_at(points, bottom_y)
+                top_x = path_x_at(points, top_y)
+                if bottom_x is not None and top_x is not None:
+                    tangent = math.atan2(top_x - bottom_x, bottom_y - top_y)
         return cross_error, tangent
 
     def _tracking_steering(
