@@ -1,3 +1,4 @@
+# ── kmu_race (xycar_ws) ────────────────────────────
 # ── 파이썬 ────────────────────────────────────────
 __pycache__/
 *.py[cod]
@@ -22,3 +23,20 @@ bags/
 
 # ── macOS ────────────────────────────────────────
 .DS_Store
+
+# ── kobot (real/legacy) ──────────────────────────────
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.DS_Store
+Thumbs.db
+**/build/
+**/install/
+**/log/
+**/.venv/
+# 모델 가중치는 커밋하지 않는다 (TwinMixing large.pth 는 6MB 라 예외로 포함)
+*.pth
+!**/third_party/TwinMixing/pretrained/*.pth
+**/third_party/CLRerNet/dataset/
+**/third_party/CLRerNet/**/*.so
+**/third_party/CLRerNet/**/*.egg-info/

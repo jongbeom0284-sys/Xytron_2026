@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+  <title>KOBOT 차량 센서 뷰어</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="drive.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <p class="eyebrow">JETSON ORIN NX</p>
+      <h1>KOBOT 차량 센서 뷰어</h1>
+    </div>
+
+    <nav class="device-nav" aria-label="장치 연결 관리">
+      <button class="device-icon" data-device="camera" aria-label="카메라 연결 관리" title="카메라">
+        <span class="connection-dot" aria-hidden="true"></span>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h3l1.3-2h7.4L17 7h3a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2Zm8 10a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm0-2a2 2 0 1 1 0-4 2 2 0 0 1 0 4Z"/></svg>
+        <span>카메라</span>
+      </button>
+      <button class="device-icon" data-device="lidar" aria-label="LiDAR 연결 관리" title="LiDAR">
+        <span class="connection-dot" aria-hidden="true"></span>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 1 0 10 10h-2a8 8 0 1 1-8-8V2Zm0 4a6 6 0 1 0 6 6h-2a4 4 0 1 1-4-4V6Zm0 4a2 2 0 1 0 2 2h-2v-2Z"/></svg>
+        <span>LiDAR</span>
+      </button>
+      <button class="device-icon" data-device="ultrasonic" aria-label="초음파 연결 관리" title="초음파">
+        <span class="connection-dot" aria-hidden="true"></span>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9a3 3 0 1 0 0 6V9Zm4-3.2v2.3a5 5 0 0 1 0 7.8v2.3A7 7 0 0 0 8 5.8Zm4-3.2v2.2a9 9 0 0 1 0 14.4v2.2A11 11 0 0 0 12 2.6Zm7 6.4a3 3 0 1 0 0 6V9Z"/></svg>
+        <span>초음파</span>
+      </button>
+      <button class="device-icon" data-device="imu" aria-label="IMU 연결 관리" title="IMU">
+        <span class="connection-dot" aria-hidden="true"></span>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 2h10v3h3v14h-3v3H7v-3H4V5h3V2Zm2 4a3 3 0 0 0-3 3v6a3 3 0 0 0 3 3h6a3 3 0 0 0 3-3V9a3 3 0 0 0-3-3H9Zm3 2 4 7-7-4 3-3Z"/></svg>
+        <span>IMU</span>
+      </button>
+    </nav>
+
+    <span id="ros-state" class="status-pill bad">ROS 연결 중</span>
+  </header>
+
+  <main>
+    <section class="viewer-toolbar" aria-label="화면 배열 선택">
+      <div>
+        <p class="eyebrow">CCTV VIEW</p>
+        <h2>센서 화면 배치</h2>
+      </div>
+      <div class="viewer-toolbar-actions">
+        <button id="open-recovery" class="recovery-open" type="button">화면·센서 복구</button>
+        <div class="layout-switch" role="group" aria-label="화면 배열">
+          <button data-layout="2" class="active">2×2</button>
+          <button data-layout="3">3×3</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="cctv-grid" class="cctv-grid grid-2" aria-label="센서 및 주행 화면"></section>
+  </main>
+
+  <div id="device-dialog" class="device-dialog" hidden>
+    <div class="dialog-backdrop" data-close-dialog></div>
+    <section class="device-dialog-card" role="dialog" aria-modal="true" aria-labelledby="device-dialog-title">
+      <button class="dialog-close" data-close-dialog aria-label="닫기">×</button>
+      <div id="device-dialog-content"></div>
+    </section>
+  </div>
+
+  <div id="recovery-dialog" class="device-dialog recovery-dialog" hidden>
+    <div class="dialog-backdrop" data-close-recovery></div>
+    <section class="device-dialog-card recovery-dialog-card" role="dialog" aria-modal="true" aria-labelledby="recovery-dialog-title">
+      <button class="dialog-close" data-close-recovery aria-label="닫기">×</button>
+      <div id="recovery-dialog-content"></div>
+    </section>
+  </div>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script src="roslib.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
