@@ -24,7 +24,7 @@ from .twinmixing_center import (
     render_overlay,
     restore_mask,
 )
-from .white_left_drive_node import _move_towards
+from .geometry import move_towards
 
 
 def _install_optional_thop_stub() -> None:
@@ -193,7 +193,7 @@ class TwinMixingCenterNode(Node):
         target = max(-maximum, min(maximum, target))
         alpha = float(self.get_parameter("steering_filter_alpha").value)
         filtered = self._steering_rad + alpha * (target - self._steering_rad)
-        self._steering_rad = _move_towards(
+        self._steering_rad = move_towards(
             self._steering_rad,
             filtered,
             float(self.get_parameter("max_steering_rate_rad_s").value) * dt,
