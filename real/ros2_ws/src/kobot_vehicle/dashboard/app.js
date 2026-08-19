@@ -514,8 +514,9 @@ new ROSLIB.Topic({ros,name:'/imu',messageType:'sensor_msgs/Imu'}).subscribe(mess
 
 new ROSLIB.Topic({ros,name:'/scan',messageType:'sensor_msgs/LaserScan'}).subscribe(message=>{latestScan=message;refreshDynamicValues()});
 
-new ROSLIB.Topic({ros,name:'/kobot_lane_drive/twinmixing_center/status',messageType:'std_msgs/String'}).subscribe(message=>{
-  try{latestLane=JSON.parse(message.data);refreshDynamicValues()}catch(error){}
+let latestCone = null;
+new ROSLIB.Topic({ros,name:'/kobot_lane_drive/cone_corridor/status',messageType:'std_msgs/String'}).subscribe(message=>{
+  try{latestCone=JSON.parse(message.data);refreshDynamicValues()}catch(error){}
 });
 
 function drawOneLidar(canvas){
@@ -523,12 +524,244 @@ function drawOneLidar(canvas){
   if(rect.width<1||rect.height<1)return;
   const dpr=Math.min(devicePixelRatio||1,2),width=Math.max(1,Math.floor(rect.width*dpr)),height=Math.max(1,Math.floor(rect.height*dpr));
   if(canvas.width!==width||canvas.height!==height){canvas.width=width;canvas.height=height}
-  const ctx=canvas.getContext('2d'),w=canvas.width,h=canvas.height,cx=w/2,cy=h/2,limit=8,scale=Math.min(w,h)*.43/limit;
-  ctx.clearRect(0,0,w,h);ctx.fillStyle='#f8fafc';ctx.fillRect(0,0,w,h);ctx.strokeStyle='#dbe3ed';ctx.lineWidth=dpr;
-  for(let meter=2;meter<=limit;meter+=2){ctx.beginPath();ctx.arc(cx,cy,meter*scale,0,Math.PI*2);ctx.stroke();ctx.fillStyle='#91a0b4';ctx.font=`${10*dpr}px system-ui`;ctx.fillText(`${meter}m`,cx+3,cy-meter*scale+12*dpr)}
-  ctx.beginPath();ctx.moveTo(cx,cy-limit*scale);ctx.lineTo(cx,cy+limit*scale);ctx.moveTo(cx-limit*scale,cy);ctx.lineTo(cx+limit*scale,cy);ctx.stroke();
-  if(latestScan){for(let i=0;i<latestScan.ranges.length;i++){const range=latestScan.ranges[i];if(!Number.isFinite(range)||range<latestScan.range_min||range>Math.min(latestScan.range_max,limit))continue;const angle=latestScan.angle_min+i*latestScan.angle_increment,x=cx+Math.sin(angle)*range*scale,y=cy-Math.cos(angle)*range*scale,hue=215-Math.min(range/limit,1)*150;ctx.fillStyle=`hsl(${hue} 78% 48%)`;ctx.beginPath();ctx.arc(x,y,Math.max(1.2*dpr,1.5),0,Math.PI*2);ctx.fill()}}
-  ctx.fillStyle='#172033';ctx.beginPath();ctx.moveTo(cx,cy-8*dpr);ctx.lineTo(cx-6*dpr,cy+7*dpr);ctx.lineTo(cx+6*dpr,cy+7*dpr);ctx.closePath();ctx.fill();
+  const ctx=canvas.getContext('2d'),w=canvas.width,h=canvas.height,cx=w/2,cy=h/2,limit=2.0,scale=Math.min(w,h)*.43/limit;
+  
+  // 배경 및 기본 원형 그리드
+  ctx.clearRect(0,0,w,h);ctx.fillStyle='#f8fafc';ctx.fillRect(0,0,w,h);ctx.strokeStyle='#e2e8f0';ctx.lineWidth=dpr;
+  for(let meter=0.5;meter<=limit+0.01;meter+=0.5){
+    ctx.beginPath();ctx.arc(cx,cy,meter*scale,0,Math.PI*2);ctx.stroke();
+    ctx.fillStyle='#94a3b8';ctx.font=`${9*dpr}px -apple-system, system-ui, sans-serif`;
+    const label=meter===Math.floor(meter)?`${meter}m`:`${meter.toFixed(1)}m`;
+    ctx.fillText(label,cx+4*dpr,cy-meter*scale+11*dpr);
+  }
+  // 십자 기준선
+  ctx.strokeStyle='#cbd5e1';ctx.beginPath();
+  ctx.moveTo(cx,cy-limit*scale);ctx.lineTo(cx,cy+limit*scale);
+  ctx.moveTo(cx-limit*scale,cy);ctx.lineTo(cx+limit*scale,cy);
+  ctx.stroke();
+
+  // 1. 라바콘 탐색 ROI 영역 박스 (전방 0.20m~1.60m, 횡방향 ±0.70m)
+  const roiFwdMin = 0.20, roiFwdMax = 1.60, roiLatMax = 0.70;
+  const roiXLeft = cx - roiLatMax * scale;
+  const roiXRight = cx + roiLatMax * scale;
+  const roiYFar = cy - roiFwdMax * scale;
+  const roiYNear = cy - roiFwdMin * scale;
+  
+  ctx.fillStyle='rgba(16, 185, 129, 0.05)';
+  ctx.fillRect(roiXLeft, roiYFar, (roiLatMax * 2) * scale, (roiFwdMax - roiFwdMin) * scale);
+  ctx.strokeStyle='rgba(16, 185, 129, 0.5)';
+  ctx.lineWidth=1.2*dpr;
+  ctx.setLineDash([4*dpr, 3*dpr]);
+  ctx.strokeRect(roiXLeft, roiYFar, (roiLatMax * 2) * scale, (roiFwdMax - roiFwdMin) * scale);
+  ctx.setLineDash([]);
+  
+  ctx.fillStyle='rgba(16, 185, 129, 0.85)';
+  ctx.font=`bold ${9*dpr}px -apple-system, system-ui, sans-serif`;
+  ctx.fillText('라바콘 탐색 ROI (±0.7m × 1.6m)', roiXLeft + 4*dpr, roiYFar + 12*dpr);
+
+  const LIDAR_OFFSET_RAD = -2.1217;
+  const roiPoints = [];
+  const backgroundPoints = [];
+
+  // 2. 라이다 원시 점군 수집 및 ROI 분류
+  if(latestScan && Array.isArray(latestScan.ranges)){
+    for(let i=0;i<latestScan.ranges.length;i++){
+      const range=latestScan.ranges[i];
+      if(!Number.isFinite(range)||range<latestScan.range_min||range>Math.min(latestScan.range_max,limit))continue;
+      const angle=latestScan.angle_min+i*latestScan.angle_increment+LIDAR_OFFSET_RAD;
+      // 차량 좌표계: x_veh (좌+ 우-), y_veh (전방+) - ROS 차량 좌표계와 100% 일치
+      const x_veh = Math.sin(angle) * range;
+      const y_veh = Math.cos(angle) * range;
+      
+      const px = cx - x_veh * scale;
+      const py = cy - y_veh * scale;
+
+      if(y_veh >= roiFwdMin && y_veh <= roiFwdMax && Math.abs(x_veh) <= roiLatMax){
+        roiPoints.push({ x_veh, y_veh, px, py });
+      } else {
+        backgroundPoints.push({ px, py });
+      }
+    }
+  }
+
+  // 3. 배경 벽면/노이즈 점군 그리기 (흐린 슬레이트색)
+  ctx.fillStyle='#94a3b8';
+  for(const pt of backgroundPoints){
+    ctx.beginPath();
+    ctx.arc(pt.px, pt.py, 1.3*dpr, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  // 4. ROI 내 유클리드 군집화 (12cm 임계값) -> 라바콘 vs 벽면 분리
+  const clusters = [];
+  const visited = new Array(roiPoints.length).fill(false);
+  for(let i=0; i<roiPoints.length; i++){
+    if(visited[i]) continue;
+    const c = [roiPoints[i]];
+    visited[i] = true;
+    const queue = [roiPoints[i]];
+    while(queue.length > 0){
+      const curr = queue.shift();
+      for(let j=0; j<roiPoints.length; j++){
+        if(!visited[j]){
+          const dist = Math.hypot(roiPoints[j].x_veh - curr.x_veh, roiPoints[j].y_veh - curr.y_veh);
+          if(dist <= 0.12){
+            visited[j] = true;
+            queue.push(roiPoints[j]);
+            c.push(roiPoints[j]);
+          }
+        }
+      }
+    }
+    const xs = c.map(p => p.x_veh), ys = c.map(p => p.y_veh);
+    const spanX = Math.max(...xs) - Math.min(...xs);
+    const spanY = Math.max(...ys) - Math.min(...ys);
+    const span = Math.hypot(spanX, spanY);
+    const isCone = (c.length >= 3 && c.length <= 25 && span >= 0.03 && span <= 0.25);
+    const meanX = xs.reduce((a,b)=>a+b,0) / c.length;
+    const meanY = ys.reduce((a,b)=>a+b,0) / c.length;
+    clusters.push({ points: c, isCone, span, meanX, meanY, px: cx - meanX*scale, py: cy - meanY*scale });
+  }
+
+  const leftCones = [];
+  const rightCones = [];
+
+  // 5. 클러스터 시각화 (라바콘: 주황색 + 마커 / 벽면: 연회색)
+  const allCones = [];
+  for(const cl of clusters){
+    if(cl.isCone){
+      // 라바콘 점군 (선명한 주황색)
+      ctx.fillStyle='#ea580c';
+      for(const pt of cl.points){
+        ctx.beginPath();
+        ctx.arc(pt.px, pt.py, 2.2*dpr, 0, Math.PI*2);
+        ctx.fill();
+      }
+      // 라바콘 중심 마커 (원형 링 + 십자)
+      ctx.strokeStyle='#f97316';
+      ctx.lineWidth=1.8*dpr;
+      ctx.beginPath();
+      ctx.arc(cl.px, cl.py, 5*dpr, 0, Math.PI*2);
+      ctx.stroke();
+
+      allCones.push(cl);
+    } else {
+      // 벽면 / 대형 노이즈 (연회색 표시)
+      ctx.fillStyle='#cbd5e1';
+      for(const pt of cl.points){
+        ctx.beginPath();
+        ctx.arc(pt.px, pt.py, 1.5*dpr, 0, Math.PI*2);
+        ctx.fill();
+      }
+    }
+  }
+
+  // 6. 가상 폴리라인 경계선 (체이닝 방식: 최대 연결 거리 0.50m 제한)
+  const MAX_LINK_DIST = 0.50;
+
+  function chainCones(rootCandidates, pool){
+    if(!rootCandidates || rootCandidates.length === 0) return [];
+    const roots = [...rootCandidates];
+    roots.sort((a,b) => Math.hypot(a.meanX, a.meanY) - Math.hypot(b.meanX, b.meanY));
+    const root = roots[0];
+    const chain = [root];
+    let curr = root;
+    const remaining = pool.filter(c => c !== root);
+
+    while(remaining.length > 0){
+      const validNext = [];
+      for(const c of remaining){
+        const dist = Math.hypot(c.meanX - curr.meanX, c.meanY - curr.meanY);
+        if(dist <= MAX_LINK_DIST && c.meanY >= curr.meanY - 0.10){
+          validNext.push({ dist, cone: c });
+        }
+      }
+      if(validNext.length === 0) break;
+      validNext.sort((a,b) => a.dist - b.dist);
+      const nextCone = validNext[0].cone;
+      chain.push(nextCone);
+      const idx = remaining.indexOf(nextCone);
+      if(idx >= 0) remaining.splice(idx, 1);
+      curr = nextCone;
+    }
+    return chain;
+  }
+
+  const leftRoots = allCones.filter(c => c.meanX > 0.05 && c.meanY <= 0.90);
+  if(leftRoots.length === 0) leftRoots.push(...allCones.filter(c => c.meanX > 0));
+  const rightRoots = allCones.filter(c => c.meanX < -0.05 && c.meanY <= 0.90);
+  if(rightRoots.length === 0) rightRoots.push(...allCones.filter(c => c.meanX < 0));
+
+  const leftChain = chainCones(leftRoots, allCones);
+  const rightChain = chainCones(rightRoots, allCones);
+
+  if(leftChain.length > 1){
+    ctx.strokeStyle='#2563eb';
+    ctx.lineWidth=2.2*dpr;
+    ctx.beginPath();
+    ctx.moveTo(leftChain[0].px, leftChain[0].py);
+    for(let i=1; i<leftChain.length; i++) ctx.lineTo(leftChain[i].px, leftChain[i].py);
+    ctx.stroke();
+  }
+  if(rightChain.length > 1){
+    ctx.strokeStyle='#dc2626';
+    ctx.lineWidth=2.2*dpr;
+    ctx.beginPath();
+    ctx.moveTo(rightChain[0].px, rightChain[0].py);
+    for(let i=1; i<rightChain.length; i++) ctx.lineTo(rightChain[i].px, rightChain[i].py);
+    ctx.stroke();
+  }
+
+  // 7. 실시간 라바콘 추종 목표점 및 조향선 (최신 status 토픽 반영)
+  if(latestCone && latestCone.found){
+    const targetPx = cx - latestCone.target_x_m * scale;
+    const targetPy = cy - latestCone.target_y_m * scale;
+
+    // 조향 유도 궤적 곡선
+    ctx.strokeStyle='rgba(234, 179, 8, 0.85)';
+    ctx.lineWidth=2.5*dpr;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.quadraticCurveTo(cx, targetPy, targetPx, targetPy);
+    ctx.stroke();
+
+    // 목표점 타겟 마커 (황금색 과녁)
+    ctx.fillStyle='#eab308';
+    ctx.beginPath();
+    ctx.arc(targetPx, targetPy, 4.5*dpr, 0, Math.PI*2);
+    ctx.fill();
+    ctx.strokeStyle='#ca8a04';
+    ctx.lineWidth=1.5*dpr;
+    ctx.beginPath();
+    ctx.arc(targetPx, targetPy, 8*dpr, 0, Math.PI*2);
+    ctx.stroke();
+  }
+
+  // 8. 차량 중심 아이콘 (삼각형)
+  ctx.fillStyle='#0f172a';
+  ctx.beginPath();
+  ctx.moveTo(cx,cy-9*dpr);
+  ctx.lineTo(cx-7*dpr,cy+8*dpr);
+  ctx.lineTo(cx+7*dpr,cy+8*dpr);
+  ctx.closePath();
+  ctx.fill();
+
+  // 9. 상단 실시간 주행 상태 HUD 오버레이
+  ctx.fillStyle='rgba(15, 23, 42, 0.85)';
+  ctx.fillRect(8*dpr, 8*dpr, w - 16*dpr, 24*dpr);
+  ctx.fillStyle='#f8fafc';
+  ctx.font=`bold ${10*dpr}px -apple-system, system-ui, sans-serif`;
+  if(latestCone && latestCone.found){
+    const steerDeg = latestCone.steering_deg || 0;
+    const steerStr = `${steerDeg >= 0 ? '+' : ''}${steerDeg.toFixed(1)}°`;
+    const speedStr = `${(latestCone.speed_mps || 0).toFixed(2)}m/s`;
+    const coneCountStr = `L:${latestCone.left_points || 0} R:${latestCone.right_points || 0}`;
+    const hudText = `라바콘 주행 [TRACKING]  |  조향: ${steerStr}  |  속도: ${speedStr}  |  콘: ${coneCountStr}`;
+    ctx.fillText(hudText, 14*dpr, 24*dpr);
+  } else {
+    ctx.fillStyle='#94a3b8';
+    ctx.fillText('라바콘 주행 대기 중 (통로 감지 대기)', 14*dpr, 24*dpr);
+  }
 }
 
 function drawLidar(){document.querySelectorAll('canvas[data-lidar]').forEach(drawOneLidar);requestAnimationFrame(drawLidar)}
