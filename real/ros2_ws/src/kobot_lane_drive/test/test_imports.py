@@ -43,3 +43,46 @@ def test_gated_bridge_imports_are_all_local():
             assert (package / f"{node.module}.py").is_file(), (
                 f"bridge 가 import 하는 {node.module} 이 패키지에 없다"
             )
+
+
+def test_config_builders_only_pass_fields_the_dataclass_has():
+    """노드가 설정 객체에 넘기는 인자 이름이 실제 필드와 맞는지 본다.
+
+    2026-08-19 사다리꼴 ROI 를 넣을 때, 같은 문자열이 두 곳에 있어 인자가 엉뚱한
+    설정 객체로 들어갔다. 노드는 기동하자마자 TypeError 로 죽었지만 문자열 검사
+    시험은 전부 통과했고, 실차 재시작에서야 드러났다.
+    """
+    import ast
+    import dataclasses
+    from pathlib import Path
+
+    from kobot_lane_drive.lane_policy import LanePolicyConfig
+    from kobot_lane_drive.obstacle_lidar import LidarSectorConfig
+    from kobot_lane_drive.twinmixing_center import TwinMixingCenterConfig
+    from kobot_lane_drive.yellow_center import YellowCenterConfig
+
+    known = {
+        "TwinMixingCenterConfig": TwinMixingCenterConfig,
+        "YellowCenterConfig": YellowCenterConfig,
+        "LanePolicyConfig": LanePolicyConfig,
+        "LidarSectorConfig": LidarSectorConfig,
+    }
+    source = (
+        Path(__file__).parents[1]
+        / "kobot_lane_drive"
+        / "twinmixing_center_node.py"
+    ).read_text(encoding="utf-8")
+
+    checked = 0
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+            continue
+        target = known.get(node.func.id)
+        if target is None:
+            continue
+        fields = {f.name for f in dataclasses.fields(target)}
+        passed = {kw.arg for kw in node.keywords if kw.arg}
+        unknown = passed - fields
+        assert not unknown, f"{node.func.id} 에 없는 인자: {sorted(unknown)}"
+        checked += 1
+    assert checked >= 4, "설정 생성 지점을 찾지 못했다"

@@ -233,6 +233,7 @@ class TwinMixingCenterNode(Node):
         self.declare_parameter("steering_output_gain", 2.0)
         self.declare_parameter("steering_heading_gain", 1.0)
         self.declare_parameter("steering_near_y_ratio", 0.76)
+        self.declare_parameter("steering_minimum_span_ratio", 0.06)
         self.declare_parameter("steering_filter_alpha", 0.35)
         self.declare_parameter("max_steering_rad", 0.476)
         self.declare_parameter("max_steering_rate_rad_s", 1.20)
@@ -242,13 +243,7 @@ class TwinMixingCenterNode(Node):
 
     def _build_center_config(self) -> TwinMixingCenterConfig:
         return TwinMixingCenterConfig(
-            roi_top_ratio=float(self._value("yellow_roi_top_ratio")),
-            roi_bottom_half_width_ratio=float(
-                self._value("yellow_roi_bottom_half_width_ratio")
-            ),
-            roi_top_half_width_ratio=float(
-                self._value("yellow_roi_top_half_width_ratio")
-            ),
+            roi_top_ratio=float(self._value("roi_top_ratio")),
             roi_bottom_ratio=float(self._value("roi_bottom_ratio")),
             row_step=int(self._value("row_step")),
             search_half_width_ratio=float(self._value("search_half_width_ratio")),
@@ -275,8 +270,14 @@ class TwinMixingCenterNode(Node):
             saturation_high=int(self._value("yellow_saturation_high")),
             value_low=int(self._value("yellow_value_low")),
             value_high=int(self._value("yellow_value_high")),
-            roi_top_ratio=float(self._value("roi_top_ratio")),
+            roi_top_ratio=float(self._value("yellow_roi_top_ratio")),
             roi_bottom_ratio=float(self._value("roi_bottom_ratio")),
+            roi_bottom_half_width_ratio=float(
+                self._value("yellow_roi_bottom_half_width_ratio")
+            ),
+            roi_top_half_width_ratio=float(
+                self._value("yellow_roi_top_half_width_ratio")
+            ),
             row_step=int(self._value("row_step")),
             lane_dilate_px=int(self._value("yellow_lane_dilate_px")),
             open_kernel_px=int(self._value("yellow_open_kernel_px")),
@@ -377,22 +378,41 @@ class TwinMixingCenterNode(Node):
         중앙에 닿을 때 조향과 방향이 함께 0 이 되려면 도착 전에 조향을 풀어야 하고,
         그 판단 근거가 차선 기울기다.
 
-        가로오차는 차 바로 앞(near 행)에서 재고, 기울기는 near 행과 lookahead 행을
-        잇는 각도로 잰다. 회피로 옆 차선에 가 있으면 그 이동량을 near 행에도 같이
-        적용한다.
+        둘 다 맞춘 경로의 양 끝에서 잰다. 아래끝은 차에 가장 가까운 실측 지점이고
+        위끝은 차선이 가는 방향이다. 중앙선이 점선이라 경로 길이가 프레임마다
+        달라지므로, 고정 행에서 재면 경로가 거기까지 안 내려온 프레임에서 통째로
+        폴백해 기울기가 0 이 된다.
+
+        회피로 옆 차선에 가 있으면 그 이동량을 아래끝에도 같이 적용한다.
         """
         fallback = (float(decision.target_x_px) - width * 0.5, 0.0)
-        if result.lookahead is None:
+        points = result.fitted_points
+        if result.lookahead is None or points is None or len(points) < 4:
             return fallback
-        lookahead_x, lookahead_y = result.lookahead
-        near_y = height * float(self.get_parameter("steering_near_y_ratio").value)
-        near_path_x = path_x_at(result.fitted_points, near_y)
-        if near_path_x is None or near_y <= lookahead_y:
+
+        bottom_y = float(points[:, 1].max())
+        top_y = float(points[:, 1].min())
+        minimum_span = max(
+            20.0, height * float(self.get_parameter("steering_minimum_span_ratio").value)
+        )
+        if bottom_y - top_y < minimum_span:
             return fallback
-        lateral_shift = float(decision.target_x_px) - float(lookahead_x)
-        near_target = near_path_x + lateral_shift
-        cross_error = near_target - width * 0.5
-        tangent = math.atan2(float(lookahead_x) - near_path_x, near_y - float(lookahead_y))
+
+        # 경로가 차 앞까지 길게 내려오면 그중 가까운 쪽만 쓴다. 먼 구간까지 한 직선으로
+        # 이으면 코너에서 기울기가 실제보다 완만하게 나온다.
+        cap = height * float(self.get_parameter("steering_near_y_ratio").value)
+        near_y = min(bottom_y, cap)
+        if near_y - top_y < minimum_span:
+            near_y = bottom_y
+
+        near_path_x = path_x_at(points, near_y)
+        far_path_x = path_x_at(points, top_y)
+        if near_path_x is None or far_path_x is None:
+            return fallback
+
+        lateral_shift = float(decision.target_x_px) - float(result.lookahead[0])
+        cross_error = near_path_x + lateral_shift - width * 0.5
+        tangent = math.atan2(far_path_x - near_path_x, near_y - top_y)
         return cross_error, tangent
 
     def _tracking_steering(
