@@ -52,6 +52,13 @@ class YellowCenterConfig:
     minimum_run_pixels: int = 3
     minimum_rows: int = 8
 
+    # 후보 좌우에 주행 가능 영역을 요구하는 선택 조건. 노란 구조물을 배제할 수는
+    # 있지만, 한쪽 도로만 보이는 프레임에서도 중앙선은 따라가야 하므로 기본은 끈다.
+    # 실측(20260818_204211_264): 켜면 YELLOW_LINE 118 -> 42 로 떨어졌다.
+    require_road_on_both_sides: bool = False
+    side_support_ratio: float = 0.02
+    side_search_ratio: float = 0.10
+
     ghost_maximum_frames: int = 20
     history_size: int = 10
     ghost_confidence_floor: float = 0.20
@@ -95,6 +102,26 @@ def yellow_evidence(
     return evidence
 
 
+def _has_road_on_both_sides(
+    driving_row: np.ndarray,
+    start: int,
+    end: int,
+    support_px: int,
+    search_px: int,
+) -> bool:
+    """후보 양옆에 주행 가능 영역이 충분히 있는가.
+
+    노란 중앙선은 도로 한가운데 있으므로 좌우 모두 도로다. 벽면의 노란 표지나
+    배리어는 한쪽이 도로가 아니므로 여기서 걸러진다.
+    """
+    width = driving_row.size
+    left_from = max(0, start - search_px)
+    right_to = min(width, end + 1 + search_px)
+    left_road = int(driving_row[left_from:start].sum())
+    right_road = int(driving_row[end + 1 : right_to].sum())
+    return left_road >= support_px and right_road >= support_px
+
+
 def extract_yellow_center(
     frame_bgr: np.ndarray,
     driving_mask: np.ndarray,
@@ -118,6 +145,10 @@ def extract_yellow_center(
     search_half = max(12, int(round(width * config.search_half_width_ratio)))
     maximum_run = max(4, int(round(width * config.maximum_run_width_ratio)))
 
+    side_support = max(3, int(round(width * config.side_support_ratio)))
+    side_search = max(side_support * 2, int(round(width * config.side_search_ratio)))
+    driving = driving_mask.astype(bool)
+
     expected_x = width * 0.5
     samples: list[tuple[float, float]] = []
     widths: list[float] = []
@@ -130,6 +161,10 @@ def extract_yellow_center(
             center = (start + end) * 0.5
             distance = abs(center - expected_x)
             if distance > search_half:
+                continue
+            if config.require_road_on_both_sides and not _has_road_on_both_sides(
+                driving[y], start, end, side_support, side_search
+            ):
                 continue
             if best is None or distance < best[0]:
                 best = (distance, center, float(run_width))

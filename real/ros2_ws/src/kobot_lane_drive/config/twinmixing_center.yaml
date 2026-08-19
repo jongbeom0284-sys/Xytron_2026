@@ -39,6 +39,11 @@ twinmixing_center_drive:
     yellow_maximum_run_width_ratio: 0.22
     yellow_minimum_run_pixels: 3
     yellow_minimum_rows: 8
+    # 선택 조건. 노란 배리어를 배제할 수 있지만 한쪽 도로만 보이는 프레임에서
+    # 중앙선을 놓친다. 실측에서 검출률이 87% -> 31% 로 떨어져 기본은 끈다.
+    yellow_require_road_on_both_sides: false
+    yellow_side_support_ratio: 0.02
+    yellow_side_search_ratio: 0.10
     # 점선 구간에서 목표선을 유지하는 최대 프레임 수
     yellow_ghost_maximum_frames: 20
     yellow_history_size: 10
