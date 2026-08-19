@@ -1,12 +1,33 @@
 """노란 중앙선을 주행 목표선으로 뽑는다 — 주행 우선순위 1단계.
 
 TwinMixing 은 주행 가능 영역(driving_mask)과 차선 픽셀(lane_mask)을 낸다. 하지만
-lane_mask 는 색을 구분하지 않고, driving_mask 의 틈은 그림자·얼룩·장애물로도 생긴다.
-여기서 원본 프레임의 색을 직접 확인해 "그 틈이 정말 노란 중앙선인가"를 판정한다.
+lane_mask 는 색을 구분하지 않고(양쪽 흰 차선도 함께 잡는다), driving_mask 의 틈은
+그림자·얼룩·장애물로도 생긴다. 여기서 원본 프레임의 색을 직접 확인한다.
+
+검출 방식은 두 가지고 기본은 lab_relative 다.
+
+lab_relative
+    LAB 의 b* 채널은 파랑(-)과 노랑(+)을 잇는 한 축이다. 여기에 가로 방향 top-hat 을
+    걸어 '주변보다 국소적으로 더 노란 좁은 줄무늬'만 남긴다.
+
+    절대 임계로는 못 가른다. 나무는 갈색 = 어두운 주황이라 색상 축에서 노랑과 겹치고,
+    2026-08-19 실측에서는 노란 점선의 V 가 108, 나무 바닥이 127 로 선이 오히려 더
+    어두웠다. 도로 픽셀 기준의 상대 판정도 안 된다. 도로 밖 나무 바닥은 회색 도로보다
+    노라므로 그대로 통과한다.
+
+    실제로 가르는 것은 '넓고 균일한 누런 면'과 '좁은 노란 줄무늬'의 차이다. 가로로 긴
+    구조요소로 opening 하면 좁은 줄무늬만 지워지고 넓은 면은 남는다. 원본에서 빼면
+    줄무늬만 남고 나무 바닥·벽은 0 에 가깝게 사라진다. 조명이 바뀌거나 자동
+    화이트밸런스가 장면 전체에 노란 캐스트를 씌워도 국소 차이는 유지된다.
+
+hsv_absolute
+    고정된 HSV 상하한으로 자르는 예전 방식. 비교용으로 남겨 둔다. 실내에서는
+    갈색(=어두운 주황)이 노랑과 색상 축에서 겹쳐 나무 벽·바닥이 함께 걸린다.
+    2026-08-19 실측에서 노란 점선의 V 가 108, 나무 바닥이 127 로 선이 오히려
+    더 어두워, 절대 임계로는 원리적으로 가를 수 없었다.
 
 중앙선이 점선이면 행 사이가 비므로, 검출이 끊긴 동안 최근 추세를 연장하는 외삽을
 둔다. legacy/vehicle-nodes/Lane_follow.py 가 쓰던 GHOST/PREDICT 와 같은 발상이다.
-이 외삽이 없으면 점선 구간마다 1단계가 2단계로 떨어져 목표선이 계속 흔들린다.
 """
 
 from __future__ import annotations
@@ -26,11 +47,22 @@ from .twinmixing_center import (
 YELLOW_SOURCE = "YELLOW_LINE"
 GHOST_SOURCE = "YELLOW_LINE_GHOST"
 
+LAB_RELATIVE = "lab_relative"
+HSV_ABSOLUTE = "hsv_absolute"
+
 
 @dataclass(frozen=True)
 class YellowCenterConfig:
-    # HSV 임계. legacy Lane_follow.py 의 실측 프리셋(H 25-40 / S 61-120 / V 190-255)에서
-    # 출발하되 조명 변화를 견디도록 넓혔다. 현장에서는 노출과 함께 다시 맞춘다.
+    detector: str = LAB_RELATIVE
+
+    # --- lab_relative ---
+    # OpenCV LAB 에서 b* 는 0~255 이고 128 이 중립이다.
+    lab_margin: float = 8.0        # 주변 대비 최소 초과량
+    lab_minimum_b: float = 130.0   # 노랑쪽이라는 약한 절대 조건
+    # 중앙선 폭보다 넉넉히 넓어야 한다. 이보다 좁은 줄무늬만 남는다.
+    lab_tophat_width_px: int = 81
+
+    # --- hsv_absolute (비교용) ---
     hue_low: int = 15
     hue_high: int = 45
     saturation_low: int = 55
@@ -38,9 +70,13 @@ class YellowCenterConfig:
     value_low: int = 110
     value_high: int = 255
 
-    roi_top_ratio: float = 0.46
-    roi_bottom_ratio: float = 0.97
+    roi_top_ratio: float = 0.50
+    roi_bottom_ratio: float = 0.78
     row_step: int = 4
+
+    # 세로 사다리꼴. 아래는 넓고 위는 좁다. 화면 폭 대비 반폭 비율이다.
+    roi_bottom_half_width_ratio: float = 0.42
+    roi_top_half_width_ratio: float = 0.14
 
     # lane_mask 를 살짝 부풀려 색 마스크와 교차시킨다. 세그멘테이션 경계가 한두 픽셀
     # 어긋나도 노란 픽셀을 놓치지 않기 위해서다.
@@ -54,7 +90,6 @@ class YellowCenterConfig:
 
     # 후보 좌우에 주행 가능 영역을 요구하는 선택 조건. 노란 구조물을 배제할 수는
     # 있지만, 한쪽 도로만 보이는 프레임에서도 중앙선은 따라가야 하므로 기본은 끈다.
-    # 실측(20260818_204211_264): 켜면 YELLOW_LINE 118 -> 42 로 떨어졌다.
     require_road_on_both_sides: bool = False
     side_support_ratio: float = 0.02
     side_search_ratio: float = 0.10
@@ -64,19 +99,85 @@ class YellowCenterConfig:
     ghost_confidence_floor: float = 0.20
 
 
-def yellow_mask(frame_bgr: np.ndarray, config: YellowCenterConfig) -> np.ndarray:
-    """프레임에서 노란 픽셀만 남긴 bool 마스크."""
+def _row_bounds(height: int, config: YellowCenterConfig) -> tuple[int, int]:
+    y_top = int(round(height * config.roi_top_ratio))
+    y_bottom = min(height - 1, int(round(height * config.roi_bottom_ratio)))
+    return y_top, y_bottom
+
+
+def roi_trapezoid(height: int, width: int, config: YellowCenterConfig) -> np.ndarray:
+    """화면 중앙을 축으로 한 세로 사다리꼴 마스크.
+
+    중앙선은 늘 화면 중앙 부근에 있고 멀수록 좁은 범위로 모인다. 직사각형으로
+    자르면 먼 행에서 화면 끝까지 훑어 벽과 바닥을 후보로 끌어들인다.
+    """
+    mask = np.zeros((height, width), dtype=bool)
+    y_top, y_bottom = _row_bounds(height, config)
+    if y_bottom <= y_top:
+        return mask
+    rows = np.arange(y_top, y_bottom + 1)
+    progress = (rows - y_top) / float(y_bottom - y_top)
+    half = width * (
+        config.roi_top_half_width_ratio
+        + progress * (config.roi_bottom_half_width_ratio - config.roi_top_half_width_ratio)
+    )
+    centre = width * 0.5
+    columns = np.arange(width)[None, :]
+    inside = (columns >= (centre - half)[:, None]) & (columns <= (centre + half)[:, None])
+    mask[y_top : y_bottom + 1] = inside
+    return mask
+
+
+def yellow_mask_hsv(frame_bgr: np.ndarray, config: YellowCenterConfig) -> np.ndarray:
+    """고정 HSV 상하한으로 자른 마스크 (예전 방식)."""
     hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
     mask = cv2.inRange(
         hsv,
         np.array([config.hue_low, config.saturation_low, config.value_low], dtype=np.uint8),
         np.array([config.hue_high, config.saturation_high, config.value_high], dtype=np.uint8),
     )
-    if config.open_kernel_px > 1:
-        kernel = np.ones((config.open_kernel_px, config.open_kernel_px), np.uint8)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
     return mask.astype(bool)
+
+
+def yellow_mask_lab(
+    frame_bgr: np.ndarray,
+    driving_mask: np.ndarray,
+    config: YellowCenterConfig,
+) -> np.ndarray:
+    """주변보다 국소적으로 더 노란 좁은 줄무늬만 남긴다.
+
+    driving_mask 는 쓰지 않는다. 도로 안팎을 가리지 않고 '좁은 노란 줄'이라는
+    형태 조건만으로 판정하므로, 세그멘테이션이 중앙선을 덮어도 결과가 같다.
+    """
+    del driving_mask  # 형태 기반 판정이라 필요 없다. 호출부 서명은 유지한다.
+    lab = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2LAB)
+    blue_yellow = lab[:, :, 2]
+    width = max(3, int(config.lab_tophat_width_px) | 1)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (width, 1))
+    # opening 은 커널보다 좁은 밝은 줄무늬를 지운다. 원본에서 빼면 그 줄무늬만 남는다.
+    surroundings = cv2.morphologyEx(blue_yellow, cv2.MORPH_OPEN, kernel)
+    contrast = blue_yellow.astype(np.int16) - surroundings.astype(np.int16)
+    return (contrast >= config.lab_margin) & (blue_yellow >= config.lab_minimum_b)
+
+
+def yellow_mask(
+    frame_bgr: np.ndarray,
+    driving_mask: np.ndarray,
+    config: YellowCenterConfig,
+) -> np.ndarray:
+    """설정된 방식으로 노란 픽셀 마스크를 만든다."""
+    if config.detector == HSV_ABSOLUTE:
+        return yellow_mask_hsv(frame_bgr, config)
+    return yellow_mask_lab(frame_bgr, driving_mask, config)
+
+
+def _clean(mask: np.ndarray, config: YellowCenterConfig) -> np.ndarray:
+    if config.open_kernel_px <= 1:
+        return mask
+    kernel = np.ones((config.open_kernel_px, config.open_kernel_px), np.uint8)
+    cleaned = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_OPEN, kernel)
+    cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_CLOSE, kernel)
+    return cleaned.astype(bool)
 
 
 def yellow_evidence(
@@ -87,10 +188,11 @@ def yellow_evidence(
 ) -> np.ndarray:
     """중앙선 후보 픽셀.
 
-    1순위 근거는 모델이 차선이라고 한 픽셀 중 실제로 노란 것,
-    보조 근거는 주행 영역 바깥(=영역 사이 틈)의 노란 픽셀이다.
+    주행 영역 바깥(=영역 사이 틈)의 노란 픽셀과, 모델이 차선이라고 한 픽셀 중
+    노란 것을 함께 근거로 삼는다. 세그멘테이션이 중앙선을 차선으로 덮는 프레임과
+    주행영역 사이 틈으로 남기는 프레임이 둘 다 있어서 한쪽만으로는 부족하다.
     """
-    yellow = yellow_mask(frame_bgr, config)
+    yellow = _clean(yellow_mask(frame_bgr, driving_mask, config), config)
     driving = driving_mask.astype(bool)
     evidence = yellow & ~driving
     if lane_mask is not None and np.any(lane_mask):
@@ -109,11 +211,7 @@ def _has_road_on_both_sides(
     support_px: int,
     search_px: int,
 ) -> bool:
-    """후보 양옆에 주행 가능 영역이 충분히 있는가.
-
-    노란 중앙선은 도로 한가운데 있으므로 좌우 모두 도로다. 벽면의 노란 표지나
-    배리어는 한쪽이 도로가 아니므로 여기서 걸러진다.
-    """
+    """후보 양옆에 주행 가능 영역이 충분히 있는가."""
     width = driving_row.size
     left_from = max(0, start - search_px)
     right_to = min(width, end + 1 + search_px)
@@ -138,17 +236,15 @@ def extract_yellow_center(
     height, width = driving_mask.shape[:2]
     evidence = yellow_evidence(frame_bgr, driving_mask, lane_mask, config)
 
-    y_top = int(round(height * config.roi_top_ratio))
-    y_bottom = min(height - 1, int(round(height * config.roi_bottom_ratio)))
+    y_top, y_bottom = _row_bounds(height, config)
     # ROI 밖의 노란 픽셀은 쓰지 않으므로 근거 마스크에서도 지운다.
     # 화면에 남겨 두면 벽면 반사가 검출된 것처럼 보여 오해를 부른다.
-    evidence[:y_top] = False
-    evidence[y_bottom + 1:] = False
+    evidence &= roi_trapezoid(height, width, config)
+
     rows = range(y_bottom, y_top - 1, -max(1, config.row_step))
     attempted_rows = len(rows)
     search_half = max(12, int(round(width * config.search_half_width_ratio)))
     maximum_run = max(4, int(round(width * config.maximum_run_width_ratio)))
-
     side_support = max(3, int(round(width * config.side_support_ratio)))
     side_search = max(side_support * 2, int(round(width * config.side_search_ratio)))
     driving = driving_mask.astype(bool)
@@ -239,7 +335,7 @@ class YellowCenterTracker:
         self._blind_frames += 1
         step = 0.0
         if len(self._history) >= 3:
-            recent = self._history[-min(5, len(self._history)):]
+            recent = self._history[-min(5, len(self._history)) :]
             step = (recent[-1] - recent[0]) / max(1, len(recent) - 1)
 
         previous = self._last_valid

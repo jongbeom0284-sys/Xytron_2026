@@ -33,8 +33,8 @@ _SHIFT_STATE = {"left": SHIFT_LEFT, "right": SHIFT_RIGHT}
 @dataclass(frozen=True)
 class LanePolicyConfig:
     sample_rows: int = 14
-    roi_top_ratio: float = 0.52
-    roi_bottom_ratio: float = 0.95
+    roi_top_ratio: float = 0.66
+    roi_bottom_ratio: float = 0.76
 
     # 차선으로 인정할 최소 폭 (프레임 폭 대비)
     minimum_lane_width_ratio: float = 0.05
