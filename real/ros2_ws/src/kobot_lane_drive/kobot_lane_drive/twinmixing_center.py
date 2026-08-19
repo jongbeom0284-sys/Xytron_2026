@@ -20,6 +20,9 @@ class TwinMixingCenterConfig:
     lookahead_y_ratio: float = 0.67
     minimum_region_width_ratio: float = 0.12
     region_search_half_width_ratio: float = 0.40
+    # 영역 중앙을 잡기 직전에 메울 틈의 최대 폭 (화면 폭 대비).
+    # 중앙선 자국처럼 얇은 틈이 도로를 갈라 놓으면 넓은 쪽 절반만 도로로 보게 된다.
+    region_fill_gap_ratio: float = 0.035
 
 
 @dataclass
@@ -203,6 +206,31 @@ def _fit_path(
     )
 
 
+def fill_narrow_gaps(driving_mask: np.ndarray, maximum_gap_px: int) -> np.ndarray:
+    """행마다 폭이 maximum_gap_px 이하인 빈틈을 주행영역으로 메운다.
+
+    중앙선 자국이나 그림자가 만든 얇은 틈이 도로를 두 조각으로 가르면, 가장 넓은
+    조각만 쓰는 계산에서 도로의 절반이 통째로 빠진다. 그 결과 한가운데가 실제 도로
+    중앙에서 크게 벗어난다.
+
+    이 함수는 마지막 폴백 직전에만 쓴다. 그 전에 센터 갭 판정이 이미 끝나 있으므로
+    진짜로 갈라진 도로를 지울 위험이 없다.
+    """
+    if maximum_gap_px <= 0:
+        return driving_mask
+    filled = driving_mask.copy()
+    for y in range(filled.shape[0]):
+        row = filled[y]
+        if not row.any():
+            continue
+        for start, end in _false_runs(row):
+            if start == 0 or end >= row.size - 1:
+                continue  # 화면 끝에 닿은 틈은 바깥이라 메우지 않는다
+            if end - start + 1 <= maximum_gap_px:
+                row[start : end + 1] = True
+    return filled
+
+
 def extract_center_path(
     driving_mask: np.ndarray,
     lane_mask: np.ndarray | None = None,
@@ -249,6 +277,10 @@ def extract_center_path(
     if result.found:
         return result
 
+    # 노란선도 센터 갭도 실패했다. 얇은 틈이 도로를 갈라 놓았을 수 있으므로 메운다.
+    driving = fill_narrow_gaps(
+        driving, int(round(width * config.region_fill_gap_ratio))
+    )
     minimum_region = max(12, int(round(width * config.minimum_region_width_ratio)))
     region_search_half = max(20, int(round(width * config.region_search_half_width_ratio)))
     expected_x = width * 0.5

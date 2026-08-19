@@ -25,6 +25,9 @@ twinmixing_center_drive:
     lookahead_y_ratio: 0.67
     minimum_region_width_ratio: 0.12
     region_search_half_width_ratio: 0.40
+    # 영역 중앙을 잡기 직전에 메울 틈의 최대 폭. 640px 기준 22px.
+    # 중앙선 자국이 도로를 갈라 넓은 쪽 절반만 쓰게 되는 문제를 막는다.
+    region_fill_gap_ratio: 0.035
     minimum_confidence: 0.35
 
     # --- 노란 중앙선 (우선순위 1단계) ---
