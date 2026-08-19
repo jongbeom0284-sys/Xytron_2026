@@ -51,6 +51,7 @@ from .twinmixing_center import (
     restore_mask,
 )
 from .yellow_center import (
+    YELLOW_SOURCE,
     YellowCenterConfig,
     YellowCenterTracker,
     extract_yellow_center,
@@ -483,19 +484,37 @@ class TwinMixingCenterNode(Node):
         )
 
     def _select_target_line(self, frame, driving, lane):
-        """우선순위 1 → 2 → 3 순으로 목표선을 고른다."""
+        """우선순위 1 -> 2 -> 3 순으로 목표선을 고른다.
+
+        외삽본(GHOST)은 실측이 하나도 없을 때만 쓴다. 예전에는 외삽 신뢰도가 임계
+        위에 있는 동안 실측 도로보다 먼저 채택돼, 도로가 보이는데도 몇 프레임 전
+        노란선 잔상을 계속 따라갔다. 외삽 신뢰도는 20 프레임에 걸쳐 떨어지므로
+        최대 1.3 초까지 그랬다.
+        """
         yellow_evidence = None
+        ghost = None
+        minimum_yellow = float(self.get_parameter("yellow_minimum_confidence").value)
+
         if bool(self.get_parameter("yellow_enabled").value):
             yellow_result, yellow_evidence = extract_yellow_center(
                 frame, driving, lane, self._yellow_config, self._config
             )
             tracked = self._yellow_tracker.update(yellow_result, frame.shape[1])
-            minimum = float(self.get_parameter("yellow_minimum_confidence").value)
-            if tracked.found and tracked.confidence >= minimum:
-                return tracked, yellow_evidence
+            if tracked.found and tracked.confidence >= minimum_yellow:
+                if tracked.path_source == YELLOW_SOURCE:
+                    return tracked, yellow_evidence
+                ghost = tracked  # 실측 도로를 먼저 보고, 없을 때만 쓴다
         else:
             self._yellow_tracker.reset()
-        return extract_center_path(driving, lane, self._config), yellow_evidence
+
+        gap = extract_center_path(driving, lane, self._config)
+        if gap.found and gap.confidence >= float(
+            self.get_parameter("minimum_confidence").value
+        ):
+            return gap, yellow_evidence
+        if ghost is not None:
+            return ghost, yellow_evidence
+        return gap, yellow_evidence
 
     def _on_image(self, message: Image) -> None:
         now = time.monotonic()
