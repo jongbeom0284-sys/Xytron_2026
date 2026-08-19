@@ -248,9 +248,9 @@ twinmixing_center_drive:
     cone_forward_max_m: 2.00                # 전방 탐색 최대 거리
     cone_lateral_max_m: 1.20                # 횡방향 최대 탐색 거리 (외부 벽 배제)
     cone_slice_step_m: 0.15                 # 전방 거리 슬라이스 분할 간격
-    cone_target_lookahead_m: 0.48           # 목표점 Lookahead 거리 (S자/90도 즉각 추종)
+    cone_target_lookahead_m: 0.40           # 목표점 Lookahead 거리 (S자/90도 즉각 추종)
     cone_drive_speed_mps: 0.25              # 라바콘 기본 주행 속도
-    cone_corner_speed_mps: 0.20             # 급커브/90도 선회 시 감속 속도
+    cone_corner_speed_mps: 0.4           # 급커브/90도 선회 시 감속 속도
     cone_detection_min_slices: 3            # 유효 슬라이스 최소 개수
     cone_detection_min_total_points: 4   # 라바콘 감지 인정 최소 점수
     cone_steering_filter_alpha: 0.40        # 조향 저역통과 필터 (잔떨림 제거)
