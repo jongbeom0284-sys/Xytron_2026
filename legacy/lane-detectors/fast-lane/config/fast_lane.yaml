@@ -1,0 +1,24 @@
+fast_lane_perception:
+  ros__parameters:
+    image_topic: /image_raw
+    debug_image_topic: /kobot_lane_drive/fast_lane/debug_image
+    status_topic: /kobot_lane_drive/fast_lane/status
+    pixel_path_topic: /kobot_lane_drive/fast_lane/pixel_path
+    max_processing_hz: 60.0
+    debug_publish_hz: 2.0
+    roi_top_ratio: 0.43
+    roi_bottom_ratio: 0.94
+    lookahead_ratio: 0.70
+    expected_bottom_width_ratio: 0.82
+    expected_top_width_ratio: 0.30
+    clahe_clip_limit: 1.6
+    white_s_max: 125
+    white_v_min: 140
+    white_v_percentile: 62.0
+    white_min_contrast: 12
+    yellow_h_low: 15
+    yellow_h_high: 40
+    yellow_s_min: 70
+    yellow_v_min: 80
+    max_white_support_ratio: 0.65
+    max_yellow_support_ratio: 0.45

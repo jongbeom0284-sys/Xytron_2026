@@ -1,0 +1,38 @@
+fast_lane_controller:
+  ros__parameters:
+    lane_status_topic: /kobot_lane_drive/fast_lane/status
+    pixel_path_topic: /kobot_lane_drive/fast_lane/pixel_path
+    drive_preview_topic: /kobot_lane_drive/fast_lane/drive_preview
+    control_status_topic: /kobot_lane_drive/fast_lane/control_status
+    control_hz: 20.0
+    message_timeout_sec: 0.20
+    image_width_px: 640.0
+    max_speed_mps: 0.70
+    single_lane_max_speed_mps: 0.48
+    minimum_tracking_speed_mps: 0.28
+    lost_hold_speed_mps: 0.30
+    max_steering_rad: 0.34
+    max_steering_rate_rad_s: 1.20
+    steering_sign: -1.0
+    steering_kp: 0.42
+    steering_kd: 0.003
+    steering_filter_alpha: 0.35
+    single_lane_hold_sec: 0.30
+    offset_filter_alpha_both: 0.50
+    offset_filter_alpha_single: 0.15
+    max_offset_step_px: 35.0
+    minimum_confidence: 0.20
+    curve_slowdown_ratio: 0.55
+    invalid_grace_sec: 0.25
+    invalid_stop_sec: 0.50
+
+fast_lane_drive_bridge:
+  ros__parameters:
+    armed: false
+    drive_preview_topic: /kobot_lane_drive/fast_lane/drive_preview
+    control_status_topic: /kobot_lane_drive/fast_lane/control_status
+    command_timeout_sec: 0.20
+    max_speed_mps: 0.70
+    max_steering_rad: 0.34
+    angle_scale: 0.0068
+    speed_scale: 0.08

@@ -1,0 +1,301 @@
+# TwinMixing 노란 중앙선 우선 주행 설정
+#
+# 모든 튜닝값이 여기 있다. 소스에 숫자를 새로 박지 않는다. 조명이나 트랙이 바뀌면
+# 재빌드 없이 이 파일만 고치고 서비스를 재시작한다.
+#
+# 화면 좌표계: 640x480, 가로 x 는 오른쪽이 +, 세로 y 는 아래가 +.
+# ~Ratio 로 끝나는 값은 화면 크기 대비 비율이다 (예: 0.50 x 480 = y 240행).
+
+twinmixing_center_drive:
+  ros__parameters:
+    image_topic: /image_raw
+    lidar_topic: /scan
+    debug_image_topic: /kobot_lane_drive/twinmixing_center/debug_image
+    status_topic: /kobot_lane_drive/twinmixing_center/status
+    drive_preview_topic: /kobot_lane_drive/twinmixing_center/drive_preview
+
+    # 추론 주기. 카메라는 30Hz 로 들어오지만 GPU 추론이 한 장에 60~70ms 걸린다.
+    max_processing_hz: 15.0
+    # 웹 화면용 오버레이 주기. 추론보다 낮게 잡아 부하를 줄인다.
+    debug_publish_hz: 7.0
+    variant: large
+    use_fp16: true
+
+    # =====================================================================
+    # 목표선 찾기 — 우선순위 2·3단계 (센터 갭 / 영역 중앙)
+    # =====================================================================
+    # 세로로 볼 구간. y 240 ~ 374.
+    #   위쪽(240 위)  : 벽·천장·조명이 섞여 목표선을 흔든다
+    #   아래쪽(374 밑): 차 앞으로 튀어나온 라이다가 화면 하단 중앙을 가린다
+    #                   (프레임 중앙값 영상으로 실측: y=375 부터 x 240~420)
+    roi_top_ratio: 0.50
+    roi_bottom_ratio: 0.78
+    # 몇 행마다 한 번씩 훑을지. 작을수록 촘촘하고 느리다.
+    row_step: 4
+
+    # --- 센터 갭 (두 주행영역 사이의 틈을 중앙선으로 본다) ---
+    # 직전 행에서 찾은 위치 기준 좌우로 이만큼만 후보를 찾는다.
+    search_half_width_ratio: 0.24
+    # 틈으로 인정할 폭의 범위. 너무 좁으면 잡티, 너무 넓으면 도로 갈라짐이다.
+    minimum_gap_width_ratio: 0.004
+    maximum_gap_width_ratio: 0.18
+    # 틈 좌우에 주행영역이 이만큼은 있어야 진짜 '사이 틈'이다.
+    minimum_side_support_ratio: 0.02
+    # 이만큼의 행에서 후보를 찾아야 선으로 인정한다.
+    minimum_points: 18
+
+    # --- 영역 중앙 (주행영역이 하나뿐일 때 그 한가운데) ---
+    minimum_region_width_ratio: 0.12
+    region_search_half_width_ratio: 0.40
+    # 영역 중앙을 잡기 직전에만 폭 22px 이하의 틈을 도로로 메운다.
+    # 중앙선 자국이 도로를 두 조각으로 가르면 넓은 쪽 절반만 도로로 치게 되고,
+    # 그 한가운데가 실제 중앙에서 크게 벗어난다(실측 369 대 267).
+    # 센터 갭 판정이 끝난 뒤라서 진짜로 갈라진 도로를 지울 위험은 없다.
+    region_fill_gap_ratio: 0.035
+
+    # 목표선의 lookahead 행. 여기 x 가 조향 목표가 된다.
+    lookahead_y_ratio: 0.67
+    # 이 신뢰도 아래면 목표선을 못 믿고 마지막 유효값을 유지한다.
+    minimum_confidence: 0.35
+
+    # =====================================================================
+    # 노란 중앙선 — 우선순위 1단계
+    # =====================================================================
+    yellow_enabled: true
+
+    # 검출 방식
+    #   lab_relative : LAB 의 b*(파랑↔노랑) 채널에 가로 top-hat 을 걸어
+    #                  "주변보다 국소적으로 더 노란 좁은 줄무늬"만 남긴다.
+    #                  넓고 균일한 누런 면(나무 바닥·벽)은 opening 으로도 살아남아
+    #                  차이가 0 이 되므로 자동으로 빠진다.
+    #   hsv_absolute : 고정 HSV 상하한. 비교용으로만 남겨 둔다.
+    #                  실내에서 갈색(=어두운 주황)이 노랑과 색상축에서 겹쳐
+    #                  나무가 함께 걸린다. 실측에서 노란 점선의 V 가 108,
+    #                  나무 바닥이 127 로 선이 오히려 더 어두웠다.
+    yellow_detector: lab_relative
+    # 주변 대비 b* 초과량. 클수록 엄격하다.
+    yellow_lab_margin: 14.0
+    # 노랑 쪽이라는 약한 절대 조건 (LAB b* 는 128 이 중립).
+    yellow_lab_minimum_b: 130.0
+    # top-hat 커널 폭. 중앙선 폭보다 넉넉히 넓어야 그보다 좁은 줄만 남는다.
+    yellow_lab_tophat_width_px: 81
+
+    # 노란선 전용 ROI — 화면 중앙 기준 세로 사다리꼴.
+    # 중앙선은 늘 화면 중앙 부근에 있고 멀수록 좁은 범위로 모인다.
+    # 직사각형으로 자르면 먼 행에서 화면 끝까지 훑어 벽과 바닥을 끌어들인다.
+    # 세로 끝은 위 roi_bottom_ratio 를 함께 쓴다.
+    yellow_roi_top_ratio: 0.50
+    yellow_roi_bottom_half_width_ratio: 0.48   # 아래 반폭 307px
+    yellow_roi_top_half_width_ratio: 0.30      # 위 반폭 192px
+
+    # hsv_absolute 방식일 때만 쓰는 임계.
+    yellow_hue_low: 15
+    yellow_hue_high: 45
+    yellow_saturation_low: 55
+    yellow_saturation_high: 255
+    yellow_value_low: 110
+    yellow_value_high: 255
+
+    # 모델이 낸 차선 마스크를 이만큼 부풀려 색 마스크와 교차시킨다.
+    # 세그멘테이션 경계가 한두 픽셀 어긋나도 노란 픽셀을 놓치지 않기 위해서다.
+    yellow_lane_dilate_px: 5
+    # 잡티 제거용 열림/닫힘 커널.
+    yellow_open_kernel_px: 3
+
+    # 직전 행 위치 기준 좌우 탐색 반경.
+    yellow_search_half_width_ratio: 0.34
+    # 후보 덩이로 인정할 폭의 범위.
+    yellow_maximum_run_width_ratio: 0.22
+    yellow_minimum_run_pixels: 3
+    # 이만큼의 행에서 후보를 찾아야 선으로 인정한다.
+    yellow_minimum_rows: 8
+
+    # 후보가 도로에서 이만큼 이상 떨어져 있으면 중앙선이 아니다 (640px 기준 40px).
+    # 색으로는 못 가른다. 화이트밸런스를 고정한 뒤 표본 2691개 대 143개로 재도
+    # b* 176 대 137, 채도 225 대 107 로 꼬리가 겹쳤다.
+    # 거리는 확실히 갈린다. 실측: 진짜 중앙선 4~18px, 벽의 나무 슬랫 107px.
+    yellow_maximum_road_distance_ratio: 0.0625
+
+    # 아래 두 조건은 더 빡빡한 옛 방식이다. 기본 꺼짐으로 남겨 둔다.
+    #   require_road_anchor        : 도로와 겹치거나 좌우 양쪽에 도로를 요구
+    #   require_road_on_both_sides : 좌우 양쪽에 도로를 요구
+    # 중앙선이 주행영역 가장자리 바로 바깥에 놓이는 프레임이 있어서, 켜면 진짜
+    # 중앙선까지 걷어낸다. 실측에서 한 프레임의 23행 중 21행이 탈락했다.
+    yellow_require_road_anchor: false
+    yellow_require_road_on_both_sides: false
+    yellow_side_support_ratio: 0.02
+    yellow_side_search_ratio: 0.10
+
+    # 노란선이 끊긴 동안 직전 목표를 유지한다(GHOST). 최근 추세를 연장한다.
+    #
+    # 유지 구간에서는 도로 폴백(센터 갭/영역 중앙)보다 이쪽이 우선이다. 노란선이
+    # 사라지는 프레임은 주행영역 인식도 함께 무너져 있어서, 그 순간의 도로 중앙은
+    # 노란선의 대안이 아니라 잡음이기 때문이다. 이 시간을 넘겨야 도로로 내려간다.
+    #
+    # 프레임이 아니라 시간으로 재는 이유: 추론이 9~15Hz 사이에서 움직여 같은
+    # 프레임 수가 1.3초도 되고 2.2초도 됐다. 프레임 쪽은 백스톱으로만 남긴다.
+    yellow_ghost_maximum_seconds: 1.0
+    yellow_ghost_maximum_frames: 30
+    yellow_history_size: 10
+    # 실측 노란선을 채택할 최소 신뢰도. 유지본에는 적용하지 않는다.
+    yellow_minimum_confidence: 0.30
+
+    # =====================================================================
+    # 차선 점유 판정과 회피
+    # =====================================================================
+    # 기본 꺼짐. 노란선 추종만 먼저 검증한 뒤 launch 인자나 웹 스위치로 켠다.
+    maneuvers_enabled: false
+
+    # 좌우 차선 폭을 재는 구간 (목표선을 경계로 좌우를 가른다).
+    lane_sample_rows: 14
+    lane_roi_top_ratio: 0.66
+    lane_roi_bottom_ratio: 0.76
+    # 차선으로 인정할 최소 폭.
+    lane_minimum_width_ratio: 0.05
+    # 반대편 대비 이 비율 이하로 좁아진 행을 '좁은 행'으로 센다.
+    lane_narrow_width_ratio: 0.55
+    lane_narrow_rows_required: 4
+    # 그 차선 자신의 평상시 폭 대비 이 비율 아래로 줄어야 장애물로 인정한다.
+    # 벽을 낀 구간은 원래 한쪽이 좁다. 좁다는 사실이 아니라 좁아졌다는 변화가
+    # 장애물의 신호다. 실측 구간에서 좌 214px / 우 70px 로 우측이 상시 좁았다.
+    lane_width_drop_ratio: 0.60
+    lane_baseline_alpha: 0.05
+    lane_baseline_warmup_frames: 20
+
+    # 상태 전이 조건.
+    policy_enter_hold_sec: 0.30      # 이만큼 유지돼야 차선을 넘는다
+    policy_clear_hold_sec: 0.40      # 장애물이 사라지고 이만큼 지나야 복귀 시작
+    policy_pass_distance_m: 0.70     # 속도x시간 적분이 이만큼 넘어야 복귀
+    policy_target_rate_px_s: 260.0   # 목표 x 의 최대 이동 속도. 급전환 방지
+    policy_shift_speed_scale: 0.75   # 회피 중 속도 배율
+    policy_return_tolerance_px: 12.0
+    # 회피는 직선에서만. 코너에서는 원근 때문에 좌우 폭이 왜곡되고, 대회 장애물
+    # (정지 차량 1, 이동 차량 1)은 직선 차선에만 놓인다.
+    policy_straight_only: true
+    policy_maximum_heading_deg: 12.0
+
+    # =====================================================================
+    # 라이다 — 옆 차선에 차가 있는가
+    # =====================================================================
+    # 보정 후 0 = 정면, 양수 = 좌측, 음수 = 우측.
+    # 라이다가 차 앞으로 돌출 장착돼 후방 163도를 차체가 가린다.
+    # 실측 2026-08-19: 가림 구간 원시 220.4~22.7도, 그 중심(후방) 301.6도
+    # -> 정면은 원시 121.6도 -> 보정값 -2.1217 rad.
+    # 검증: 보정 후 정면 12.0m, 좌45도 9.9m, 우45도 1.71m(벽), 후방 0.13m(차체).
+    lidar_angle_offset_rad: -2.1217
+
+    # 부채꼴이 아니라 차량 좌표계의 직사각 코리도로 자른다.
+    # 차량은 늘 차선 안에 있으므로 옆 차선 차량은 이 상자에 들어오고,
+    # 도로 밖의 벽은 옆으로 너무 멀어, 범퍼 옆 반사는 앞쪽 거리가 모자라 빠진다.
+    lidar_forward_minimum_m: 0.35
+    lidar_forward_maximum_m: 2.50
+    lidar_side_lateral_minimum_m: 0.12
+    lidar_side_lateral_maximum_m: 0.75
+    lidar_front_lateral_maximum_m: 0.20
+    lidar_minimum_range_m: 0.15       # 차체 반사 제거
+    lidar_maximum_range_m: 6.0
+    # 이만큼의 점이 동의해야 물체로 인정한다. 반사 한 점으로 차선을 넘지 않는다.
+    lidar_minimum_hits: 5
+    lidar_confirm_distance_m: 1.60
+    # 라이다 9.7Hz, 인식 15Hz 로 주기가 다르다. 이보다 오래된 스캔은 안 쓴다.
+    lidar_maximum_age_sec: 0.50
+
+    # =====================================================================
+    # 조향과 속도
+    # =====================================================================
+    # 조향 = sign x ( kp x gain x 정규화오차  +  kd x 오차변화율 )
+    #   정규화오차 = (여유구간 뺀 가로오차) / (화면폭/2)
+    #
+    # 미분 항이 감쇠다. 차가 중앙으로 다가오는 중이면 오차가 줄고 있어 미분이
+    # 음수가 되고 조향이 미리 풀린다. 중앙에 닿을 때 조향이 이미 0 에 가까워야
+    # 그대로 지나쳐 반대편으로 넘어가지 않는다.
+    #
+    # 화면 속 차선 기울기는 제어에 쓰지 않는다. 원근 때문에 나란히 선 차도
+    # 기울기가 음수로 나와 가로오차와 반대로 작용한다. 실제로 그것 때문에 조향
+    # 부호가 뒤집힌 주행이 있었다(오차 +40px 인데 왼쪽으로 조향).
+    speed_mps: 0.50
+    steering_sign: -1.0
+    steering_kp: 0.42
+    # 게인 이력: 4.0(오차 91px 에 풀락, 오버슈트) -> 1.4(곡선에서 오차 102px 에
+    # legacy 29 밖에 안 나감) -> 3.2. 여유 구간이 중앙 근처를 이미 잘라 주므로
+    # 게인을 올려도 직선은 흔들리지 않는다.
+    steering_output_gain: 3.2
+    # 미분 이력: 0.35(약함) -> 0.9(비례항의 3배로 작용해 복귀 중 반대로 꺾음)
+    # -> 0.45.
+    steering_kd: 0.45
+    steering_rate_filter_alpha: 0.30
+    # 중앙 여유 구간. 이 안에서는 조향하지 않는다. 차선 반폭 250px 기준 10%.
+    # 없으면 오차 10px 에도 조향해 중앙 근처에서 계속 사냥한다.
+    steering_deadband_px: 25.0
+    # 아래 두 값은 화면 표시용 차선 기울기를 계산할 때만 쓴다.
+    steering_near_y_ratio: 0.76
+    steering_minimum_span_ratio: 0.06
+    # 조향 저역통과. 낮추면 부드럽지만 지연이 커져 진동한다.
+    steering_filter_alpha: 0.55
+    # 최대 조향. 0.476 rad = legacy +-70.
+    max_steering_rad: 0.476
+    # 조향 변화율 제한. 곡선에서 풀락까지 0.26초.
+    max_steering_rate_rad_s: 1.8
+
+    # =====================================================================
+    # 라바콘 통로 주행 (S자 및 90도 좌회전 코너)
+    # =====================================================================
+    cone_corridor_width_m: 0.80             # 통로 전체 폭 (약 80cm)
+    cone_single_wall_fallback_margin_m: 0.40 # 단측 벽만 감지 시 가상 중심 오프셋 (통로 반폭)
+    cone_corridor_width_min_m: 0.55         # 통로 폭 최소 유효 범위 (노이즈 배제 게이팅)
+    cone_corridor_width_max_m: 1.05         # 통로 폭 최대 유효 범위 (먼 벽 배제 게이팅)
+    cone_forward_min_m: 0.25                # 전방 탐색 최소 거리
+    cone_forward_max_m: 2.00                # 전방 탐색 최대 거리
+    cone_lateral_max_m: 1.20                # 횡방향 최대 탐색 거리 (외부 벽 배제)
+    cone_slice_step_m: 0.15                 # 전방 거리 슬라이스 분할 간격
+    cone_target_lookahead_m: 0.40           # 목표점 Lookahead 거리 (S자/90도 즉각 추종)
+    cone_drive_speed_mps: 0.25              # 라바콘 기본 주행 속도
+    cone_corner_speed_mps: 0.4           # 급커브/90도 선회 시 감속 속도
+    cone_detection_min_slices: 3            # 유효 슬라이스 최소 개수
+    cone_detection_min_total_points: 4   # 라바콘 감지 인정 최소 점수
+    cone_steering_filter_alpha: 0.40        # 조향 저역통과 필터 (잔떨림 제거)
+    cone_max_steering_rate_rad_s: 1.8       # 조향 변화율 제한 (급조향 방지)
+
+# 라바콘 단독 주행 노드 전용 파라미터 (모든 튜닝 변수)
+cone_corridor_drive:
+  ros__parameters:
+    cone_corridor_width_m: 0.80             # 통로 전체 폭 (약 80cm)
+    cone_single_wall_fallback_margin_m: 0.40 # 단측 벽만 감지 시 가상 중심 오프셋 (통로 반폭)
+    cone_corridor_width_min_m: 0.50         # 통로 폭 최소 유효 범위
+    cone_corridor_width_max_m: 1.25         # 통로 폭 최대 유효 범위 (1.25m 이내 양측 콘 모두 인정)
+    cone_forward_min_m: 0.15                # 전방 탐색 최소 거리 (범퍼 앞 15cm — 회전 시 근접 콘 포착)
+    cone_forward_max_m: 1.60                # 전방 탐색 최대 거리 (1.6m — 코너 선회 구간 전체 포착)
+    cone_lateral_max_m: 1.00                # 횡방향 최대 탐색 거리 (좌우 100cm 넉넉히 수용)
+    cone_cluster_distance_tolerance_m: 0.12 # 유클리드 군집화 거리 임계값 (12cm)
+    cone_min_cluster_points: 2              # 라바콘 최소 반사점 완화 (회전 중 반사점 감소 대응)
+    cone_max_cluster_points: 25             # 라바콘 최대 반사점
+    cone_min_cluster_span_m: 0.03           # 라바콘 최소 외경
+    cone_max_cluster_span_m: 0.25           # 라바콘 최대 외경 (25cm 초과 긴 벽 완전 차단)
+    cone_max_link_distance_m: 0.50          # 라바콘 간 최대 연결 거리 (50cm 초과 시 대각선 오연결 차단)
+    cone_slice_step_m: 0.10                 # 전방 거리 슬라이스 분할 간격 (10cm 촘촘하게)
+    cone_target_lookahead_m: 0.72           # 목표점 Lookahead 거리 (고속 안정화: 0.72m)
+    cone_steering_gain: 1.8                 # 조향 추종 게인 (고속 언더스티어 원천 차단)
+    cone_heading_gain: 0.18                 # 코너 벽면 곡률 피드포워드 게인
+    cone_drive_speed_mps: 0.65              # B안 최고 직선 속도 (0.65 m/s, 약 8.1 단위)
+    cone_corner_speed_mps: 0.45             # B안 최고 코너 속도 (0.45 m/s, 약 5.6 단위)
+    cone_detection_min_slices: 1            # 유효 슬라이스 최소 개수 (단일 슬라이스 지속 추종)
+    cone_detection_min_total_points: 2      # 라바콘 감지 인정 최소 점수
+    cone_steering_filter_alpha: 0.70        # 조향 저역통과 필터 (고속 즉각 반응)
+    cone_max_steering_rate_rad_s: 4.5       # 조향 변화율 제한 (초고속 선회 민첩성 확보)
+    lidar_angle_offset_rad: -2.1217         # 라이다 센서 전방 보정 각도
+
+# 실제 모터로 나가는 유일한 노드. armed 없이는 프로세스조차 생기지 않는다.
+twinmixing_center_drive_bridge:
+  ros__parameters:
+    armed: false
+    drive_preview_topic: /kobot_lane_drive/twinmixing_center/drive_preview
+    status_topic: /kobot_lane_drive/twinmixing_center/status
+    # 웹에서 일시정지하면 이 토픽이 false 가 되고 브리지는 0 을 보낸다.
+    enable_topic: /kobot_lane_drive/record_drive/enabled
+    # 인식이나 상태가 이만큼 끊기면 0 을 보낸다.
+    command_timeout_sec: 0.30
+    max_speed_mps: 0.70
+    max_steering_rad: 0.476
+    # /xycar_motor 형식으로 바꾸는 계수. legacy 각 = -조향rad / angle_scale
+    angle_scale: 0.0068
+    speed_scale: 0.08

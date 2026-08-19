@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KOBOT 카메라 튜너</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: Inter, Pretendard, "Noto Sans KR", system-ui, sans-serif;
+      background: #eef3f9;
+      color: #172033;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; }
+    button, input { font: inherit; }
+    .topbar {
+      display: flex; align-items: center; justify-content: space-between; gap: 16px;
+      padding: 18px 28px; background: #fff; border-bottom: 1px solid #dbe3ee;
+    }
+    .eyebrow { color: #2e6be6; font-size: 12px; font-weight: 800; letter-spacing: .16em; }
+    h1 { margin: 4px 0 0; font-size: 24px; }
+    .back { color: #315a9f; font-weight: 700; text-decoration: none; }
+    main { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 18px; padding: 20px 28px 28px; }
+    .card { background: #fff; border: 1px solid #dbe3ee; border-radius: 16px; box-shadow: 0 8px 24px rgba(28, 53, 87, .06); }
+    .viewer { overflow: hidden; }
+    .viewer-head { display: flex; align-items: center; justify-content: space-between; padding: 18px 20px; }
+    .viewer-title { font-size: 18px; font-weight: 800; }
+    .live { color: #e73762; font-size: 12px; font-weight: 800; }
+    .live::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: currentColor; }
+    .camera-frame { background: #111827; aspect-ratio: 4 / 3; display: grid; place-items: center; }
+    .camera-frame img { display: block; width: 100%; height: 100%; object-fit: contain; }
+    .hint { padding: 12px 20px 16px; color: #6b778c; font-size: 13px; }
+    .controls { padding: 20px; align-self: start; }
+    .controls h2 { margin: 0; font-size: 19px; }
+    .sub { margin: 7px 0 20px; color: #6b778c; font-size: 13px; line-height: 1.5; }
+    .control { padding: 18px 0; border-top: 1px solid #e6ebf2; }
+    .control:first-of-type { border-top: 0; }
+    .label-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+    .label { font-weight: 800; }
+    output { min-width: 64px; color: #1769e0; font-size: 20px; font-weight: 900; text-align: right; }
+    .stepper { display: flex; align-items: center; gap: 7px; }
+    .nudge {
+      width: 34px; height: 34px; padding: 0; border: 1px solid #cbd7e8;
+      border-radius: 9px; background: #f4f7fb; color: #315a9f;
+      font-size: 22px; line-height: 1; font-weight: 900;
+    }
+    .nudge:hover { background: #e7eef9; }
+    .nudge:active { transform: translateY(1px); }
+    input[type="range"] { width: 100%; accent-color: #1769e0; cursor: pointer; }
+    .range-labels { display: flex; justify-content: space-between; color: #8a96a9; font-size: 11px; margin-top: 7px; }
+    .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 14px; }
+    button { border: 0; border-radius: 10px; padding: 12px; font-weight: 800; cursor: pointer; }
+    .primary { background: #1769e0; color: #fff; }
+    .secondary { background: #eaf1fb; color: #315a9f; }
+    .status { min-height: 22px; margin-top: 14px; color: #526176; font-size: 13px; }
+    .status.error { color: #c62828; }
+    @media (max-width: 900px) {
+      .topbar { padding: 16px 18px; }
+      main { grid-template-columns: 1fr; padding: 14px 16px 22px; }
+      .controls { order: -1; }
+    }
+    @media (max-width: 600px) {
+      .topbar { display: block; }
+      .topbar h1 { font-size: 22px; }
+      .back { display: inline-block; margin-top: 10px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <div class="eyebrow">LIVE CAMERA CONTROL</div>
+      <h1>KOBOT 카메라 튜너</h1>
+    </div>
+    <a class="back" href="/">센서 뷰어로 돌아가기</a>
+  </header>
+
+  <main>
+    <section class="card viewer" aria-label="실시간 카메라">
+      <div class="viewer-head">
+        <div class="viewer-title">/image_raw 실시간 영상</div>
+        <div class="live">LIVE</div>
+      </div>
+      <div class="camera-frame">
+        <img id="camera" alt="KOBOT 전방 카메라 실시간 영상">
+      </div>
+      <div class="hint">슬라이더를 움직이면 Jetson 카메라에 즉시 적용됩니다. 노출은 수동 모드로 고정됩니다.</div>
+    </section>
+
+    <aside class="card controls">
+      <h2>카메라 설정</h2>
+      <p class="sub">밝기, 노출, 감마만 허용된 범위에서 조절합니다. 페이지를 닫아도 장치값은 다음 재시작 전까지 유지됩니다.</p>
+
+      <div class="control" data-control="brightness">
+        <div class="label-row"><span class="label">밝기</span><div class="stepper"><button class="nudge" data-direction="-1" type="button" aria-label="밝기 1 낮추기">−</button><output>0</output><button class="nudge" data-direction="1" type="button" aria-label="밝기 1 높이기">+</button></div></div>
+        <input type="range" min="-64" max="64" step="1" value="0" aria-label="밝기">
+        <div class="range-labels"><span>-64</span><span>64</span></div>
+      </div>
+
+      <div class="control" data-control="exposure">
+        <div class="label-row"><span class="label">노출</span><div class="stepper"><button class="nudge" data-direction="-1" type="button" aria-label="노출 1 낮추기">−</button><output>40</output><button class="nudge" data-direction="1" type="button" aria-label="노출 1 높이기">+</button></div></div>
+        <input type="range" min="1" max="5000" step="1" value="40" aria-label="노출">
+        <div class="range-labels"><span>1</span><span>5000</span></div>
+      </div>
+
+      <div class="control" data-control="gamma">
+        <div class="label-row"><span class="label">감마</span><div class="stepper"><button class="nudge" data-direction="-1" type="button" aria-label="감마 1 낮추기">−</button><output>150</output><button class="nudge" data-direction="1" type="button" aria-label="감마 1 높이기">+</button></div></div>
+        <input type="range" min="72" max="500" step="1" value="150" aria-label="감마">
+        <div class="range-labels"><span>72</span><span>500</span></div>
+      </div>
+
+      <div class="actions">
+        <button id="reload" class="secondary" type="button">현재값 다시 읽기</button>
+        <button id="recommended" class="primary" type="button">권장값 적용</button>
+      </div>
+      <div id="status" class="status" role="status">카메라 값을 불러오는 중…</div>
+    </aside>
+  </main>
+
+  <script>
+    const controls = Object.fromEntries(
+      [...document.querySelectorAll('[data-control]')].map((row) => [
+        row.dataset.control,
+        { row, input: row.querySelector('input'), output: row.querySelector('output') },
+      ]),
+    );
+    const statusEl = document.querySelector('#status');
+    const camera = document.querySelector('#camera');
+    camera.src = `http://${location.hostname}:8080/stream?topic=/image_raw`;
+
+    let applyTimer = null;
+    let applying = false;
+    let dirty = false;
+
+    function setStatus(message, error = false) {
+      statusEl.textContent = message;
+      statusEl.classList.toggle('error', error);
+    }
+
+    function syncValues(data) {
+      for (const [name, control] of Object.entries(controls)) {
+        const spec = data.controls[name];
+        control.input.min = spec.min;
+        control.input.max = spec.max;
+        control.input.value = data.values[name];
+        control.output.value = data.values[name];
+        control.row.querySelector('.range-labels').innerHTML = `<span>${spec.min}</span><span>${spec.max}</span>`;
+      }
+    }
+
+    async function readCurrent() {
+      setStatus('현재 카메라 값을 읽는 중…');
+      try {
+        const response = await fetch('/api/camera/controls', { cache: 'no-store' });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || '현재값을 읽지 못했습니다');
+        syncValues(data);
+        setStatus('현재 장치값과 동기화됐습니다.');
+      } catch (error) {
+        setStatus(error.message, true);
+      }
+    }
+
+    function desiredValues() {
+      return Object.fromEntries(
+        Object.entries(controls).map(([name, control]) => [name, Number(control.input.value)]),
+      );
+    }
+
+    async function applyLatest() {
+      if (applying) {
+        dirty = true;
+        return;
+      }
+      applying = true;
+      do {
+        dirty = false;
+        const values = desiredValues();
+        setStatus('카메라에 적용 중…');
+        try {
+          const response = await fetch('/api/camera/controls', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(values),
+          });
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.error || '적용하지 못했습니다');
+          if (!dirty) syncValues(data);
+          setStatus(`적용 완료 · 밝기 ${data.values.brightness} · 노출 ${data.values.exposure} · 감마 ${data.values.gamma}`);
+        } catch (error) {
+          setStatus(error.message, true);
+        }
+      } while (dirty);
+      applying = false;
+    }
+
+    function scheduleApply() {
+      clearTimeout(applyTimer);
+      applyTimer = setTimeout(applyLatest, 120);
+    }
+
+    for (const control of Object.values(controls)) {
+      control.input.addEventListener('input', () => {
+        control.output.value = control.input.value;
+        scheduleApply();
+      });
+      control.input.addEventListener('change', () => {
+        clearTimeout(applyTimer);
+        applyLatest();
+      });
+      for (const button of control.row.querySelectorAll('.nudge')) {
+        button.addEventListener('click', () => {
+          const direction = Number(button.dataset.direction);
+          const step = Number(control.input.step || 1);
+          const next = Math.min(
+            Number(control.input.max),
+            Math.max(Number(control.input.min), Number(control.input.value) + direction * step),
+          );
+          control.input.value = next;
+          control.output.value = next;
+          clearTimeout(applyTimer);
+          applyLatest();
+        });
+      }
+    }
+
+    document.querySelector('#reload').addEventListener('click', readCurrent);
+    document.querySelector('#recommended').addEventListener('click', async () => {
+      try {
+        const response = await fetch('/api/camera/controls', { cache: 'no-store' });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || '권장값을 읽지 못했습니다');
+        for (const [name, control] of Object.entries(controls)) {
+          control.input.value = data.controls[name].recommended;
+          control.output.value = data.controls[name].recommended;
+        }
+        await applyLatest();
+      } catch (error) {
+        setStatus(error.message, true);
+      }
+    });
+
+    readCurrent();
+  </script>
+</body>
+</html>

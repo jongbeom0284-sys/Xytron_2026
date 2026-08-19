@@ -1,0 +1,34 @@
+import os
+
+from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
+
+
+def generate_launch_description():
+    config = os.path.join(
+        get_package_share_directory("kobot_lane_drive"), "config", "lane_drive.yaml"
+    )
+    armed = LaunchConfiguration("armed")
+    return LaunchDescription([
+        DeclareLaunchArgument("armed", default_value="false"),
+        DeclareLaunchArgument("config", default_value=config),
+        Node(
+            package="kobot_lane_drive",
+            executable="lane_perception",
+            name="lane_perception",
+            parameters=[LaunchConfiguration("config")],
+            output="screen",
+        ),
+        Node(
+            package="kobot_lane_drive",
+            executable="drive_bridge",
+            name="lane_drive_bridge",
+            parameters=[LaunchConfiguration("config"), {"armed": True}],
+            condition=IfCondition(armed),
+            output="screen",
+        ),
+    ])

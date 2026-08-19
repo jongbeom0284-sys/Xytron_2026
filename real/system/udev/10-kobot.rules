@@ -1,0 +1,5 @@
+ACTION=="add", SUBSYSTEM=="tty", ATTRS{idVendor}=="1b4f", ATTRS{idProduct}=="9d0f", ENV{ID_MM_DEVICE_IGNORE}="1", MODE="0660", GROUP="dialout", SYMLINK+="ttyIMU"
+ACTION=="add", SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", ENV{ID_MM_DEVICE_IGNORE}="1", MODE="0660", GROUP="dialout", SYMLINK+="ttyLIDAR"
+ACTION=="add", SUBSYSTEM=="tty", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="5740", ENV{ID_MM_DEVICE_IGNORE}="1", MODE="0660", GROUP="dialout", SYMLINK+="ttyMOTOR"
+ACTION=="add", SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", ENV{ID_MM_DEVICE_IGNORE}="1", MODE="0660", GROUP="dialout", SYMLINK+="ttySonic"
+SUBSYSTEM=="video4linux", ATTR{index}=="0", ATTRS{idVendor}=="32e4", ATTRS{idProduct}=="9230", MODE="0660", GROUP="video", SYMLINK+="videoCAM"
