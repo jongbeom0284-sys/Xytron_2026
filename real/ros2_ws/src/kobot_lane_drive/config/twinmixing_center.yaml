@@ -276,12 +276,12 @@ cone_corridor_drive:
     cone_target_lookahead_m: 0.65           # 목표점 Lookahead 거리 (코너 중앙 최적화: 0.65m)
     cone_steering_gain: 1.7                 # 조향 추종 게인 (부드러운 적정 선회각)
     cone_heading_gain: 0.15                 # 코너 벽면 곡률 피드포워드 게인 (인코스 파고들기 완화)
-    cone_drive_speed_mps: 0.40              # 1단계 기본 주행 속도 (0.40 m/s, 약 5.0)
-    cone_corner_speed_mps: 0.35             # 1단계 급커브 선회 속도 (0.35 m/s, 약 4.4)
+    cone_drive_speed_mps: 0.50              # 2단계 최고 주행 속도 (0.50 m/s, 약 6.2)
+    cone_corner_speed_mps: 0.40             # 2단계 고속 선회 속도 (0.40 m/s, 약 5.0)
     cone_detection_min_slices: 2            # 유효 슬라이스 최소 개수
     cone_detection_min_total_points: 3      # 라바콘 감지 인정 최소 점수
     cone_steering_filter_alpha: 0.60        # 조향 저역통과 필터 (빠른 코너 반응성 확보)
-    cone_max_steering_rate_rad_s: 3.0       # 조향 변화율 제한 (고속 선회 스티어링 속도 향상)
+    cone_max_steering_rate_rad_s: 3.5       # 조향 변화율 제한 (최고속 선회 스티어링 신속 제어)
     lidar_angle_offset_rad: -2.1217         # 라이다 센서 전방 보정 각도
 
 # 실제 모터로 나가는 유일한 노드. armed 없이는 프로세스조차 생기지 않는다.
