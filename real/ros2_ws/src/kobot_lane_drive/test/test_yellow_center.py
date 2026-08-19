@@ -120,36 +120,52 @@ def test_offset_sign_follows_the_line(shift):
         assert np.sign(result.center_offset_px) == np.sign(shift)
 
 
-def test_road_on_both_sides_is_an_optional_switch():
-    """좌우 도로 요구는 선택 조건이며 기본은 꺼져 있다.
+def test_candidate_must_be_anchored_to_the_road():
+    """중앙선은 도로 위에 있거나 두 주행영역 사이 틈에 있다.
 
-    노란 구조물을 배제할 수는 있지만, 한쪽 도로만 보이는 프레임에서도 중앙선은
-    따라가야 한다. 실측 재생에서 켰더니 검출률이 87% -> 31% 로 떨어졌다.
+    색만으로는 벽의 나무 슬랫을 못 거른다. 세로 줄무늬라 top-hat 이 찾는
+    "좁은 노란 줄"과 똑같이 생겼기 때문이다. 2026-08-19 12:56 주행 214~219 에서
+    목표선이 도로가 아니라 오른쪽 나무 기둥 위에 얹혔다.
+
+    구분 기준은 색이 아니라 위치다.
     """
 
-    def scene(road_on_right):
+    def scene(where):
         frame = np.full((HEIGHT, WIDTH, 3), 60, dtype=np.uint8)
         driving = np.zeros((HEIGHT, WIDTH), dtype=bool)
         lane = np.zeros_like(driving)
         for y in range(int(HEIGHT * 0.45), int(HEIGHT * 0.98)):
-            driving[y, 200:430] = True            # 왼쪽 도로
-            if road_on_right:
-                driving[y, 471:600] = True        # 오른쪽 도로
-            frame[y, 440:465] = (0, 255, 255)     # 노란 띠는 항상 같은 자리
-            lane[y, 440:465] = True
+            if where == "off_road":
+                driving[y, 180:420] = True          # 도로는 왼쪽에만
+                x0, x1 = 470, 495                   # 노란 줄은 도로 밖 (나무 기둥)
+            elif where == "in_gap":
+                driving[y, 180:305] = True          # 도로 두 덩이
+                driving[y, 335:460] = True
+                x0, x1 = 312, 330                   # 그 사이 틈
+            else:  # on_road
+                driving[y, 180:460] = True          # 하나로 이어진 도로
+                x0, x1 = 305, 330                   # 그 위에 그려진 선
+            frame[y, x0:x1] = (0, 255, 255)
+            lane[y, x0:x1] = True
         return frame, driving, lane
 
-    # 기본값은 꺼짐. 한쪽 도로만 보여도 중앙선은 따라간다.
-    default_config = YellowCenterConfig(detector=HSV_ABSOLUTE)
-    assert not default_config.require_road_on_both_sides
-    one_side, _ = extract_yellow_center(*scene(False), default_config, CENTER_CONFIG)
-    assert one_side.found
-    assert one_side.path_source == YELLOW_SOURCE
+    anchored = YellowCenterConfig(detector=HSV_ABSOLUTE)
+    assert anchored.require_road_anchor
 
-    # 켜면 양쪽에 도로가 있을 때만 통과한다
-    strict = YellowCenterConfig(detector=HSV_ABSOLUTE, require_road_on_both_sides=True)
-    assert not extract_yellow_center(*scene(False), strict, CENTER_CONFIG)[0].found
-    assert extract_yellow_center(*scene(True), strict, CENTER_CONFIG)[0].found
+    # 도로 밖의 노란 구조물은 걸러진다
+    assert not extract_yellow_center(*scene("off_road"), anchored, CENTER_CONFIG)[0].found
+
+    # 도로 사이 틈의 중앙선은 잡는다
+    gap = extract_yellow_center(*scene("in_gap"), anchored, CENTER_CONFIG)[0]
+    assert gap.found and gap.path_source == YELLOW_SOURCE
+
+    # 도로 위에 그려진 중앙선도 잡는다
+    on_road = extract_yellow_center(*scene("on_road"), anchored, CENTER_CONFIG)[0]
+    assert on_road.found and on_road.path_source == YELLOW_SOURCE
+
+    # 조건을 끄면 도로 밖 구조물도 통과한다 — 걸러낸 주체가 이 조건임을 확인한다
+    relaxed = YellowCenterConfig(detector=HSV_ABSOLUTE, require_road_anchor=False)
+    assert extract_yellow_center(*scene("off_road"), relaxed, CENTER_CONFIG)[0].found
 
 
 def _wood_scene(paint_line=True):
