@@ -10,7 +10,7 @@ import numpy as np
 @dataclass(frozen=True)
 class TwinMixingCenterConfig:
     roi_top_ratio: float = 0.46
-    roi_bottom_ratio: float = 0.97
+    roi_bottom_ratio: float = 0.78
     row_step: int = 4
     search_half_width_ratio: float = 0.24
     minimum_gap_width_ratio: float = 0.004
@@ -348,6 +348,18 @@ def _tint(overlay: np.ndarray, mask: np.ndarray, colour, strength: float) -> Non
     overlay[mask] = cv2.addWeighted(
         overlay[mask], 1.0 - strength, layer[mask], strength, 0
     )
+
+
+def path_x_at(points: np.ndarray, y_value: float) -> float | None:
+    """맞춘 경로에서 지정한 행의 x 를 선형 보간한다. 범위 밖이면 None."""
+    if points is None or len(points) < 2:
+        return None
+    ys = points[:, 1].astype(np.float64)
+    xs = points[:, 0].astype(np.float64)
+    if y_value < ys.min() or y_value > ys.max():
+        return None
+    order = np.argsort(ys)
+    return float(np.interp(y_value, ys[order], xs[order]))
 
 
 def render_overlay(

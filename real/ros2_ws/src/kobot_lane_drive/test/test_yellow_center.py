@@ -6,6 +6,8 @@ import pytest
 from kobot_lane_drive.twinmixing_center import TwinMixingCenterConfig
 from kobot_lane_drive.yellow_center import (
     GHOST_SOURCE,
+    HSV_ABSOLUTE,
+    LAB_RELATIVE,
     YELLOW_SOURCE,
     YellowCenterConfig,
     YellowCenterTracker,
@@ -39,17 +41,17 @@ def _scene(center_shift=0, dashed=False, paint_yellow=True):
 
 
 def test_yellow_mask_selects_painted_line_only():
-    frame, _, _ = _scene()
-    mask = yellow_mask(frame, YellowCenterConfig())
+    frame, driving, _ = _scene()
+    mask = yellow_mask(frame, driving, YellowCenterConfig(detector=HSV_ABSOLUTE))
     assert mask.any()
-    # 배경 회색은 걸리지 않는다
+    # ROI 밖 배경은 걸리지 않는다
     assert not mask[0, 0]
 
 
 def test_follows_yellow_line_when_painted():
     frame, driving, lane = _scene(center_shift=70)
     result, evidence = extract_yellow_center(
-        frame, driving, lane, YellowCenterConfig(), CENTER_CONFIG
+        frame, driving, lane, YellowCenterConfig(detector=HSV_ABSOLUTE), CENTER_CONFIG
     )
     assert result.found
     assert result.path_source == YELLOW_SOURCE
@@ -61,7 +63,7 @@ def test_follows_yellow_line_when_painted():
 def test_dashed_line_still_yields_a_path():
     frame, driving, lane = _scene(dashed=True)
     result, _ = extract_yellow_center(
-        frame, driving, lane, YellowCenterConfig(), CENTER_CONFIG
+        frame, driving, lane, YellowCenterConfig(detector=HSV_ABSOLUTE), CENTER_CONFIG
     )
     assert result.found
     assert result.path_source == YELLOW_SOURCE
@@ -70,7 +72,7 @@ def test_dashed_line_still_yields_a_path():
 def test_reports_lost_without_yellow_paint():
     frame, driving, lane = _scene(paint_yellow=False)
     result, _ = extract_yellow_center(
-        frame, driving, lane, YellowCenterConfig(), CENTER_CONFIG
+        frame, driving, lane, YellowCenterConfig(detector=HSV_ABSOLUTE), CENTER_CONFIG
     )
     assert not result.found
 
@@ -78,18 +80,18 @@ def test_reports_lost_without_yellow_paint():
 def test_tracker_extrapolates_across_a_gap_then_gives_up():
     frame, driving, lane = _scene(center_shift=40)
     valid, _ = extract_yellow_center(
-        frame, driving, lane, YellowCenterConfig(), CENTER_CONFIG
+        frame, driving, lane, YellowCenterConfig(detector=HSV_ABSOLUTE), CENTER_CONFIG
     )
     assert valid.found
 
-    config = YellowCenterConfig(ghost_maximum_frames=5)
+    config = YellowCenterConfig(detector=HSV_ABSOLUTE, ghost_maximum_frames=5)
     tracker = YellowCenterTracker(config)
     for _ in range(3):
         assert tracker.update(valid, WIDTH).path_source == YELLOW_SOURCE
 
     blank_frame, blank_driving, blank_lane = _scene(paint_yellow=False)
     lost, _ = extract_yellow_center(
-        blank_frame, blank_driving, blank_lane, YellowCenterConfig(), CENTER_CONFIG
+        blank_frame, blank_driving, blank_lane, YellowCenterConfig(detector=HSV_ABSOLUTE), CENTER_CONFIG
     )
     assert not lost.found
 
@@ -106,7 +108,7 @@ def test_tracker_extrapolates_across_a_gap_then_gives_up():
 def test_offset_sign_follows_the_line(shift):
     frame, driving, lane = _scene(center_shift=shift)
     result, _ = extract_yellow_center(
-        frame, driving, lane, YellowCenterConfig(), CENTER_CONFIG
+        frame, driving, lane, YellowCenterConfig(detector=HSV_ABSOLUTE), CENTER_CONFIG
     )
     assert result.found
     if shift == 0:
@@ -135,13 +137,73 @@ def test_road_on_both_sides_is_an_optional_switch():
         return frame, driving, lane
 
     # 기본값은 꺼짐. 한쪽 도로만 보여도 중앙선은 따라간다.
-    default_config = YellowCenterConfig()
+    default_config = YellowCenterConfig(detector=HSV_ABSOLUTE)
     assert not default_config.require_road_on_both_sides
     one_side, _ = extract_yellow_center(*scene(False), default_config, CENTER_CONFIG)
     assert one_side.found
     assert one_side.path_source == YELLOW_SOURCE
 
     # 켜면 양쪽에 도로가 있을 때만 통과한다
-    strict = YellowCenterConfig(require_road_on_both_sides=True)
+    strict = YellowCenterConfig(detector=HSV_ABSOLUTE, require_road_on_both_sides=True)
     assert not extract_yellow_center(*scene(False), strict, CENTER_CONFIG)[0].found
     assert extract_yellow_center(*scene(True), strict, CENTER_CONFIG)[0].found
+
+
+def _wood_scene(paint_line=True):
+    """누런 나무 바닥 위 도로에 노란 중앙선이 있는 장면.
+
+    실차와 같은 구도다. 나무는 노란선과 색상(H) 축에서 겹치므로 절대 임계로는
+    가를 수 없고, 노면 대비로만 갈린다.
+    """
+    frame = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
+    driving = np.zeros((HEIGHT, WIDTH), dtype=bool)
+    lane = np.zeros_like(driving)
+    frame[:, :] = (90, 120, 150)                  # 누런 나무 바닥 (BGR)
+    for y in range(int(HEIGHT * 0.45), int(HEIGHT * 0.98)):
+        frame[y, 180:460] = (140, 142, 138)       # 회색 노면
+        driving[y, 180:312] = True
+        driving[y, 328:460] = True
+        if paint_line:
+            frame[y, 313:327] = (40, 210, 235)    # 노란 중앙선
+            lane[y, 313:327] = True
+    return frame, driving, lane
+
+
+def test_lab_relative_ignores_the_wooden_floor():
+    """나무 바닥은 그 행 전체가 누렇다. 노면 대비가 없으므로 걸리지 않아야 한다."""
+    frame, driving, lane = _wood_scene()
+    config = YellowCenterConfig(detector=LAB_RELATIVE)
+    mask = yellow_mask(frame, driving, config)
+
+    row = int(HEIGHT * 0.8)
+    assert mask[row, 313:327].any(), "중앙선을 놓쳤다"
+    assert not mask[row, :100].any(), "도로 왼쪽 나무 바닥이 걸렸다"
+    assert not mask[row, 540:].any(), "도로 오른쪽 나무 바닥이 걸렸다"
+
+
+def test_hsv_absolute_cannot_separate_the_wooden_floor():
+    """같은 장면에서 예전 방식은 나무 바닥까지 잡는다. LAB 을 쓰는 이유다."""
+    frame, driving, _ = _wood_scene()
+    hsv_mask = yellow_mask(frame, driving, YellowCenterConfig(detector=HSV_ABSOLUTE))
+    row = int(HEIGHT * 0.8)
+    assert hsv_mask[row, :100].any()
+
+
+def test_lab_relative_follows_the_line_in_the_wood_scene():
+    frame, driving, lane = _wood_scene()
+    result, evidence = extract_yellow_center(
+        frame, driving, lane, YellowCenterConfig(detector=LAB_RELATIVE), CENTER_CONFIG
+    )
+    assert result.found
+    assert result.path_source == YELLOW_SOURCE
+    assert abs(result.center_offset_px) < 20
+    # 근거는 ROI 안에만 남는다
+    assert not evidence[: int(HEIGHT * 0.5)].any()
+
+
+def test_lab_relative_reports_lost_without_a_line():
+    frame, driving, lane = _wood_scene(paint_line=False)
+    result, _ = extract_yellow_center(
+        frame, driving, lane, YellowCenterConfig(detector=LAB_RELATIVE), CENTER_CONFIG
+    )
+    assert not result.found

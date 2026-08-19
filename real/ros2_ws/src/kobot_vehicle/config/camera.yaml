@@ -12,3 +12,7 @@
     brightness: 0
     autoexposure: false
     exposure: 40
+    # 자동 화이트밸런스는 실내 누런 조명에 물려 장면 전체에 노란 캐스트를 씌운다.
+    # 그러면 흰 차선과 나무색이 노란선 쪽으로 끌려와 색으로 가를 수 없게 된다.
+    auto_white_balance: false
+    white_balance: 4600

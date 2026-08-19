@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sys
 import time
 import types
@@ -45,6 +46,7 @@ from .twinmixing_center import (
     TwinMixingCenterConfig,
     extract_center_path,
     letterbox,
+    path_x_at,
     render_overlay,
     restore_mask,
 )
@@ -96,6 +98,8 @@ class TwinMixingCenterNode(Node):
         self._last_policy_at = 0.0
         self._steering_rad = 0.0
         self._last_speed_mps = 0.0
+        self._last_cross_error = 0.0
+        self._last_tangent = 0.0
         self._last_valid_preview: tuple[float, float, float] | None = None
         self._fps = 0.0
 
@@ -147,7 +151,7 @@ class TwinMixingCenterNode(Node):
 
         # 중심 경로 추출 (2·3단계)
         self.declare_parameter("roi_top_ratio", 0.46)
-        self.declare_parameter("roi_bottom_ratio", 0.97)
+        self.declare_parameter("roi_bottom_ratio", 0.78)
         self.declare_parameter("row_step", 4)
         self.declare_parameter("search_half_width_ratio", 0.24)
         self.declare_parameter("minimum_gap_width_ratio", 0.004)
@@ -161,6 +165,13 @@ class TwinMixingCenterNode(Node):
 
         # 노란 중앙선 (1단계). 조명이 바뀌면 재빌드 없이 여기만 고친다.
         self.declare_parameter("yellow_enabled", True)
+        self.declare_parameter("yellow_detector", "lab_relative")
+        self.declare_parameter("yellow_lab_margin", 10.0)
+        self.declare_parameter("yellow_lab_minimum_b", 132.0)
+        self.declare_parameter("yellow_lab_tophat_width_px", 81)
+        self.declare_parameter("yellow_roi_top_ratio", 0.50)
+        self.declare_parameter("yellow_roi_bottom_half_width_ratio", 0.42)
+        self.declare_parameter("yellow_roi_top_half_width_ratio", 0.14)
         self.declare_parameter("yellow_hue_low", 15)
         self.declare_parameter("yellow_hue_high", 45)
         self.declare_parameter("yellow_saturation_low", 55)
@@ -184,7 +195,7 @@ class TwinMixingCenterNode(Node):
         self.declare_parameter("maneuvers_enabled", False)
         self.declare_parameter("lane_sample_rows", 14)
         self.declare_parameter("lane_roi_top_ratio", 0.52)
-        self.declare_parameter("lane_roi_bottom_ratio", 0.95)
+        self.declare_parameter("lane_roi_bottom_ratio", 0.76)
         self.declare_parameter("lane_minimum_width_ratio", 0.05)
         self.declare_parameter("lane_narrow_width_ratio", 0.55)
         self.declare_parameter("lane_narrow_rows_required", 4)
@@ -217,7 +228,11 @@ class TwinMixingCenterNode(Node):
         self.declare_parameter("speed_mps", 0.50)
         self.declare_parameter("steering_sign", -1.0)
         self.declare_parameter("steering_kp", 0.42)
-        self.declare_parameter("steering_output_gain", 4.0)
+        # 4.0 은 오차 91px 만에 최대 조향에 닿아 오버슈트를 키웠다. 절반으로 낮추고
+        # 부족한 반응은 차선 기울기 항이 메운다.
+        self.declare_parameter("steering_output_gain", 2.0)
+        self.declare_parameter("steering_heading_gain", 1.0)
+        self.declare_parameter("steering_near_y_ratio", 0.76)
         self.declare_parameter("steering_filter_alpha", 0.35)
         self.declare_parameter("max_steering_rad", 0.476)
         self.declare_parameter("max_steering_rate_rad_s", 1.20)
@@ -227,7 +242,13 @@ class TwinMixingCenterNode(Node):
 
     def _build_center_config(self) -> TwinMixingCenterConfig:
         return TwinMixingCenterConfig(
-            roi_top_ratio=float(self._value("roi_top_ratio")),
+            roi_top_ratio=float(self._value("yellow_roi_top_ratio")),
+            roi_bottom_half_width_ratio=float(
+                self._value("yellow_roi_bottom_half_width_ratio")
+            ),
+            roi_top_half_width_ratio=float(
+                self._value("yellow_roi_top_half_width_ratio")
+            ),
             roi_bottom_ratio=float(self._value("roi_bottom_ratio")),
             row_step=int(self._value("row_step")),
             search_half_width_ratio=float(self._value("search_half_width_ratio")),
@@ -244,6 +265,10 @@ class TwinMixingCenterNode(Node):
 
     def _build_yellow_config(self) -> YellowCenterConfig:
         return YellowCenterConfig(
+            detector=str(self._value("yellow_detector")),
+            lab_margin=float(self._value("yellow_lab_margin")),
+            lab_minimum_b=float(self._value("yellow_lab_minimum_b")),
+            lab_tophat_width_px=int(self._value("yellow_lab_tophat_width_px")),
             hue_low=int(self._value("yellow_hue_low")),
             hue_high=int(self._value("yellow_hue_high")),
             saturation_low=int(self._value("yellow_saturation_low")),
@@ -344,17 +369,45 @@ class TwinMixingCenterNode(Node):
 
     # ------------------------------------------------------------------ 제어
 
-    def _tracking_steering(self, offset_px: float, width: int, now: float) -> float:
+    def _steering_terms(self, result, decision, width: int, height: int):
+        """가로오차와 차선 기울기를 함께 낸다.
+
+        가로오차만 쓰면 차가 중앙에 닿는 순간 조향이 0 이 되는데, 그때도 차는 아직
+        비스듬히 가고 있어 그대로 반대편으로 넘어간다. 그래서 S 자로 진동한다.
+        중앙에 닿을 때 조향과 방향이 함께 0 이 되려면 도착 전에 조향을 풀어야 하고,
+        그 판단 근거가 차선 기울기다.
+
+        가로오차는 차 바로 앞(near 행)에서 재고, 기울기는 near 행과 lookahead 행을
+        잇는 각도로 잰다. 회피로 옆 차선에 가 있으면 그 이동량을 near 행에도 같이
+        적용한다.
+        """
+        fallback = (float(decision.target_x_px) - width * 0.5, 0.0)
+        if result.lookahead is None:
+            return fallback
+        lookahead_x, lookahead_y = result.lookahead
+        near_y = height * float(self.get_parameter("steering_near_y_ratio").value)
+        near_path_x = path_x_at(result.fitted_points, near_y)
+        if near_path_x is None or near_y <= lookahead_y:
+            return fallback
+        lateral_shift = float(decision.target_x_px) - float(lookahead_x)
+        near_target = near_path_x + lateral_shift
+        cross_error = near_target - width * 0.5
+        tangent = math.atan2(float(lookahead_x) - near_path_x, near_y - float(lookahead_y))
+        return cross_error, tangent
+
+    def _tracking_steering(
+        self, cross_error_px: float, tangent_rad: float, width: int, now: float
+    ) -> float:
         dt = 0.05 if self._last_control_at <= 0.0 else max(
             0.001, min(0.20, now - self._last_control_at)
         )
         self._last_control_at = now
-        normalized_error = offset_px / max(1.0, width * 0.5)
-        target = (
-            float(self.get_parameter("steering_sign").value)
-            * float(self.get_parameter("steering_kp").value)
+        normalized_error = cross_error_px / max(1.0, width * 0.5)
+        target = float(self.get_parameter("steering_sign").value) * (
+            float(self.get_parameter("steering_kp").value)
             * float(self.get_parameter("steering_output_gain").value)
             * normalized_error
+            + float(self.get_parameter("steering_heading_gain").value) * tangent_rad
         )
         maximum = float(self.get_parameter("max_steering_rad").value)
         target = max(-maximum, min(maximum, target))
@@ -447,8 +500,12 @@ class TwinMixingCenterNode(Node):
                     maneuvers_enabled=bool(self.get_parameter("maneuvers_enabled").value),
                     heading_deg=result.heading_deg,
                 )
-                offset = decision.target_x_px - width * 0.5
-                steering = self._tracking_steering(offset, width, now)
+                cross_error, tangent = self._steering_terms(
+                    result, decision, width, frame.shape[0]
+                )
+                self._last_cross_error = cross_error
+                self._last_tangent = tangent
+                steering = self._tracking_steering(cross_error, tangent, width, now)
                 speed = base_speed * decision.speed_scale
                 preview = (steering, speed, result.confidence)
                 self._last_valid_preview = preview
@@ -536,6 +593,8 @@ class TwinMixingCenterNode(Node):
             "lidar_left_m": rounded(self._sectors.left_m),
             "lidar_right_m": rounded(self._sectors.right_m),
             "maneuvers_enabled": bool(self.get_parameter("maneuvers_enabled").value),
+            "cross_error_px": rounded(self._last_cross_error),
+            "lane_tangent_deg": rounded(math.degrees(self._last_tangent)),
             "steering_rad": round(float(steering), 5),
             "speed_mps": round(float(preview[1]), 3),
             "inference_ms": round(inference_ms, 2),

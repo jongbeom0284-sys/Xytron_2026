@@ -18,7 +18,7 @@ HEIGHT = 480
 CONFIG = LanePolicyConfig()
 
 
-def _road(block_side=None, block_from=0.60):
+def _road(block_side=None, block_from=0.45):
     """중앙선이 곧게 선 2차선 도로. block_side 쪽에 장애물 덩어리를 놓는다."""
     driving = np.zeros((HEIGHT, WIDTH), dtype=bool)
     center = WIDTH // 2
