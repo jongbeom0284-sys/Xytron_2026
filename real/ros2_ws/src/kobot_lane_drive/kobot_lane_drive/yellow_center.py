@@ -110,6 +110,12 @@ class YellowCenterConfig:
     # 시각을 넘겨주지 않는 호출자(단위 시험 등)를 위한 백스톱. 시간 한도가 우선이다.
     ghost_maximum_frames: int = 30
     history_size: int = 10
+    # 검출을 "봤다"고 인정할 최소 신뢰도. 이 아래는 못 본 것과 똑같이 다룬다 —
+    # 유지 타이머를 초기화하지 않고, 유지 기준선도 갈아치우지 않는다.
+    # 주행에 못 쓸 검출이 타이머만 초기화하면, 유지 구간 한복판에서 한 프레임
+    # 도로로 튀고(그 프레임은 노란선도 유지본도 아니므로) 흐릿한 선이 좋았던
+    # 기준선을 밀어낸다. 노드의 주행 게이트(minimum_confidence)와 같은 값이어야 한다.
+    minimum_confidence: float = 0.35
 
 
 def _row_bounds(height: int, config: YellowCenterConfig) -> tuple[int, int]:
@@ -393,12 +399,20 @@ class YellowCenterTracker:
     def update(
         self, result: CenterPathResult, width: int, now: float | None = None
     ) -> CenterPathResult:
-        """한 프레임을 받아 실측 노란선이면 그대로, 아니면 유지본을 낸다.
+        """한 프레임을 받아 쓸 만한 노란선이면 그대로, 아니면 유지본을 낸다.
+
+        "쓸 만한" = 검출됐고 신뢰도가 minimum_confidence 이상. 그 아래 약한 검출은
+        못 본 것과 똑같이 흘려보낸다 — 타이머도 기준선도 건드리지 않는다.
 
         now 는 단조 증가 시각(초)이다. 넘기면 유지 한도를 시간으로 재고,
         넘기지 않으면 프레임 수 백스톱만 걸린다.
         """
-        if result.found and result.lookahead is not None:
+        accepted = (
+            result.found
+            and result.lookahead is not None
+            and result.confidence >= self._config.minimum_confidence
+        )
+        if accepted:
             self._history.append(float(result.lookahead[0]))
             if len(self._history) > self._config.history_size:
                 self._history.pop(0)

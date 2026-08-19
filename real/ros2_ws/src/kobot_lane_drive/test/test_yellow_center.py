@@ -1,5 +1,7 @@
 """노란 중앙선 검출과 점선 외삽 (주행 우선순위 1단계)."""
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
@@ -242,19 +244,15 @@ def test_lab_relative_reports_lost_without_a_line():
 ROAD_SOURCES = ("CENTER_GAP", "REGION_CENTER")
 
 
-def _select_like_the_node(tracker, yellow_result, now, driving, lane, minimum_yellow=0.30):
+def _select_like_the_node(tracker, yellow_result, now, driving, lane):
     """twinmixing_center_node._select_target_line 의 순서를 그대로 흉내 낸다.
 
     노드는 ROS 노드라 시험에서 직접 못 부른다. 순서가 어긋나면 여기서 잡는다.
+    신뢰도 판정은 트래커 안에서 끝난다 — 노드도 여기도 다시 거르지 않는다.
     """
     tracked = tracker.update(yellow_result, WIDTH, now)
     if tracked.found:
-        if tracked.path_source == YELLOW_SOURCE:
-            if tracked.confidence >= minimum_yellow:
-                return tracked
-        else:
-            # 유지본에는 신뢰도 임계를 걸지 않는다. 한도는 시간 하나뿐이다.
-            return tracked
+        return tracked
     return extract_center_path(driving, lane, CENTER_CONFIG)
 
 
@@ -266,6 +264,7 @@ def _hold_fixture(ghost_maximum_seconds=1.0):
     frame, driving, lane = _scene(center_shift=40)
     valid, _ = extract_yellow_center(frame, driving, lane, config, CENTER_CONFIG)
     assert valid.found
+    assert valid.confidence >= config.minimum_confidence, "장면이 채택 임계를 넘어야 한다"
 
     blank_frame, blank_driving, blank_lane = _scene(paint_yellow=False)
     lost, _ = extract_yellow_center(
@@ -331,6 +330,40 @@ def test_hold_keeps_the_last_confidence_so_the_node_gate_stays_open():
         held = _select_like_the_node(tracker, lost, 10.0 + 0.1 * (step + 1), driving, lane)
         assert held.path_source == GHOST_SOURCE
         assert held.confidence == valid.confidence
+
+
+def test_a_weak_detection_does_not_reset_the_hold():
+    """주행에 못 쓸 검출은 못 본 것으로 친다.
+
+    임계 미만 검출이 타이머를 초기화하면 (1) 그 프레임은 노란선도 유지본도 아니라
+    한 프레임 도로로 튀고, (2) 흐릿한 선이 좋았던 기준선을 밀어내며, (3) 1초가
+    영원히 안 찬다. 셋 다 막는다.
+    """
+    config, valid, lost, driving, lane = _hold_fixture()
+    weak = replace(valid, confidence=config.minimum_confidence - 0.05)
+    tracker = YellowCenterTracker(config)
+    tracker.update(valid, WIDTH, 10.0)
+
+    # 0.5초 뒤 약한 검출 — 유지가 끊기지 않고(도로로 안 튀고) 계속 유지본이어야 한다
+    held = _select_like_the_node(tracker, weak, 10.5, driving, lane)
+    assert held.path_source == GHOST_SOURCE, "약한 검출은 유지를 끊으면 안 된다"
+    assert held.confidence == valid.confidence, "기준선은 원래 검출 것 그대로여야 한다"
+    assert tracker.blind_seconds == pytest.approx(0.5), "타이머가 초기화되면 안 된다"
+
+    # 원래 시각 기준 1초가 차면 도로로 — 약한 검출이 창을 늘려 주지 않는다
+    assert _select_like_the_node(tracker, lost, 10.95, driving, lane).path_source == GHOST_SOURCE
+    assert _select_like_the_node(tracker, weak, 11.05, driving, lane).path_source in ROAD_SOURCES
+
+
+def test_a_weak_detection_alone_is_not_a_line():
+    """직전 실측이 없으면 약한 검출은 그냥 없는 것이다 — 도로로 간다."""
+    config, valid, lost, driving, lane = _hold_fixture()
+    weak = replace(valid, confidence=config.minimum_confidence - 0.05)
+    tracker = YellowCenterTracker(config)
+
+    chosen = _select_like_the_node(tracker, weak, 10.0, driving, lane)
+    assert chosen.path_source in ROAD_SOURCES
+    assert tracker.blind_frames == 0
 
 
 def test_a_new_yellow_detection_reopens_the_full_window():

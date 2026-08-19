@@ -137,8 +137,11 @@ twinmixing_center_drive:
     yellow_ghost_maximum_seconds: 1.0
     yellow_ghost_maximum_frames: 30
     yellow_history_size: 10
-    # 실측 노란선을 채택할 최소 신뢰도. 유지본에는 적용하지 않는다.
-    yellow_minimum_confidence: 0.30
+    # 노란선을 "봤다"고 인정할 최소 신뢰도. 이 아래의 약한 검출은 못 본 것과 똑같다 —
+    # 유지 타이머를 초기화하지 않고 기준선도 안 바꾼다. 그래야 유지 구간 한복판에서
+    # 흐릿한 검출 한 번에 도로로 튀었다 돌아오는 일이 없다.
+    # 주행 게이트(minimum_confidence 0.35)보다 낮게 두면 노드가 경고하고 0.35 로 올려 쓴다.
+    yellow_minimum_confidence: 0.35
 
     # =====================================================================
     # 차선 점유 판정과 회피
