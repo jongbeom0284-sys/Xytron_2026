@@ -41,6 +41,11 @@ class ConeCorridorDriveNode(Node):
         self._last_scan_time = 0.0
         self._last_control_time = 0.0
         self._last_log_time = 0.0
+        self._last_found_time = 0.0
+        self._last_valid_steer = 0.0
+        self._last_valid_speed = 0.0
+        self._last_valid_target_x = 0.0
+        self._last_valid_target_y = 0.72
         self._last_result = EMPTY_CORRIDOR_RESULT
         self._filtered_steering_rad = 0.0
 
@@ -190,10 +195,39 @@ class ConeCorridorDriveNode(Node):
         )
         self._last_result = result
 
-        # 조향 저역통과 필터 및 변화율 제한 적용
         raw_steering = float(result.steering_rad) if result.found else 0.0
+
+        # Ghost Hold-over (회전 중 순간적 미검출 시 0.35초간 직전 모멘텀 유지)
+        GHOST_MAX_SEC = 0.35
+
+        if result.found:
+            self._last_found_time = now
+            self._last_valid_steer = raw_steering
+            self._last_valid_speed = float(result.speed_mps)
+            self._last_valid_target_x = float(result.target_x_m)
+            self._last_valid_target_y = float(result.target_y_m)
+
+            drive_active = True
+            target_steer = raw_steering
+            cmd_speed = float(result.speed_mps)
+            target_x_m = float(result.target_x_m)
+            target_y_m = float(result.target_y_m)
+        elif (now - self._last_found_time) <= GHOST_MAX_SEC and self._last_found_time > 0.0:
+            drive_active = True
+            target_steer = self._last_valid_steer
+            cmd_speed = self._last_valid_speed
+            target_x_m = self._last_valid_target_x
+            target_y_m = self._last_valid_target_y
+        else:
+            drive_active = False
+            target_steer = 0.0
+            cmd_speed = 0.0
+            target_x_m = 0.0
+            target_y_m = self._config.target_lookahead_m
+
+        # 조향 저역통과 필터 및 변화율 제한 적용
         alpha = self._config.steering_filter_alpha
-        smoothed_steer = self._filtered_steering_rad + alpha * (raw_steering - self._filtered_steering_rad)
+        smoothed_steer = self._filtered_steering_rad + alpha * (target_steer - self._filtered_steering_rad)
 
         # Slew rate limit
         max_delta = self._config.max_steering_rate_rad_s * dt
@@ -210,24 +244,24 @@ class ConeCorridorDriveNode(Node):
         preview_msg = Float32MultiArray()
         preview_msg.data = [
             final_steer,
-            float(result.speed_mps) if result.found else 0.0,
-            float(result.target_x_m),
-            float(result.target_y_m),
+            cmd_speed,
+            target_x_m,
+            target_y_m,
         ]
         self._preview_publisher.publish(preview_msg)
 
-        # 상태 JSON 발행 (모터 브리지 호환 mode/motor_output 포함)
+        # 상태 JSON 발행 (모터 브리지 규격 100% 준수: mode in READY_MODES, motor_output is False)
         status_payload = {
             "stamp": now,
-            "mode": "TRACKING" if result.found else "HOLD",
+            "mode": "TRACKING" if drive_active else "HOLD",
             "motor_output": False,
-            "found": result.found,
-            "target_x_m": round(result.target_x_m, 3),
-            "target_y_m": round(result.target_y_m, 3),
+            "found": drive_active,
+            "target_x_m": round(target_x_m, 3),
+            "target_y_m": round(target_y_m, 3),
             "steering_rad": round(final_steer, 4),
             "steering_deg": round(math.degrees(final_steer), 1),
             "raw_steering_deg": round(math.degrees(raw_steering), 1),
-            "speed_mps": round(result.speed_mps, 2),
+            "speed_mps": round(cmd_speed, 2),
             "confidence": round(result.confidence, 2),
             "left_points": result.left_points_count,
             "right_points": result.right_points_count,

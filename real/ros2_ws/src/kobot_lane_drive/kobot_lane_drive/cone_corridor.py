@@ -451,12 +451,14 @@ def analyze_cone_corridor(
     else:
         primary_side = "NONE"
 
-    # 조향각이 큰 급커브에서는 코너 감속 속도 적용
-    speed = (
-        config.corner_speed_mps
-        if abs(steering) > (config.max_steering_rad * 0.4)
-        else config.drive_speed_mps
-    )
+    # 조향각 크기에 따른 연속 비례 감속 (직선 ±5도 구간 최고속 100% 유지, 코너 진입 시 부드러운 감속)
+    deadzone = config.max_steering_rad * 0.20  # 약 5도 이내 직선은 감속 없이 최고속도 유지
+    if abs(steering) <= deadzone:
+        speed = config.drive_speed_mps
+    else:
+        steer_ratio = min(1.0, (abs(steering) - deadzone) / max(0.01, config.max_steering_rad * 0.75 - deadzone))
+        speed = config.drive_speed_mps - steer_ratio * (config.drive_speed_mps - config.corner_speed_mps)
+        speed = float(max(config.corner_speed_mps, min(config.drive_speed_mps, speed)))
 
     return ConeCorridorResult(
         found=True,
