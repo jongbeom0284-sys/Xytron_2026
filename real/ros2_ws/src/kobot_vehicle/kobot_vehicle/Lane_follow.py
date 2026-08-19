@@ -46,8 +46,6 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import CompressedImage, Image, LaserScan
 from std_msgs.msg import Float32MultiArray, Float32, String
 from cv_bridge import CvBridge
-from rclpy.executors import MultiThreadedExecutor
-from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 
 def nothing(x):
@@ -85,7 +83,7 @@ class Config:
     EMA_ALPHA_SPEED = 0.1
     
     # 적응형 피팅: 데이터 부족 시 2차 곡선 대신 1차 직선 사용
-    MIN_PIXELS_QUADRATIC = 80   # 2차 피팅에 필요한 최소 픽셀 수
+    MIN_PIXELS_QUADRATIC = 60   # 2차 피팅에 필요한 최소 픽셀 수
     MIN_WINDOWS_QUADRATIC = 3   # 2차 피팅에 필요한 최소 활성 윈도우 수
     MAX_CURVATURE = 0.005       # 2차 계수(a) 절대값 상한 (초과 시 직선으로 되돌림)
     
@@ -125,11 +123,6 @@ class TrackDriveNode(Node):
         super().__init__("track_drive_node")
         self.bridge = CvBridge()
         
-        # 콜백 그룹 분리 (카메라/라이다/모터 독립 처리)
-        self.cam_cb_group = MutuallyExclusiveCallbackGroup()
-        self.lidar_cb_group = MutuallyExclusiveCallbackGroup()
-        self.timer_cb_group = MutuallyExclusiveCallbackGroup()
-        
         # 최신 프레임 1개만 유지 (지연 누적에 의한 제어 발산 방지)
         qos_cam = QoSProfile(
             reliability=QoSReliabilityPolicy.BEST_EFFORT,
@@ -140,8 +133,7 @@ class TrackDriveNode(Node):
             CompressedImage, 
             "/image_raw/compressed", 
             self.image_callback, 
-            qos_cam, 
-            callback_group=self.cam_cb_group
+            qos_cam
         )
         
         # LiDAR 구독자 (qos_profile_sensor_data 적용)
@@ -150,44 +142,60 @@ class TrackDriveNode(Node):
             LaserScan,
             "/scan",
             self.scan_callback,
-            qos_profile_sensor_data,
-            callback_group=self.lidar_cb_group
+            qos_profile_sensor_data
         )
         
         self.motor_pub = self.create_publisher(Float32MultiArray, "/xycar_motor", 10)
         self.obstacle_dist_pub = self.create_publisher(Float32, "/yolo/obstacle_dist", 10)
         self.obstacle_dir_pub = self.create_publisher(String, "/yolo/obstacle_dir", 10)
         
-        # 노란색 HSV 기본 프리셋 (실측 튜닝값)
-        self.declare_parameter('h_low', 25)
-        self.declare_parameter('h_high', 40)
-        self.declare_parameter('s_low', 61)
-        self.declare_parameter('s_high', 120)
-        self.declare_parameter('v_low', 190)
+        # ======================================================================
+        # [HSV 차선 파라미터 (ROS2 파라미터 선언)]
+        # ======================================================================
+        # 1. 노란색 차선 HSV 파라미터 (실측 튜닝값)
+        self.declare_parameter('h_low', 15)
+        self.declare_parameter('h_high', 45)
+        self.declare_parameter('s_low', 40)
+        self.declare_parameter('s_high', 255)
+        self.declare_parameter('v_low', 100)
         self.declare_parameter('v_high', 255)
 
-        # 흰색 HSV 기본 프리셋 (Fallback용)
+        # 2. 흰색 차선 HSV 파라미터 (Fallback 및 회피 주행용)
         self.declare_parameter('w_h_low', 0)
         self.declare_parameter('w_h_high', 180)
         self.declare_parameter('w_s_low', 0)
-        self.declare_parameter('w_s_high', 70)
-        self.declare_parameter('w_v_low', 170)
+        self.declare_parameter('w_s_high', 80)
+        self.declare_parameter('w_v_low', 120)
         self.declare_parameter('w_v_high', 255)
 
         if Config.PUBLISH_DEBUG:
             self.debug_pub = self.create_publisher(Image, "/debug/lane_image", 10)
             
+        # ======================================================================
+        # [GUI 창 및 트랙바 초기화 (노란색 6개 + 흰색 6개)]
+        # ======================================================================
         self.gui_available = False
         if Config.USE_GUI and os.environ.get("DISPLAY"):
             try:
                 cv2.namedWindow("Trackbars", cv2.WINDOW_NORMAL)
-                cv2.resizeWindow("Trackbars", 400, 300)
-                cv2.createTrackbar("H_MIN", "Trackbars", 25, 180, nothing)
-                cv2.createTrackbar("H_MAX", "Trackbars", 40, 180, nothing)
-                cv2.createTrackbar("S_MIN", "Trackbars", 61, 255, nothing)
-                cv2.createTrackbar("S_MAX", "Trackbars", 120, 255, nothing)
-                cv2.createTrackbar("V_MIN", "Trackbars", 190, 255, nothing)
-                cv2.createTrackbar("V_MAX", "Trackbars", 255, 255, nothing)
+                cv2.resizeWindow("Trackbars", 500, 500)
+                
+                # 노란색 차선 HSV 트랙바
+                cv2.createTrackbar("Y_H_MIN", "Trackbars", 15, 180, nothing)
+                cv2.createTrackbar("Y_H_MAX", "Trackbars", 45, 180, nothing)
+                cv2.createTrackbar("Y_S_MIN", "Trackbars", 40, 255, nothing)
+                cv2.createTrackbar("Y_S_MAX", "Trackbars", 255, 255, nothing)
+                cv2.createTrackbar("Y_V_MIN", "Trackbars", 100, 255, nothing)
+                cv2.createTrackbar("Y_V_MAX", "Trackbars", 255, 255, nothing)
+                
+                # 흰색 차선 HSV 트랙바
+                cv2.createTrackbar("W_H_MIN", "Trackbars", 0, 180, nothing)
+                cv2.createTrackbar("W_H_MAX", "Trackbars", 180, 180, nothing)
+                cv2.createTrackbar("W_S_MIN", "Trackbars", 0, 255, nothing)
+                cv2.createTrackbar("W_S_MAX", "Trackbars", 80, 255, nothing)
+                cv2.createTrackbar("W_V_MIN", "Trackbars", 120, 255, nothing)
+                cv2.createTrackbar("W_V_MAX", "Trackbars", 255, 255, nothing)
+                
                 self.gui_available = True
             except Exception as e:
                 self.get_logger().warn(f"GUI window init skipped: {e}")
@@ -233,7 +241,7 @@ class TrackDriveNode(Node):
 
         self.current_speed = 0.0
         self.current_angle = 0.0
-        self.timer = self.create_timer(0.05, self.timer_callback, callback_group=self.timer_cb_group)
+        self.timer = self.create_timer(0.05, self.timer_callback)
         
         self.get_logger().info("Integrated Lane Follow & Obstacle Avoidance Node Started!")
 
@@ -346,7 +354,7 @@ class TrackDriveNode(Node):
         window_height = int(cropped_height // Config.NWINDOWS)
         lookahead_y = int(cropped_height * (1.0 - Config.LOOKAHEAD_RATIO))
         
-        # 파라미터 값 가져오기
+        # 1. 파라미터 기본값 가져오기 (노란색 & 흰색)
         p_h_l = self.get_parameter('h_low').value
         p_h_h = self.get_parameter('h_high').value
         p_s_l = self.get_parameter('s_low').value
@@ -354,22 +362,43 @@ class TrackDriveNode(Node):
         p_v_l = self.get_parameter('v_low').value
         p_v_h = self.get_parameter('v_high').value
 
+        p_w_h_l = self.get_parameter('w_h_low').value
+        p_w_h_h = self.get_parameter('w_h_high').value
+        p_w_s_l = self.get_parameter('w_s_low').value
+        p_w_s_h = self.get_parameter('w_s_high').value
+        p_w_v_l = self.get_parameter('w_v_low').value
+        p_w_v_h = self.get_parameter('w_v_high').value
+
+        # 2. 트랙바 값 읽기 (GUI 활성화 시)
         if self.gui_available:
             try:
-                h_l = cv2.getTrackbarPos("H_MIN", "Trackbars")
-                h_h = cv2.getTrackbarPos("H_MAX", "Trackbars")
-                s_l = cv2.getTrackbarPos("S_MIN", "Trackbars")
-                s_h = cv2.getTrackbarPos("S_MAX", "Trackbars")
-                v_l = cv2.getTrackbarPos("V_MIN", "Trackbars")
-                v_h = cv2.getTrackbarPos("V_MAX", "Trackbars")
+                # 노란색
+                h_l = cv2.getTrackbarPos("Y_H_MIN", "Trackbars")
+                h_h = cv2.getTrackbarPos("Y_H_MAX", "Trackbars")
+                s_l = cv2.getTrackbarPos("Y_S_MIN", "Trackbars")
+                s_h = cv2.getTrackbarPos("Y_S_MAX", "Trackbars")
+                v_l = cv2.getTrackbarPos("Y_V_MIN", "Trackbars")
+                v_h = cv2.getTrackbarPos("Y_V_MAX", "Trackbars")
                 
-                # 트랙바 창이 아직 준비 안 되었거나 비정상(0,0,0)인 경우 안전하게 파라미터 기본값 사용
                 if h_l < 0 or h_h <= h_l or v_h <= v_l:
                     h_l, h_h, s_l, s_h, v_l, v_h = p_h_l, p_h_h, p_s_l, p_s_h, p_v_l, p_v_h
+                    
+                # 흰색
+                w_h_l = cv2.getTrackbarPos("W_H_MIN", "Trackbars")
+                w_h_h = cv2.getTrackbarPos("W_H_MAX", "Trackbars")
+                w_s_l = cv2.getTrackbarPos("W_S_MIN", "Trackbars")
+                w_s_h = cv2.getTrackbarPos("W_S_MAX", "Trackbars")
+                w_v_l = cv2.getTrackbarPos("W_V_MIN", "Trackbars")
+                w_v_h = cv2.getTrackbarPos("W_V_MAX", "Trackbars")
+                
+                if w_h_l < 0 or w_h_h <= w_h_l or w_v_h <= w_v_l:
+                    w_h_l, w_h_h, w_s_l, w_s_h, w_v_l, w_v_h = p_w_h_l, p_w_h_h, p_w_s_l, p_w_s_h, p_w_v_l, p_w_v_h
             except Exception:
                 h_l, h_h, s_l, s_h, v_l, v_h = p_h_l, p_h_h, p_s_l, p_s_h, p_v_l, p_v_h
+                w_h_l, w_h_h, w_s_l, w_s_h, w_v_l, w_v_h = p_w_h_l, p_w_h_h, p_w_s_l, p_w_s_h, p_w_v_l, p_w_v_h
         else:
             h_l, h_h, s_l, s_h, v_l, v_h = p_h_l, p_h_h, p_s_l, p_s_h, p_v_l, p_v_h
+            w_h_l, w_h_h, w_s_l, w_s_h, w_v_l, w_v_h = p_w_h_l, p_w_h_h, p_w_s_l, p_w_s_h, p_w_v_l, p_w_v_h
             
         hsv_img = cv2.cvtColor(cv_img_roi, cv2.COLOR_BGR2HSV)
         kernel = np.ones((5, 5), np.uint8)
@@ -378,9 +407,7 @@ class TrackDriveNode(Node):
         yellow_mask = cv2.morphologyEx(yellow_mask, cv2.MORPH_OPEN, kernel)
         yellow_mask = cv2.morphologyEx(yellow_mask, cv2.MORPH_CLOSE, kernel)
 
-        out_img = None
-        if Config.PUBLISH_DEBUG or self.gui_available:
-            out_img = cv_img.copy()
+        out_img = cv_img.copy()
 
         # ----------------------------------------------------------------------
         # [2-1] 노란색 차선 슬라이딩 윈도우 & 적응형 피팅
@@ -404,8 +431,7 @@ class TrackDriveNode(Node):
                 win_x_low = max(0, x_current - Config.MARGIN)
                 win_x_high = min(Config.IMAGE_WIDTH, x_current + Config.MARGIN)
                 
-                if out_img is not None:
-                    cv2.rectangle(out_img, (win_x_low, win_y_low + roi_top), (win_x_high, win_y_high + roi_top), (0, 255, 0), 2)
+                cv2.rectangle(out_img, (win_x_low, win_y_low + roi_top), (win_x_high, win_y_high + roi_top), (0, 255, 0), 2)
                     
                 good_inds = ((nonzeroy >= win_y_low) & (nonzeroy < win_y_high) & (nonzerox >= win_x_low) & (nonzerox < win_x_high)).nonzero()[0]
                 lane_inds.append(good_inds)
@@ -442,13 +468,6 @@ class TrackDriveNode(Node):
         # ----------------------------------------------------------------------
         # [2-2] 흰색 차선 슬라이딩 윈도우 (좌/우 개별 검출)
         # ----------------------------------------------------------------------
-        w_h_l = self.get_parameter('w_h_low').value
-        w_h_h = self.get_parameter('w_h_high').value
-        w_s_l = self.get_parameter('w_s_low').value
-        w_s_h = self.get_parameter('w_s_high').value
-        w_v_l = self.get_parameter('w_v_low').value
-        w_v_h = self.get_parameter('w_v_high').value
-
         white_mask = cv2.inRange(hsv_img, np.array([w_h_l, w_s_l, w_v_l]), np.array([w_h_h, w_s_h, w_v_h]))
         white_mask = cv2.morphologyEx(white_mask, cv2.MORPH_OPEN, kernel)
         white_mask = cv2.morphologyEx(white_mask, cv2.MORPH_CLOSE, kernel)
@@ -475,8 +494,7 @@ class TrackDriveNode(Node):
             if l_curr is not None:
                 l_x_low = max(0, l_curr - Config.MARGIN)
                 l_x_high = min(Config.IMAGE_WIDTH, l_curr + Config.MARGIN)
-                if out_img is not None:
-                    cv2.rectangle(out_img, (l_x_low, win_y_low + roi_top), (l_x_high, win_y_high + roi_top), (255, 200, 0), 2)
+                cv2.rectangle(out_img, (l_x_low, win_y_low + roi_top), (l_x_high, win_y_high + roi_top), (255, 200, 0), 2)
                 good_l = ((w_nonzeroy >= win_y_low) & (w_nonzeroy < win_y_high) & (w_nonzerox >= l_x_low) & (w_nonzerox < l_x_high)).nonzero()[0]
                 l_inds.append(good_l)
                 if len(good_l) > Config.MINPIX:
@@ -485,8 +503,7 @@ class TrackDriveNode(Node):
             if r_curr is not None:
                 r_x_low = max(0, r_curr - Config.MARGIN)
                 r_x_high = min(Config.IMAGE_WIDTH, r_curr + Config.MARGIN)
-                if out_img is not None:
-                    cv2.rectangle(out_img, (r_x_low, win_y_low + roi_top), (r_x_high, win_y_high + roi_top), (255, 200, 0), 2)
+                cv2.rectangle(out_img, (r_x_low, win_y_low + roi_top), (r_x_high, win_y_high + roi_top), (255, 200, 0), 2)
                 good_r = ((w_nonzeroy >= win_y_low) & (w_nonzeroy < win_y_high) & (w_nonzerox >= r_x_low) & (w_nonzerox < r_x_high)).nonzero()[0]
                 r_inds.append(good_r)
                 if len(good_r) > Config.MINPIX:
@@ -509,7 +526,6 @@ class TrackDriveNode(Node):
         # ======================================================================
         # [3. 정적 장애물 회피 상태 머신 (Avoidance State Machine)]
         # ======================================================================
-        # (1) 장애물 감지 시 회피 상태 전이
         if min_obstacle_dist <= Config.OBSTACLE_AVOID_DIST:
             if closest_obstacle_dir == 'LEFT':
                 self.avoid_state = "STATE_AVOID_LEFT"   # 좌측 장애물 -> 우측 흰색 차선 우회
@@ -518,21 +534,18 @@ class TrackDriveNode(Node):
                 self.avoid_state = "STATE_AVOID_RIGHT"  # 우측 장애물 -> 좌측 흰색 차선 우회
                 self.avoid_hold_counter = Config.AVOID_HOLD_FRAMES
         elif self.avoid_state in ["STATE_AVOID_LEFT", "STATE_AVOID_RIGHT"]:
-            # 장애물이 범위 밖으로 벗어남 -> 일정 프레임 동안 회피 경로 유지 후 복귀
             if self.avoid_hold_counter > 0:
                 self.avoid_hold_counter -= 1
             else:
                 self.avoid_state = "STATE_RETURNING"
         elif self.avoid_state == "STATE_RETURNING":
-            # 노란색 중앙선이 다시 안정적으로 잡히면 정상 주행 복귀
             if yellow_target_x is not None:
                 self.avoid_state = "STATE_NORMAL"
 
-        # (2) 상태에 따른 목표 x좌표(target_x) 결정
+        # 목표 x좌표 결정
         target_x = None
         
         if self.avoid_state == "STATE_AVOID_LEFT":
-            # 좌측 장애물 회피 -> 우측 흰색 차선 추종
             if white_right_x is not None:
                 target_x = int(white_right_x - Config.WHITE_LANE_HALF_WIDTH)
             elif yellow_target_x is not None:
@@ -540,7 +553,6 @@ class TrackDriveNode(Node):
             status_txt = f"AVOID LEFT ({min_obstacle_dist:.1f}m -> RIGHT LANE)"
             
         elif self.avoid_state == "STATE_AVOID_RIGHT":
-            # 우측 장애물 회피 -> 좌측 흰색 차선 추종
             if white_left_x is not None:
                 target_x = int(white_left_x + Config.WHITE_LANE_HALF_WIDTH)
             elif yellow_target_x is not None:
@@ -548,7 +560,6 @@ class TrackDriveNode(Node):
             status_txt = f"AVOID RIGHT ({min_obstacle_dist:.1f}m -> LEFT LANE)"
             
         elif self.avoid_state == "STATE_RETURNING":
-            # 복귀 중: 노란색 차선 우선, 없으면 흰색 중앙
             if yellow_target_x is not None:
                 target_x = yellow_target_x
             elif white_left_x is not None and white_right_x is not None:
@@ -556,11 +567,9 @@ class TrackDriveNode(Node):
             status_txt = "RETURNING TO CENTER"
             
         else: # STATE_NORMAL
-            # [평상시] 1순위 노란색 추종 -> 2순위 흰색 차선 Fallback
             if yellow_target_x is not None:
                 target_x = yellow_target_x
             else:
-                # 흰색 Fallback
                 if white_left_x is not None and white_right_x is not None:
                     target_x = int((white_left_x + white_right_x) // 2)
                     status_txt = "WHITE FALLBACK (BOTH)"
@@ -582,7 +591,6 @@ class TrackDriveNode(Node):
             if len(self.target_x_buffer) > Config.TARGET_X_BUFFER_SIZE:
                 self.target_x_buffer.pop(0)
         else:
-            # 궤적 외삽
             if len(self.target_x_buffer) >= 3 and self.blind_count < Config.GHOST_MAX_FRAMES:
                 recent = self.target_x_buffer[-min(5, len(self.target_x_buffer)):]
                 dx_per_frame = (recent[-1] - recent[0]) / max(len(recent) - 1, 1)
@@ -607,7 +615,6 @@ class TrackDriveNode(Node):
         else:
             raw_error = self.prev_error
 
-        # error 이동평균 필터
         self.error_buffer.append(raw_error)
         if len(self.error_buffer) > Config.ERROR_BUFFER_SIZE:
             self.error_buffer.pop(0)
@@ -626,10 +633,8 @@ class TrackDriveNode(Node):
         self.prev_ema_angle = filtered_angle
         self.last_time = current_time
         
-        # 조향각 제한 -50~50
         angle_clamped = float(max(-50.0, min(50.0, filtered_angle)))
         
-        # 회피 중 감속 또는 기본 속도 감속
         base_speed = Config.AVOID_SPEED if "AVOID" in self.avoid_state else Config.BASE_SPEED
         target_speed = float(max(Config.MIN_SPEED, min(base_speed, base_speed - abs(angle_clamped) * Config.SPEED_DECAY)))
         
@@ -643,55 +648,56 @@ class TrackDriveNode(Node):
         self.current_angle = angle_clamped
         self.current_speed = filtered_speed
 
-        self.get_logger().info(f"State: {status_txt}, StateMachine: {self.avoid_state}, Steer: {angle_clamped:.1f}, Speed: {filtered_speed:.1f}", throttle_duration_sec=2.0)
+        self.get_logger().info(f"State: {status_txt}, StateMachine: {self.avoid_state}, Steer: {angle_clamped:.1f}, Speed: {filtered_speed:.1f}", throttle_duration_sec=0.5)
         
         # ======================================================================
         # [6. 디버그 시각화 렌더링]
         # ======================================================================
-        if out_img is not None:
-            ploty = np.linspace(0, cropped_height - 1, cropped_height)
-            if lane_fit is not None:
-                pts = np.array([np.transpose(np.vstack([lane_fit[0]*ploty**2 + lane_fit[1]*ploty + lane_fit[2], ploty + roi_top]))], np.int32)
-                cv2.polylines(out_img, pts, False, (0, 255, 255), 3)
+        ploty = np.linspace(0, cropped_height - 1, cropped_height)
+        if lane_fit is not None:
+            pts = np.array([np.transpose(np.vstack([lane_fit[0]*ploty**2 + lane_fit[1]*ploty + lane_fit[2], ploty + roi_top]))], np.int32)
+            cv2.polylines(out_img, pts, False, (0, 255, 255), 3)
+            
+        if target_x is not None:
+            cv2.circle(out_img, (target_x, lookahead_y + roi_top), 8, (255, 0, 255), -1)
+            cv2.line(out_img, (Config.IMAGE_WIDTH // 2, lookahead_y + roi_top), (target_x, lookahead_y + roi_top), (255, 255, 255), 2)
+        
+        cv2.line(out_img, (Config.IMAGE_WIDTH // 2, 0), (Config.IMAGE_WIDTH // 2, Config.IMAGE_HEIGHT), (100, 100, 100), 1)
+        
+        # 탐지된 장애물 바운딩 박스 및 LiDAR 거리 표시
+        for (bx1, by1, bx2, by2, bdist, bdir, bcls, bconf) in self.detected_boxes:
+            bcolor = (0, 0, 255) if bdist <= Config.OBSTACLE_AVOID_DIST else (0, 255, 255)
+            cv2.rectangle(out_img, (bx1, by1), (bx2, by2), bcolor, 2)
+            label_txt = f"{bdir} {bdist:.2f}m (ID:{bcls})" if bdist != float('inf') else f"{bdir} (No LiDAR)"
+            cv2.putText(out_img, label_txt, (bx1, max(20, by1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, bcolor, 2)
+        
+        # 상태 표시
+        state_color = (0, 0, 255) if "AVOID" in self.avoid_state else ((0, 255, 255) if "YELLOW" in status_txt else (255, 200, 0))
+        cv2.putText(out_img, f"Mode: {status_txt}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.65, state_color, 2)
+        cv2.putText(out_img, f"Avoid State: {self.avoid_state}", (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
+        cv2.putText(out_img, f"Angle: {angle_clamped:.1f} | Speed: {filtered_speed:.1f}", (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
+        
+        if Config.PUBLISH_DEBUG:
+            self.debug_pub.publish(self.bridge.cv2_to_imgmsg(out_img, encoding="bgr8"))
+        
+        if self.gui_available:
+            try:
+                # Trackbars 창에 빈 캔버스를 그려 X11 위젯 렌더링 유지
+                trackbar_bg = np.zeros((20, 500, 3), dtype=np.uint8)
+                cv2.imshow("Trackbars", trackbar_bg)
                 
-            if target_x is not None:
-                cv2.circle(out_img, (target_x, lookahead_y + roi_top), 8, (255, 0, 255), -1)
-                cv2.line(out_img, (Config.IMAGE_WIDTH // 2, lookahead_y + roi_top), (target_x, lookahead_y + roi_top), (255, 255, 255), 2)
-            
-            cv2.line(out_img, (Config.IMAGE_WIDTH // 2, 0), (Config.IMAGE_WIDTH // 2, Config.IMAGE_HEIGHT), (100, 100, 100), 1)
-            
-            # 탐지된 장애물 바운딩 박스 및 LiDAR 거리 표시
-            for (bx1, by1, bx2, by2, bdist, bdir, bcls, bconf) in self.detected_boxes:
-                bcolor = (0, 0, 255) if bdist <= Config.OBSTACLE_AVOID_DIST else (0, 255, 255)
-                cv2.rectangle(out_img, (bx1, by1), (bx2, by2), bcolor, 2)
-                label_txt = f"{bdir} {bdist:.2f}m (ID:{bcls})" if bdist != float('inf') else f"{bdir} (No LiDAR)"
-                cv2.putText(out_img, label_txt, (bx1, max(20, by1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, bcolor, 2)
-            
-            # 상태 표시
-            state_color = (0, 0, 255) if "AVOID" in self.avoid_state else ((0, 255, 255) if "YELLOW" in status_txt else (255, 200, 0))
-            cv2.putText(out_img, f"Mode: {status_txt}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.65, state_color, 2)
-            cv2.putText(out_img, f"Avoid State: {self.avoid_state}", (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
-            cv2.putText(out_img, f"Angle: {angle_clamped:.1f} | Speed: {filtered_speed:.1f}", (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
-            
-            if Config.PUBLISH_DEBUG:
-                self.debug_pub.publish(self.bridge.cv2_to_imgmsg(out_img, encoding="bgr8"))
-            
-            if self.gui_available:
-                try:
-                    cv2.imshow("Yellow_Mask (HSV_Cropped)", yellow_mask)
-                    cv2.imshow("White_Mask (HSV_Cropped)", white_mask)
-                    cv2.imshow("Lane_Control (Cropped)", out_img)
-                    cv2.waitKey(1)
-                except Exception:
-                    pass
+                cv2.imshow("Yellow_Mask (HSV_Cropped)", yellow_mask)
+                cv2.imshow("White_Mask (HSV_Cropped)", white_mask)
+                cv2.imshow("Lane_Control (Cropped)", out_img)
+                cv2.waitKey(1)
+            except Exception:
+                pass
 
 def main(args=None):
     rclpy.init(args=args)
     node = TrackDriveNode()
-    executor = MultiThreadedExecutor(num_threads=2)
-    executor.add_node(node)
     try: 
-        executor.spin()
+        rclpy.spin(node)
     except KeyboardInterrupt: 
         pass
     finally:
