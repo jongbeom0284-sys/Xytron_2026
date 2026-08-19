@@ -113,3 +113,35 @@ def test_offset_sign_follows_the_line(shift):
         assert abs(result.center_offset_px) < 20
     else:
         assert np.sign(result.center_offset_px) == np.sign(shift)
+
+
+def test_road_on_both_sides_is_an_optional_switch():
+    """좌우 도로 요구는 선택 조건이며 기본은 꺼져 있다.
+
+    노란 구조물을 배제할 수는 있지만, 한쪽 도로만 보이는 프레임에서도 중앙선은
+    따라가야 한다. 실측 재생에서 켰더니 검출률이 87% -> 31% 로 떨어졌다.
+    """
+
+    def scene(road_on_right):
+        frame = np.full((HEIGHT, WIDTH, 3), 60, dtype=np.uint8)
+        driving = np.zeros((HEIGHT, WIDTH), dtype=bool)
+        lane = np.zeros_like(driving)
+        for y in range(int(HEIGHT * 0.45), int(HEIGHT * 0.98)):
+            driving[y, 200:430] = True            # 왼쪽 도로
+            if road_on_right:
+                driving[y, 471:600] = True        # 오른쪽 도로
+            frame[y, 440:465] = (0, 255, 255)     # 노란 띠는 항상 같은 자리
+            lane[y, 440:465] = True
+        return frame, driving, lane
+
+    # 기본값은 꺼짐. 한쪽 도로만 보여도 중앙선은 따라간다.
+    default_config = YellowCenterConfig()
+    assert not default_config.require_road_on_both_sides
+    one_side, _ = extract_yellow_center(*scene(False), default_config, CENTER_CONFIG)
+    assert one_side.found
+    assert one_side.path_source == YELLOW_SOURCE
+
+    # 켜면 양쪽에 도로가 있을 때만 통과한다
+    strict = YellowCenterConfig(require_road_on_both_sides=True)
+    assert not extract_yellow_center(*scene(False), strict, CENTER_CONFIG)[0].found
+    assert extract_yellow_center(*scene(True), strict, CENTER_CONFIG)[0].found

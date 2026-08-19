@@ -173,6 +173,9 @@ class TwinMixingCenterNode(Node):
         self.declare_parameter("yellow_maximum_run_width_ratio", 0.22)
         self.declare_parameter("yellow_minimum_run_pixels", 3)
         self.declare_parameter("yellow_minimum_rows", 8)
+        self.declare_parameter("yellow_require_road_on_both_sides", False)
+        self.declare_parameter("yellow_side_support_ratio", 0.02)
+        self.declare_parameter("yellow_side_search_ratio", 0.10)
         self.declare_parameter("yellow_ghost_maximum_frames", 20)
         self.declare_parameter("yellow_history_size", 10)
         self.declare_parameter("yellow_minimum_confidence", 0.30)
@@ -256,6 +259,11 @@ class TwinMixingCenterNode(Node):
             maximum_run_width_ratio=float(self._value("yellow_maximum_run_width_ratio")),
             minimum_run_pixels=int(self._value("yellow_minimum_run_pixels")),
             minimum_rows=int(self._value("yellow_minimum_rows")),
+            require_road_on_both_sides=bool(
+                self._value("yellow_require_road_on_both_sides")
+            ),
+            side_support_ratio=float(self._value("yellow_side_support_ratio")),
+            side_search_ratio=float(self._value("yellow_side_search_ratio")),
             ghost_maximum_frames=int(self._value("yellow_ghost_maximum_frames")),
             history_size=int(self._value("yellow_history_size")),
         )
