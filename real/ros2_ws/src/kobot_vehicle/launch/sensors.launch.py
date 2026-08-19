@@ -31,6 +31,8 @@ def camera_control_command(config_dir):
         'brightness=%d' % int(params.get('brightness', 0)),
         'auto_exposure=%s' % ('3' if params.get('autoexposure', True) else '1'),
         'exposure_time_absolute=%d' % int(params.get('exposure', 157)),
+        'white_balance_automatic=%d' % (1 if params.get('auto_white_balance', True) else 0),
+        'white_balance_temperature=%d' % int(params.get('white_balance', 4600)),
     ])
     return ['v4l2-ctl', '-d', device, '--set-ctrl', controls]
 
