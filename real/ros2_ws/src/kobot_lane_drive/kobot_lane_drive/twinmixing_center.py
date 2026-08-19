@@ -441,7 +441,9 @@ def render_overlay(
             direction = "RIGHT"
         elif result.center_offset_px < -6:
             direction = "LEFT"
-    legacy_angle = steering_rad / 0.0068
+    # 실제 모터로 나가는 값과 같은 부호로 표시한다. 예전에는 부호가 반대라
+    # 화면만 보면 조향 방향을 거꾸로 읽게 됐다.
+    legacy_angle = -steering_rad / 0.0068
 
     drive_line = decision.state if decision is not None else "-"
     blocked = decision.blocked_side if decision is not None else None

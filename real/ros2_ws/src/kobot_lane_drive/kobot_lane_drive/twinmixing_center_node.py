@@ -233,16 +233,16 @@ class TwinMixingCenterNode(Node):
         self.declare_parameter("steering_kp", 0.42)
         # 4.0 은 오차 91px 만에 최대 조향에 닿아 오버슈트를 키웠다. 절반으로 낮추고
         # 부족한 반응은 차선 기울기 항이 메운다.
-        self.declare_parameter("steering_output_gain", 1.4)
+        self.declare_parameter("steering_output_gain", 3.2)
         # 화면 기울기 항은 쓰지 않는다. 원근이 섞여 가로오차와 반대로 작용했다.
-        self.declare_parameter("steering_kd", 0.9)
+        self.declare_parameter("steering_kd", 0.45)
         self.declare_parameter("steering_deadband_px", 25.0)
         self.declare_parameter("steering_rate_filter_alpha", 0.30)
         self.declare_parameter("steering_near_y_ratio", 0.76)
         self.declare_parameter("steering_minimum_span_ratio", 0.06)
         self.declare_parameter("steering_filter_alpha", 0.55)
         self.declare_parameter("max_steering_rad", 0.476)
-        self.declare_parameter("max_steering_rate_rad_s", 1.20)
+        self.declare_parameter("max_steering_rate_rad_s", 1.8)
 
     def _value(self, name: str):
         return self.get_parameter(name).value
