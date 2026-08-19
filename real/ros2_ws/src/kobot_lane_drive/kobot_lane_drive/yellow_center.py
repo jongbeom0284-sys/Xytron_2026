@@ -90,7 +90,9 @@ class YellowCenterConfig:
 
     # 후보가 도로에 붙어 있을 것을 요구한다. 도로 위에 그려진 선이거나(겹침),
     # 두 주행영역 사이 틈에 있는 선이어야 한다. 벽의 나무 슬랫을 거르는 조건이다.
-    require_road_anchor: bool = True
+    # 216 번의 나무 기둥을 막으려고 넣었으나 1 번에서 진짜 중앙선까지 걷어냈다.
+    # 중앙선이 주행영역 가장자리 바로 바깥에 놓이면 나무와 기하학적으로 같다.
+    require_road_anchor: bool = False
     side_support_ratio: float = 0.02
     side_search_ratio: float = 0.10
 
