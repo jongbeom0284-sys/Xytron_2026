@@ -1,11 +1,12 @@
-"""LaserScan 을 전방·좌·우 세 구역 거리로 요약한다.
+"""LaserScan 을 "옆 차선에 차가 있는가"라는 하나의 질문으로 줄인다.
 
-카메라가 "이쪽 차선이 좁아졌다"고 말할 때 그게 진짜 물체인지 확인하는 용도다.
-라이다 단독으로 차선 점유를 판정하지 않는다 — 벽과 연석도 같은 거리에 잡히기 때문이다.
+각도로 부채꼴을 자르지 않고, 차량 좌표계의 직사각 코리도로 자른다. 차량은 항상
+차선 안에 있고 차선 폭은 대략 알고 있으므로, 옆 차선의 장애물은 "앞으로 y m,
+옆으로 x m" 범위에 들어온다. 벽과 연석은 이 상자 밖(옆으로 너무 멀거나, 바로
+옆이라 앞쪽 거리가 모자란 곳)에 있으므로 애초에 후보가 되지 않는다.
 
-각도 규약: xycar_lidar 의 원시 0 rad 은 차량 후방을 본다. angle_offset_rad(기본 pi)를
-더해 0 = 정면으로 맞춘 뒤, 양수를 좌측, 음수를 우측으로 쓴다. LidarAvoidance 가 쓰던
-보정과 같다. 드라이버가 바뀌면 이 값만 파라미터로 고친다.
+좌표 규약: x 는 왼쪽이 양수, y 는 앞쪽이 양수.
+xycar_lidar 의 원시 0 rad 은 후방을 보므로 angle_offset_rad(기본 pi)로 정면에 맞춘다.
 
 ROS 에 의존하지 않는다. ranges 는 그냥 float 시퀀스다.
 """
@@ -22,19 +23,28 @@ import numpy as np
 @dataclass(frozen=True)
 class LidarSectorConfig:
     angle_offset_rad: float = math.pi
-    front_half_deg: float = 18.0
-    side_minimum_deg: float = 12.0
-    side_maximum_deg: float = 75.0
+
+    # 앞쪽으로 볼 구간. 너무 가까우면 차체와 노면, 너무 멀면 다음 코너의 벽이 들어온다.
+    forward_minimum_m: float = 0.35
+    forward_maximum_m: float = 2.50
+
+    # 옆 차선에 해당하는 가로 범위. 안쪽 경계는 자기 차선을 제외하고,
+    # 바깥쪽 경계는 도로 밖의 벽을 제외한다.
+    side_lateral_minimum_m: float = 0.12
+    side_lateral_maximum_m: float = 0.75
+
+    # 정면 코리도 (자기 차선 폭)
+    front_lateral_maximum_m: float = 0.20
+
     minimum_range_m: float = 0.15
     maximum_range_m: float = 6.0
-    # 구역 거리로 k번째 근접값을 쓴다. 단발 잡음 하나로 회피가 트리거되지 않으면서,
-    # 실제 차량처럼 여러 점을 만드는 물체는 놓치지 않는 절충이다.
+    # 이만큼의 점이 동의해야 물체로 인정한다. 반사 한 점으로 차선을 넘지 않기 위해서다.
     minimum_hits: int = 5
 
 
 @dataclass(frozen=True)
 class LidarSectors:
-    """각 구역의 대표 거리. 물체가 없으면 None."""
+    """각 코리도에서 가장 가까운 물체까지의 전방 거리. 없으면 None."""
 
     front_m: float | None
     left_m: float | None
@@ -52,7 +62,6 @@ class LidarSectors:
         return None
 
     def nearest_side(self) -> str | None:
-        """좌우 중 더 가까운 쪽. 양쪽 다 비었으면 None."""
         if self.left_m is None and self.right_m is None:
             return None
         if self.right_m is None:
@@ -68,19 +77,34 @@ class LidarSectors:
 EMPTY_SECTORS = LidarSectors(None, None, None, 0, 0, 0, 0.0)
 
 
-def _representative(values: np.ndarray, minimum_hits: int) -> float | None:
-    """구역을 대표하는 거리 = minimum_hits 번째로 가까운 값.
+def _nearest(forward: np.ndarray, minimum_hits: int) -> float | None:
+    """코리도 안에서 minimum_hits 번째로 가까운 전방 거리."""
+    if forward.size < minimum_hits:
+        return None
+    return float(np.partition(forward, minimum_hits - 1)[minimum_hits - 1])
 
-    최솟값을 그대로 쓰면 반사 하나에 회피가 걸린다. 백분위수를 쓰면 구역의 점 개수에
-    따라 임계가 흔들려서, 점이 많은 넓은 구역에서 작은 물체를 놓친다. k번째 근접값은
-    구역 크기와 무관하게 "그만큼의 점이 동의해야 인정"이라는 뜻이 된다.
-    """
-    if values.size == 0:
-        return None
-    if values.size < minimum_hits:
-        return None
-    partitioned = np.partition(values, minimum_hits - 1)
-    return float(partitioned[minimum_hits - 1])
+
+def scan_to_vehicle_points(
+    ranges: Sequence[float],
+    angle_min: float,
+    angle_increment: float,
+    config: LidarSectorConfig,
+) -> tuple[np.ndarray, np.ndarray]:
+    """유효한 측정만 차량 좌표계 (x 왼쪽+, y 앞쪽+) 로 옮긴다."""
+    array = np.asarray(ranges, dtype=np.float64)
+    if array.size == 0 or angle_increment == 0.0:
+        empty = np.empty(0, dtype=np.float64)
+        return empty, empty
+    angles = angle_min + np.arange(array.size, dtype=np.float64) * angle_increment
+    angles = angles + config.angle_offset_rad
+    usable = (
+        np.isfinite(array)
+        & (array >= config.minimum_range_m)
+        & (array <= config.maximum_range_m)
+    )
+    distance = array[usable]
+    theta = angles[usable]
+    return distance * np.sin(theta), distance * np.cos(theta)
 
 
 def summarize_scan(
@@ -91,29 +115,25 @@ def summarize_scan(
     config: LidarSectorConfig | None = None,
 ) -> LidarSectors:
     config = config or LidarSectorConfig()
-    array = np.asarray(ranges, dtype=np.float64)
-    if array.size == 0 or angle_increment == 0.0:
+    x, y = scan_to_vehicle_points(ranges, angle_min, angle_increment, config)
+    if x.size == 0:
         return LidarSectors(None, None, None, 0, 0, 0, stamp)
 
-    angles = angle_min + np.arange(array.size, dtype=np.float64) * angle_increment
-    angles = angles + config.angle_offset_rad
-    angles = (angles + math.pi) % (2.0 * math.pi) - math.pi
-    degrees = np.degrees(angles)
-
-    usable = (
-        np.isfinite(array)
-        & (array >= config.minimum_range_m)
-        & (array <= config.maximum_range_m)
+    ahead = (y >= config.forward_minimum_m) & (y <= config.forward_maximum_m)
+    lateral = np.abs(x)
+    in_side_band = (
+        ahead
+        & (lateral >= config.side_lateral_minimum_m)
+        & (lateral <= config.side_lateral_maximum_m)
     )
-
-    front = usable & (np.abs(degrees) <= config.front_half_deg)
-    left = usable & (degrees > config.side_minimum_deg) & (degrees <= config.side_maximum_deg)
-    right = usable & (degrees < -config.side_minimum_deg) & (degrees >= -config.side_maximum_deg)
+    left = in_side_band & (x > 0.0)
+    right = in_side_band & (x < 0.0)
+    front = ahead & (lateral <= config.front_lateral_maximum_m)
 
     return LidarSectors(
-        front_m=_representative(array[front], config.minimum_hits),
-        left_m=_representative(array[left], config.minimum_hits),
-        right_m=_representative(array[right], config.minimum_hits),
+        front_m=_nearest(y[front], config.minimum_hits),
+        left_m=_nearest(y[left], config.minimum_hits),
+        right_m=_nearest(y[right], config.minimum_hits),
         front_count=int(front.sum()),
         left_count=int(left.sum()),
         right_count=int(right.sum()),
@@ -128,7 +148,7 @@ def side_is_occupied(
     now: float,
     maximum_age_sec: float,
 ) -> bool:
-    """지정한 쪽에 임계 거리 이내의 물체가 있는가.
+    """지정한 쪽 옆 차선 코리도에 임계 거리 이내의 물체가 있는가.
 
     오래된 스캔은 근거로 쓰지 않는다. 라이다 9.7 Hz, 인식 15 Hz 로 주기가 달라
     직전 값이 이미 낡았을 수 있다.

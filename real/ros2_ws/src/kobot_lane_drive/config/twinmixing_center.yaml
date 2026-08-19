@@ -64,13 +64,20 @@ twinmixing_center_drive:
     policy_target_rate_px_s: 260.0
     policy_shift_speed_scale: 0.75
     policy_return_tolerance_px: 12.0
+    # 회피는 직선에서만. 대회 장애물(정지 차량 1, 이동 차량 1)은 직선 차선에 놓인다.
+    policy_straight_only: true
+    policy_maximum_heading_deg: 12.0
 
     # --- 라이다 구역 ---
     # xycar_lidar 원시 0 rad 은 후방을 본다. pi 를 더해 0 = 정면으로 맞춘다.
     lidar_angle_offset_rad: 3.141592653589793
-    lidar_front_half_deg: 18.0
-    lidar_side_minimum_deg: 12.0
-    lidar_side_maximum_deg: 75.0
+    # 부채꼴이 아니라 차량 좌표계의 직사각 코리도로 자른다. 차량은 늘 차선 안에
+    # 있으므로 옆 차선 차량은 이 상자에 들어오고, 벽과 연석은 상자 밖에 남는다.
+    lidar_forward_minimum_m: 0.35
+    lidar_forward_maximum_m: 2.50
+    lidar_side_lateral_minimum_m: 0.12
+    lidar_side_lateral_maximum_m: 0.75
+    lidar_front_lateral_maximum_m: 0.20
     lidar_minimum_range_m: 0.15
     lidar_maximum_range_m: 6.0
     lidar_minimum_hits: 5

@@ -201,3 +201,25 @@ def test_permanently_narrow_side_is_not_treated_as_an_obstacle():
     for step in range(40):
         decision = _run(policy, narrow, _sectors(right=0.8, stamp=now), now + step * 0.1)
     assert decision.state == CENTER
+
+
+def test_curved_section_never_triggers_a_lane_change():
+    """코너에서는 회피하지 않는다. 목표선이 기울면 좌우 폭이 원근으로 왜곡된다."""
+    config = LanePolicyConfig(enter_hold_sec=0.0, baseline_warmup_frames=5)
+    policy = LanePolicy(config)
+    driving, points = _road(block_side="left")
+    occupancy = measure_lanes(driving, points, config)
+    now = 0.0
+    _warmup(policy, config, now, frames=6)
+    for step in range(10):
+        decision = policy.update(
+            center_x_px=320.0,
+            occupancy=occupancy,
+            sectors=_sectors(left=1.0, stamp=now),
+            speed_mps=0.5,
+            dt=0.1,
+            now=now + step * 0.1,
+            frame_width=WIDTH,
+            heading_deg=28.0,
+        )
+    assert decision.state == CENTER

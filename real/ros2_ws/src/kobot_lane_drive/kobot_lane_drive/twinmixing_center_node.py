@@ -194,12 +194,16 @@ class TwinMixingCenterNode(Node):
         self.declare_parameter("policy_target_rate_px_s", 260.0)
         self.declare_parameter("policy_shift_speed_scale", 0.75)
         self.declare_parameter("policy_return_tolerance_px", 12.0)
+        self.declare_parameter("policy_straight_only", True)
+        self.declare_parameter("policy_maximum_heading_deg", 12.0)
 
         # 라이다 구역
         self.declare_parameter("lidar_angle_offset_rad", float(np.pi))
-        self.declare_parameter("lidar_front_half_deg", 18.0)
-        self.declare_parameter("lidar_side_minimum_deg", 12.0)
-        self.declare_parameter("lidar_side_maximum_deg", 75.0)
+        self.declare_parameter("lidar_forward_minimum_m", 0.35)
+        self.declare_parameter("lidar_forward_maximum_m", 2.50)
+        self.declare_parameter("lidar_side_lateral_minimum_m", 0.12)
+        self.declare_parameter("lidar_side_lateral_maximum_m", 0.75)
+        self.declare_parameter("lidar_front_lateral_maximum_m", 0.20)
         self.declare_parameter("lidar_minimum_range_m", 0.15)
         self.declare_parameter("lidar_maximum_range_m", 6.0)
         self.declare_parameter("lidar_minimum_hits", 5)
@@ -275,14 +279,18 @@ class TwinMixingCenterNode(Node):
             target_rate_px_s=float(self._value("policy_target_rate_px_s")),
             shift_speed_scale=float(self._value("policy_shift_speed_scale")),
             return_tolerance_px=float(self._value("policy_return_tolerance_px")),
+            straight_only=bool(self._value("policy_straight_only")),
+            maximum_heading_deg=float(self._value("policy_maximum_heading_deg")),
         )
 
     def _build_lidar_config(self) -> LidarSectorConfig:
         return LidarSectorConfig(
             angle_offset_rad=float(self._value("lidar_angle_offset_rad")),
-            front_half_deg=float(self._value("lidar_front_half_deg")),
-            side_minimum_deg=float(self._value("lidar_side_minimum_deg")),
-            side_maximum_deg=float(self._value("lidar_side_maximum_deg")),
+            forward_minimum_m=float(self._value("lidar_forward_minimum_m")),
+            forward_maximum_m=float(self._value("lidar_forward_maximum_m")),
+            side_lateral_minimum_m=float(self._value("lidar_side_lateral_minimum_m")),
+            side_lateral_maximum_m=float(self._value("lidar_side_lateral_maximum_m")),
+            front_lateral_maximum_m=float(self._value("lidar_front_lateral_maximum_m")),
             minimum_range_m=float(self._value("lidar_minimum_range_m")),
             maximum_range_m=float(self._value("lidar_maximum_range_m")),
             minimum_hits=int(self._value("lidar_minimum_hits")),
@@ -429,6 +437,7 @@ class TwinMixingCenterNode(Node):
                     now=now,
                     frame_width=width,
                     maneuvers_enabled=bool(self.get_parameter("maneuvers_enabled").value),
+                    heading_deg=result.heading_deg,
                 )
                 offset = decision.target_x_px - width * 0.5
                 steering = self._tracking_steering(offset, width, now)
