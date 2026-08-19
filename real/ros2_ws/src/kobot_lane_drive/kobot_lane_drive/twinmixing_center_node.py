@@ -203,7 +203,8 @@ class TwinMixingCenterNode(Node):
         self.declare_parameter("yellow_require_road_on_both_sides", False)
         self.declare_parameter("yellow_side_support_ratio", 0.02)
         self.declare_parameter("yellow_side_search_ratio", 0.10)
-        self.declare_parameter("yellow_ghost_maximum_frames", 20)
+        self.declare_parameter("yellow_ghost_maximum_seconds", 1.0)
+        self.declare_parameter("yellow_ghost_maximum_frames", 30)
         self.declare_parameter("yellow_history_size", 10)
         self.declare_parameter("yellow_minimum_confidence", 0.30)
 
@@ -314,6 +315,7 @@ class TwinMixingCenterNode(Node):
             ),
             side_support_ratio=float(self._value("yellow_side_support_ratio")),
             side_search_ratio=float(self._value("yellow_side_search_ratio")),
+            ghost_maximum_seconds=float(self._value("yellow_ghost_maximum_seconds")),
             ghost_maximum_frames=int(self._value("yellow_ghost_maximum_frames")),
             history_size=int(self._value("yellow_history_size")),
         )
@@ -480,16 +482,23 @@ class TwinMixingCenterNode(Node):
             self._lidar_config,
         )
 
-    def _select_target_line(self, frame, driving, lane):
+    def _select_target_line(self, frame, driving, lane, now):
         """우선순위 1 -> 2 -> 3 순으로 목표선을 고른다.
 
-        외삽본(GHOST)은 실측이 하나도 없을 때만 쓴다. 예전에는 외삽 신뢰도가 임계
-        위에 있는 동안 실측 도로보다 먼저 채택돼, 도로가 보이는데도 몇 프레임 전
-        노란선 잔상을 계속 따라갔다. 외삽 신뢰도는 20 프레임에 걸쳐 떨어지므로
-        최대 1.3 초까지 그랬다.
+          1. 실측 노란 중앙선
+          1'. 직전 노란선 유지 (끊긴 뒤 yellow_ghost_maximum_seconds 동안)
+          2. 센터 갭 / 3. 영역 중앙
+
+        노란선이 끊겼다고 곧바로 도로로 내려가지 않는다. 실측 주행에서 노란선이
+        사라지는 프레임은 주행영역 인식도 함께 무너져 있었다. 그 순간의 도로 중앙은
+        노란선의 대안이 아니라 그냥 잡음이고, 거기로 한 프레임 튀었다가 다음
+        프레임에 노란선으로 돌아오면 조향이 그만큼 흔들린다. 그래서 유지가 먼저다.
+
+        유지 구간에서는 신뢰도로 다시 거르지 않는다. 직전에 쓰던 목표를 그대로
+        이어 가는 것이 목적이라 판단 기준은 "얼마나 오래됐나" 하나뿐이다.
+        한도를 넘기면 트래커가 스스로 포기하고(found=False) 도로로 내려간다.
         """
         yellow_evidence = None
-        ghost = None
         minimum_yellow = float(self.get_parameter("yellow_minimum_confidence").value)
 
         if bool(self.get_parameter("yellow_enabled").value):
@@ -502,23 +511,19 @@ class TwinMixingCenterNode(Node):
                 seed_x=self._yellow_seed_x,
             )
             self._yellow_seed_x = _path_bottom_x(yellow_result)
-            tracked = self._yellow_tracker.update(yellow_result, frame.shape[1])
-            if tracked.found and tracked.confidence >= minimum_yellow:
+            tracked = self._yellow_tracker.update(yellow_result, frame.shape[1], now)
+            if tracked.found:
                 if tracked.path_source == YELLOW_SOURCE:
+                    if tracked.confidence >= minimum_yellow:
+                        return tracked, yellow_evidence
+                else:
                     return tracked, yellow_evidence
-                ghost = tracked  # 실측 도로를 먼저 보고, 없을 때만 쓴다
         else:
             self._yellow_tracker.reset()
             self._yellow_seed_x = None
 
-        gap = extract_center_path(driving, lane, self._config)
-        if gap.found and gap.confidence >= float(
-            self.get_parameter("minimum_confidence").value
-        ):
-            return gap, yellow_evidence
-        if ghost is not None:
-            return ghost, yellow_evidence
-        return gap, yellow_evidence
+        # 여기까지 왔다는 것은 노란선이 없고 유지 한도도 지났다는 뜻이다.
+        return extract_center_path(driving, lane, self._config), yellow_evidence
 
     def _on_image(self, message: Image) -> None:
         now = time.monotonic()
@@ -543,7 +548,7 @@ class TwinMixingCenterNode(Node):
             driving = restore_mask(driving_raw, padding, output_size)
             lane = restore_mask(lane_raw, padding, output_size)
 
-            result, yellow_evidence = self._select_target_line(frame, driving, lane)
+            result, yellow_evidence = self._select_target_line(frame, driving, lane, now)
 
             width = frame.shape[1]
             base_speed = float(self.get_parameter("speed_mps").value)
@@ -650,6 +655,7 @@ class TwinMixingCenterNode(Node):
             "lane_support_ratio": round(result.lane_support_ratio, 3),
             "path_points": int(len(result.fitted_points)),
             "ghost_frames": self._yellow_tracker.blind_frames,
+            "ghost_seconds": round(self._yellow_tracker.blind_seconds, 2),
             "drive_line": decision.state if decision else self._policy.state,
             "blocked_side": decision.blocked_side if decision else None,
             "target_x_px": rounded(decision.target_x_px) if decision else None,

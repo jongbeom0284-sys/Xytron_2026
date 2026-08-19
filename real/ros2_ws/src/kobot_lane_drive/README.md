@@ -10,7 +10,7 @@
 kobot_lane_drive/
 ├── geometry.py                        레이트 리밋 · 클램프 · 저역통과
 ├── twinmixing_center.py               마스크 → 중심 경로, 화면 오버레이
-├── yellow_center.py                   노란 중앙선 검출 (LAB top-hat) + 점선 외삽
+├── yellow_center.py                   노란 중앙선 검출 (LAB top-hat) + 끊긴 동안 유지
 ├── lane_policy.py                     차선 폭 측정 + 주행 라인 상태기계
 ├── obstacle_lidar.py                  /scan → 차량 좌표계 코리도 거리
 ├── drive_command.py                   조향·속도 → /xycar_motor 형식 변환
@@ -30,9 +30,10 @@ kobot_lane_drive/
        yellow_center.py ◄─────────┤  원본 프레임의 LAB b* 채널도 함께 본다
          │  사다리꼴 ROI 안에서 가로 top-hat → 좁은 노란 줄만 남긴다
          │  도로에서 40px 넘게 떨어진 후보는 버린다 (나무벽)
-         │  끊긴 구간은 최대 20프레임 외삽 (점선 대응)
+         │  끊기면 직전 목표를 1초까지 유지 (점선·순간 소실 대응)
          ▼
-    목표선 선택  1) 노란 중앙선  2) 센터 갭  3) 영역 중앙  4) HOLD
+    목표선 선택  1) 노란 중앙선  1') 직전 노란선 1초 유지
+                 2) 센터 갭  3) 영역 중앙  4) HOLD
          │
     lane_policy.py ── 목표선을 경계로 좌/우 차선 폭 측정
          │            + obstacle_lidar.py 의 옆 차선 코리도
@@ -84,6 +85,7 @@ yellow_lab_margin: 14.0                   # 노란선이 안 잡히면 낮춘다
 yellow_maximum_road_distance_ratio: 0.0625  # 나무벽이 잡히면 낮춘다 (40px)
 steering_output_gain: 3.2                 # 곡선을 못 돌면 올린다
 steering_deadband_px: 25.0                # 직선에서 흔들리면 올린다
+yellow_ghost_maximum_seconds: 1.0         # 노란선이 끊긴 뒤 직전 목표를 유지할 시간
 maneuvers_enabled: false                  # 회피. 기본 꺼짐
 policy_straight_only: true                # 회피는 직선에서만
 ```

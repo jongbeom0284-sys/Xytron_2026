@@ -233,11 +233,11 @@ function laneNumber(value,digits,unit){
 }
 
 function laneStatsHtml(){
-  const sources={YELLOW_LINE:'노란 중앙선',YELLOW_LINE_GHOST:'노란선 외삽',CENTER_GAP:'센터 갭',REGION_CENTER:'영역 중앙',NONE:'없음'};
+  const sources={YELLOW_LINE:'노란 중앙선',YELLOW_LINE_GHOST:'직전 노란선 유지',CENTER_GAP:'센터 갭',REGION_CENTER:'영역 중앙',NONE:'없음'};
   const modes={TRACKING:'추적',HOLD:'유지',HOLD_LAST:'마지막값 유지',WAITING:'대기',ERROR:'오류'};
   const lines={CENTER:'중앙',SHIFT_LEFT:'좌 회피',SHIFT_RIGHT:'우 회피',RETURNING:'복귀'};
   const blocked={left:'왼쪽',right:'오른쪽'};
-  const ghost=Number(latestLane.ghost_frames||0);
+  const ghost=Number(latestLane.ghost_frames||0),ghostSec=Number(latestLane.ghost_seconds||0);
   const cells=[
     ['목표선',sources[latestLane.path_source]||latestLane.path_source||'-'],
     ['상태',modes[latestLane.mode]||latestLane.mode||'-'],
@@ -250,7 +250,7 @@ function laneStatsHtml(){
     ['차선폭 좌',laneNumber(latestLane.left_lane_width_px,0,' px')],
     ['차선폭 우',laneNumber(latestLane.right_lane_width_px,0,' px')],
     ['막힘',blocked[latestLane.blocked_side]||(latestLane.narrow_side?blocked[latestLane.narrow_side]+'(의심)':'없음')],
-    ['외삽',ghost?ghost+' 프레임':'-'],
+    ['노란선 유지',ghost?ghostSec.toFixed(2)+'초 / '+ghost+'프레임':'-'],
     ['라이다 좌',laneNumber(latestLane.lidar_left_m,2,' m')],
     ['라이다 앞',laneNumber(latestLane.lidar_front_m,2,' m')],
     ['라이다 우',laneNumber(latestLane.lidar_right_m,2,' m')],
@@ -271,7 +271,7 @@ function laneDriveLineText(){
 
 function laneStatusText(){
   const labels={TRACKING:'추적 중',HOLD:'차선 끊김 · 이전값 유지',HOLD_LAST:'인식 없음 · 마지막값 계속 유지',WAITING:'차선 대기',ERROR:'오류'};
-  const sources={YELLOW_LINE:'노란 중앙선',YELLOW_LINE_GHOST:'노란 중앙선 외삽',CENTER_GAP:'센터 갭',REGION_CENTER:'영역 중앙',NONE:'경로 없음'};
+  const sources={YELLOW_LINE:'노란 중앙선',YELLOW_LINE_GHOST:'직전 노란선 유지',CENTER_GAP:'센터 갭',REGION_CENTER:'영역 중앙',NONE:'경로 없음'};
   const mode=latestLane.mode||latestLane.state||'WAITING';
   const offset=Number(latestLane.center_offset_px||0);
   return `${labels[mode]||mode} · ${sources[latestLane.path_source]||latestLane.path_source||'경로 없음'} · 신뢰도 ${Number(latestLane.confidence||0).toFixed(2)} · d 오차 ${offset>=0?'+':''}${offset.toFixed(0)}px`;

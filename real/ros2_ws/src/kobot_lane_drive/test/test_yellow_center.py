@@ -100,7 +100,8 @@ def test_tracker_extrapolates_across_a_gap_then_gives_up():
 
     ghosts = [tracker.update(lost, WIDTH) for _ in range(config.ghost_maximum_frames)]
     assert all(item.path_source == GHOST_SOURCE for item in ghosts)
-    assert ghosts[-1].confidence < ghosts[0].confidence
+    # 유지 중에는 신뢰도를 깎지 않는다. 깎으면 호출자 임계에 걸려 한도 전에 끊긴다.
+    assert all(item.confidence == valid.confidence for item in ghosts)
 
     given_up = tracker.update(lost, WIDTH)
     assert not given_up.found
@@ -238,35 +239,107 @@ def test_lab_relative_reports_lost_without_a_line():
     assert not result.found
 
 
-def test_ghost_never_outranks_a_real_road_measurement():
-    """외삽본은 실측이 없을 때만 쓴다.
+ROAD_SOURCES = ("CENTER_GAP", "REGION_CENTER")
 
-    12:23 주행 231 번에서 인식 구간의 97% 가 어두워 노란선을 못 봤는데도, 도로가
-    보이는 상태에서 3 프레임 전 잔상을 계속 따라갔다. 외삽 신뢰도가 20 프레임에
-    걸쳐 떨어지므로 최대 1.3 초까지 실측 도로를 무시했다.
 
-    노드의 선택 로직을 그대로 흉내 내 순서를 검증한다.
+def _select_like_the_node(tracker, yellow_result, now, driving, lane, minimum_yellow=0.30):
+    """twinmixing_center_node._select_target_line 의 순서를 그대로 흉내 낸다.
+
+    노드는 ROS 노드라 시험에서 직접 못 부른다. 순서가 어긋나면 여기서 잡는다.
     """
+    tracked = tracker.update(yellow_result, WIDTH, now)
+    if tracked.found:
+        if tracked.path_source == YELLOW_SOURCE:
+            if tracked.confidence >= minimum_yellow:
+                return tracked
+        else:
+            # 유지본에는 신뢰도 임계를 걸지 않는다. 한도는 시간 하나뿐이다.
+            return tracked
+    return extract_center_path(driving, lane, CENTER_CONFIG)
+
+
+def _hold_fixture(ghost_maximum_seconds=1.0):
+    """노란선이 보이는 장면 하나와, 노란선만 지운 장면 하나를 만든다."""
+    config = YellowCenterConfig(
+        detector=HSV_ABSOLUTE, ghost_maximum_seconds=ghost_maximum_seconds
+    )
     frame, driving, lane = _scene(center_shift=40)
-    config = YellowCenterConfig(detector=HSV_ABSOLUTE)
     valid, _ = extract_yellow_center(frame, driving, lane, config, CENTER_CONFIG)
     assert valid.found
-
-    tracker = YellowCenterTracker(config)
-    tracker.update(valid, WIDTH)
 
     blank_frame, blank_driving, blank_lane = _scene(paint_yellow=False)
     lost, _ = extract_yellow_center(
         blank_frame, blank_driving, blank_lane, config, CENTER_CONFIG
     )
-    ghost = tracker.update(lost, WIDTH)
-    assert ghost.path_source == GHOST_SOURCE
-    assert ghost.confidence >= 0.30, "외삽본이 임계 위에 있어야 이 상황이 재현된다"
-
-    # 노드와 같은 순서: 실측 노란선이 아니면 도로를 먼저 본다
+    assert not lost.found
     road = extract_center_path(blank_driving, blank_lane, CENTER_CONFIG)
-    assert road.found, "이 장면에서는 도로가 보인다"
+    assert road.found, "이 장면에서는 도로가 보여야 대비가 성립한다"
+    return config, valid, lost, blank_driving, blank_lane
 
-    chosen = ghost if ghost.path_source == YELLOW_SOURCE else road
-    assert chosen.path_source != GHOST_SOURCE
-    assert chosen.path_source in ("CENTER_GAP", "REGION_CENTER")
+
+def test_hold_outranks_the_road_while_the_window_is_open():
+    """노란선이 끊긴 직후에는 도로가 보여도 직전 노란선을 유지한다.
+
+    실측 주행에서 노란선이 사라지는 프레임은 주행영역 인식도 함께 무너져 있었다.
+    그 순간의 도로 중앙은 노란선의 대안이 아니라 잡음이다.
+    """
+    config, valid, lost, driving, lane = _hold_fixture()
+    tracker = YellowCenterTracker(config)
+    tracker.update(valid, WIDTH, 10.0)
+
+    chosen = _select_like_the_node(tracker, lost, 10.4, driving, lane)
+    assert chosen.path_source == GHOST_SOURCE
+    assert chosen.found
+
+
+def test_road_takes_over_once_the_hold_window_expires():
+    """1 초를 넘기면 유지를 포기하고 도로로 내려간다."""
+    config, valid, lost, driving, lane = _hold_fixture()
+    tracker = YellowCenterTracker(config)
+    tracker.update(valid, WIDTH, 10.0)
+
+    assert _select_like_the_node(tracker, lost, 10.9, driving, lane).path_source == GHOST_SOURCE
+    chosen = _select_like_the_node(tracker, lost, 11.05, driving, lane)
+    assert chosen.path_source in ROAD_SOURCES
+    assert tracker.blind_frames == 0, "포기했으면 트래커가 비워져 있어야 한다"
+
+
+def test_hold_window_is_measured_in_seconds_not_frames():
+    """추론 주기가 9~15Hz 사이에서 움직여 프레임 수로는 한도가 흔들렸다.
+
+    0.9 초 안에 24 프레임이 들어와도 유지가 유지돼야 한다. 프레임 한도(20)로
+    재던 예전 코드는 21 번째에서 끊겼다.
+    """
+    config, valid, lost, driving, lane = _hold_fixture()
+    tracker = YellowCenterTracker(config)
+    tracker.update(valid, WIDTH, 10.0)
+
+    sources = [
+        _select_like_the_node(tracker, lost, 10.0 + 0.9 * (step + 1) / 24.0, driving, lane).path_source
+        for step in range(24)
+    ]
+    assert sources == [GHOST_SOURCE] * 24
+
+
+def test_hold_keeps_the_last_confidence_so_the_node_gate_stays_open():
+    """유지본의 신뢰도를 깎으면 노드의 minimum_confidence 에 걸려 한도 전에 끊긴다."""
+    config, valid, lost, driving, lane = _hold_fixture()
+    tracker = YellowCenterTracker(config)
+    tracker.update(valid, WIDTH, 10.0)
+
+    for step in range(8):
+        held = _select_like_the_node(tracker, lost, 10.0 + 0.1 * (step + 1), driving, lane)
+        assert held.path_source == GHOST_SOURCE
+        assert held.confidence == valid.confidence
+
+
+def test_a_new_yellow_detection_reopens_the_full_window():
+    """다시 보이면 유지 시간이 처음부터 다시 시작한다."""
+    config, valid, lost, driving, lane = _hold_fixture()
+    tracker = YellowCenterTracker(config)
+    tracker.update(valid, WIDTH, 10.0)
+    assert _select_like_the_node(tracker, lost, 10.9, driving, lane).path_source == GHOST_SOURCE
+
+    assert tracker.update(valid, WIDTH, 11.0).path_source == YELLOW_SOURCE
+    assert tracker.blind_seconds == 0.0
+    assert _select_like_the_node(tracker, lost, 11.9, driving, lane).path_source == GHOST_SOURCE

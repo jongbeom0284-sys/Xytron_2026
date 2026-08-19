@@ -126,10 +126,18 @@ twinmixing_center_drive:
     yellow_side_support_ratio: 0.02
     yellow_side_search_ratio: 0.10
 
-    # 점선 대응. 검출이 끊긴 동안 최근 추세를 연장한다(GHOST).
-    # 이 프레임 수를 넘으면 포기하고 다음 우선순위로 내려간다.
-    yellow_ghost_maximum_frames: 20
+    # 노란선이 끊긴 동안 직전 목표를 유지한다(GHOST). 최근 추세를 연장한다.
+    #
+    # 유지 구간에서는 도로 폴백(센터 갭/영역 중앙)보다 이쪽이 우선이다. 노란선이
+    # 사라지는 프레임은 주행영역 인식도 함께 무너져 있어서, 그 순간의 도로 중앙은
+    # 노란선의 대안이 아니라 잡음이기 때문이다. 이 시간을 넘겨야 도로로 내려간다.
+    #
+    # 프레임이 아니라 시간으로 재는 이유: 추론이 9~15Hz 사이에서 움직여 같은
+    # 프레임 수가 1.3초도 되고 2.2초도 됐다. 프레임 쪽은 백스톱으로만 남긴다.
+    yellow_ghost_maximum_seconds: 1.0
+    yellow_ghost_maximum_frames: 30
     yellow_history_size: 10
+    # 실측 노란선을 채택할 최소 신뢰도. 유지본에는 적용하지 않는다.
     yellow_minimum_confidence: 0.30
 
     # =====================================================================

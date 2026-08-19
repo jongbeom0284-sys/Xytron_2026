@@ -31,7 +31,7 @@ status_node → /kobot/status → dashboard 장치 상태
 /image_raw ─┐
             ├→ TwinMixing CUDA → driving_mask + lane_mask
 /scan ──────┘                          │
-                                       ├→ 1. 노란 중앙선 (색 확인 + 점선 외삽)
+                                       ├→ 1. 노란 중앙선 (색 확인, 끊기면 1초 유지)
                                        ├→ 2. 센터 갭
                                        ├→ 3. 영역 중앙
                                        │      ↓ 목표선
@@ -99,7 +99,8 @@ status_node → /kobot/status → dashboard 장치 상태
 | `center_gap_width_px` | 두 주행영역 사이 틈의 평균 폭 |
 | `lane_support_ratio` | 목표선이 `lane_mask` 위에 놓인 비율 |
 | `path_points` | 피팅에 쓰인 행 수 |
-| `ghost_frames` | 노란선 외삽 연속 프레임 수. 0 이면 지금 실제로 보고 있다 |
+| `ghost_frames` | 노란선을 유지한 연속 프레임 수. 0 이면 지금 실제로 보고 있다 |
+| `ghost_seconds` | 마지막 실측 노란선 이후 흐른 시간. 1.0 을 넘기면 도로로 내려간다 |
 
 **어떻게 판단했나**
 

@@ -177,18 +177,20 @@ def prepare_session(record_root: Path, session_name: str, torch, model, device: 
         yellow_result, yellow_evidence = extract_yellow_center(
             frame, driving, lane, yellow_config, config
         )
-        tracked = tracker.update(yellow_result, frame.shape[1])
-        # 외삽본은 실측 도로가 없을 때만 쓴다. 노드와 같은 순서다.
-        ghost = None
+        # 녹화 프레임의 실제 시각을 넘긴다. 재생 속도가 아니라 촬영 간격으로
+        # 유지 한도를 재야 실차와 같은 시점에 도로로 내려간다.
+        tracked = tracker.update(yellow_result, frame.shape[1], stamp)
+        # 노드와 같은 순서: 실측 노란선 -> 직전 노란선 유지 -> 도로.
+        # 유지본에는 신뢰도 임계를 걸지 않는다 (한도는 시간 하나뿐이다).
         result = None
-        if tracked.found and tracked.confidence >= MINIMUM_CONFIDENCE:
+        if tracked.found:
             if tracked.path_source == YELLOW_SOURCE:
-                result = tracked
+                if tracked.confidence >= MINIMUM_CONFIDENCE:
+                    result = tracked
             else:
-                ghost = tracked
+                result = tracked
         if result is None:
-            road = extract_center_path(driving, lane, config)
-            result = road if road.found else (ghost if ghost is not None else road)
+            result = extract_center_path(driving, lane, config)
         occupancy = (
             measure_lanes(driving, result.fitted_points, policy_config)
             if result.found
