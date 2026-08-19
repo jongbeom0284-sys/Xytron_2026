@@ -61,6 +61,9 @@ twinmixing_center_drive:
     # 중앙선을 놓친다. 실측에서 검출률이 87% -> 31% 로 떨어져 기본은 끈다.
     # 후보가 도로에 붙어 있을 것을 요구한다. 도로 위에 그려졌거나 두 주행영역 사이
     # 틈에 있어야 한다. 벽의 나무 슬랫을 거르는 조건이다.
+    # 후보가 도로에서 이만큼 이상 떨어지면 중앙선이 아니다. 640px 기준 40px.
+    # 실측: 진짜 중앙선 4~18px, 벽의 나무 슬랫 107px.
+    yellow_maximum_road_distance_ratio: 0.0625
     yellow_require_road_anchor: false
     yellow_require_road_on_both_sides: false
     yellow_side_support_ratio: 0.02

@@ -90,8 +90,12 @@ class YellowCenterConfig:
 
     # 후보가 도로에 붙어 있을 것을 요구한다. 도로 위에 그려진 선이거나(겹침),
     # 두 주행영역 사이 틈에 있는 선이어야 한다. 벽의 나무 슬랫을 거르는 조건이다.
-    # 216 번의 나무 기둥을 막으려고 넣었으나 1 번에서 진짜 중앙선까지 걷어냈다.
-    # 중앙선이 주행영역 가장자리 바로 바깥에 놓이면 나무와 기하학적으로 같다.
+    # 후보가 도로에서 이만큼 이상 떨어져 있으면 중앙선이 아니다 (화면 폭 대비).
+    # 실측: 진짜 중앙선 4~18px, 벽의 나무 슬랫 107px. 색으로는 못 가른다.
+    maximum_road_distance_ratio: float = 0.0625
+
+    # 예전 조건. 도로와 겹치거나 좌우 양쪽에 도로를 요구해 너무 빡빡했다.
+    # 중앙선이 주행영역 가장자리 바로 바깥에 놓인 프레임에서 진짜 선까지 걷어냈다.
     require_road_anchor: bool = False
     side_support_ratio: float = 0.02
     side_search_ratio: float = 0.10
@@ -225,6 +229,17 @@ def _has_road_on_both_sides(
     return left_road >= support_px and right_road >= support_px
 
 
+def _distance_to_road(driving_row: np.ndarray, start: int, end: int) -> float:
+    """후보에서 가장 가까운 주행영역 픽셀까지의 가로 거리. 겹치면 0."""
+    if int(driving_row[start : end + 1].sum()) > 0:
+        return 0.0
+    road = np.flatnonzero(driving_row)
+    if road.size == 0:
+        return float("inf")
+    centre = (start + end) * 0.5
+    return float(np.min(np.abs(road - centre)))
+
+
 def _is_anchored_to_road(
     driving_row: np.ndarray,
     start: int,
@@ -274,6 +289,7 @@ def extract_yellow_center(
     attempted_rows = len(rows)
     search_half = max(12, int(round(width * config.search_half_width_ratio)))
     maximum_run = max(4, int(round(width * config.maximum_run_width_ratio)))
+    maximum_road_distance = width * config.maximum_road_distance_ratio
     side_support = max(3, int(round(width * config.side_support_ratio)))
     side_search = max(side_support * 2, int(round(width * config.side_search_ratio)))
     driving = driving_mask.astype(bool)
@@ -290,6 +306,8 @@ def extract_yellow_center(
             center = (start + end) * 0.5
             distance = abs(center - expected_x)
             if distance > search_half:
+                continue
+            if _distance_to_road(driving[y], start, end) > maximum_road_distance:
                 continue
             if config.require_road_anchor and not _is_anchored_to_road(
                 driving[y], start, end, side_support, side_search
