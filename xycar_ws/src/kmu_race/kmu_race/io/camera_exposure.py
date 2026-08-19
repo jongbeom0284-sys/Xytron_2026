@@ -80,11 +80,83 @@ class CameraExposure:
         return ok
 
     def set_auto(self) -> bool:
-        """자동 노출로 복귀 — 주행 전에 반드시 호출된다."""
+        """자동 노출로 복귀."""
         ok = self._run(f"auto_exposure={_AUTO}")
         if ok:
             self._state = "auto"
         return ok
+
+    def set_drive(self, drive_exposure: int) -> bool:
+        """주행용 노출로 전환. 0 이면 자동 노출로 되돌린다.
+
+        왜 '자동 복귀'가 기본이 아닌가 (0818 bag 실측):
+            자동노출은 세션 내내 화면 평균 V 를 **109~214 로 흔든다**
+            (V≥243 통과 픽셀 비율은 0.000~0.385, 385배). 밝기 분포가
+            프레임마다 바뀌면 어떤 임계값도 매 프레임 다른 문제를 푼다.
+            노출을 하나로 고정해야 그때부터 아래 단계가 정지 상태가 된다.
+
+        ⚠️ 값은 **트랙에서 실측해서 넣어야 한다** — 조명이 바뀌면 달라진다.
+            `ros2 run kmu_race exposure_scan` 이 후보를 쓸어 보고 차선
+            검출률이 가장 높은 값을 알려 준다. 실측 전에는 0(자동) 으로
+            두는 것이 안전하다: 지어낸 상수로 주행하느니 자동이 낫다.
+        """
+        if int(drive_exposure) <= 0:
+            return self.set_auto()
+        return self.set_manual(int(drive_exposure))
+
+    def enforce_drive(self, drive_exposure: int) -> bool:
+        """주행 노출이 풀렸으면 재적용 (드라이버 자가 복귀 대응).
+
+        0818 실측대로 수동 노출은 스스로 풀린다. 주행 중에 풀리면 화면이
+        확 밝아지면서 차선 대비가 무너지므로, 호출부가 주기적으로 이걸
+        불러 줘야 한다. drive_exposure=0(자동) 이면 강제할 것이 없다.
+        """
+        if int(drive_exposure) <= 0:
+            return False
+        return self.enforce_manual(int(drive_exposure))
+
+    def read_back(self) -> Optional[tuple]:
+        """실제 카메라 상태 (mode, exposure) 를 읽는다. 실패 시 None.
+
+        0818 실측: set_manual(60) 이 성공해도 **대기 중 스스로 풀린다**
+        (run4 115s / run5 80s 후 밝기 127→192 점프 — 드라이버/펌웨어가
+        컨트롤을 재설정하는 것으로 추정). '한 번 설정'을 믿을 수 없으므로
+        호출부가 이걸로 주기 검증하고 어긋나면 재적용해야 한다.
+        """
+        if not self.available:
+            return None
+        try:
+            r = subprocess.run(
+                ["v4l2-ctl", "-d", self.device, "--get-ctrl",
+                 "auto_exposure,exposure_time_absolute"],
+                capture_output=True, timeout=self.timeout_s, text=True,
+            )
+        except Exception as exc:                       # noqa: BLE001
+            self.last_error = f"{type(exc).__name__}: {exc}"
+            return None
+        if r.returncode != 0:
+            self.last_error = (r.stderr or r.stdout or "").strip()[:120]
+            return None
+        mode = value = None
+        for line in r.stdout.splitlines():
+            if "auto_exposure" in line:
+                mode = line.split(":")[1].strip().split()[0]
+            elif "exposure_time_absolute" in line:
+                value = int(line.split(":")[1].strip().split()[0])
+        if mode is None:
+            return None
+        return ("manual" if mode == _MANUAL else "auto", value)
+
+    def enforce_manual(self, exposure: int) -> bool:
+        """read-back 으로 확인해 어긋나 있으면 재적용. 맞으면 no-op.
+
+        반환값: 재적용을 **했으면** True (호출부 로그용).
+        """
+        rb = self.read_back()
+        if rb is not None and rb[0] == "manual" and rb[1] == int(exposure):
+            return False
+        self.set_manual(exposure)
+        return True
 
     @property
     def state(self) -> Optional[str]:

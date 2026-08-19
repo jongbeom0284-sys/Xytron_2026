@@ -40,8 +40,16 @@ class PolicyConfig:
     # 진단한 실패 모드, chooseTargetX 클램프).
     cone_lookahead_m: float = 0.75
     cone_lookahead_min_m: float = 0.35
-    # BEV 픽셀 → 미터 환산. 실차 캘리브레이션 값으로 반드시 교체할 것.
-    px_per_m: float = 420.0
+    # BEV 픽셀 → 미터 환산 (가로, ROI 안 균일).
+    # ★ 0818 저녁 재실측: 노란 중앙선↔흰 선 = 335px ↔ 반차선 0.41m(줄자)
+    #   ⇒ ≈ 810 px/m (근·원거리 행 동일). 낮의 545 는 '흰선 간격 450px' 가정
+    #   에서 나온 값인데 그 450 은 가짜 쌍(이음새 등)이 섞인 폭 히스토리였다.
+    #   세로 축척은 미실측 — control.bev_aspect(0.9) 가정으로 ≈730 px/m.
+    # (라이다 게이트가 1순위라 이 값의 역할은 카메라 폴백 경로의 전방주시
+    #  클램프·가상 게이트 환산뿐이다. 원거리 투영 콘은 ROI 밖 외삽이라 축척이
+    #  더 흐릿하다 — 그래서 카메라 경로는 폴백이다.)
+    px_per_m: float = 810.0
+    px_per_m_fwd: float = 730.0
     # 한쪽 콘만 보일 때 밀어내는 세기 [deg / 정규화오차] (가상 게이트 실패 시)
     cone_repulse_gain: float = 26.0
     # 한쪽 줄만 보일 때 쓸 '학습된 통로 반폭' [m]. 관측될 때마다 EMA 로
@@ -294,10 +302,32 @@ class DrivePolicy:
                 min(cfg.cone_half_corridor_max_m, self._cone_half_m),
             )
 
+        # ── 1순위: 라이다 게이트 (0818 신설, perception/lidar_cones.py) ──
+        # 같은 구간 실측: 카메라 게이트 58% vs 라이다 80%. 게다가 라이다는
+        # 조명·반사와 무관하고 **미터로 직접** 재므로 px_per_m 추정 오차가
+        # 없다. 카메라 게이트는 라이다가 못 만든 프레임의 폴백이 된다.
+        if cone.lidar_gate_valid:
+            half_lidar = cone.lidar_gate_width_m / 2.0
+            if half_lidar > 0.05:
+                a = cfg.cone_half_corridor_alpha
+                self._cone_half_m = (1.0 - a) * self._cone_half_m + a * half_lidar
+                self._cone_half_m = max(
+                    cfg.cone_half_corridor_min_m,
+                    min(cfg.cone_half_corridor_max_m, self._cone_half_m),
+                )
+            la = min(cfg.cone_lookahead_m, cone.lidar_gate_depth_m)
+            la = max(cfg.cone_lookahead_min_m, la)
+            # lidar lateral 은 좌측+ — pure_pursuit 의 y(좌측+)에 그대로 넣는다
+            return pure_pursuit_steer(
+                la, cone.lidar_gate_lateral_m, max_steer=cfg.max_steer
+            )
+
         # 전방주시거리 = 상한과 '관측된 게이트 깊이' 중 작은 쪽 (하한 보장)
+        # 깊이는 BEV 세로축이라 세로 축척으로 환산한다.
+        px_per_m_fwd = max(1.0, cfg.px_per_m_fwd)
         lookahead = cfg.cone_lookahead_m
         if cone.gate_valid and cone.gate_depth_px > 1.0:
-            lookahead = min(lookahead, cone.gate_depth_px / px_per_m)
+            lookahead = min(lookahead, cone.gate_depth_px / px_per_m_fwd)
         lookahead = max(cfg.cone_lookahead_min_m, lookahead)
 
         if cone.gate_valid:

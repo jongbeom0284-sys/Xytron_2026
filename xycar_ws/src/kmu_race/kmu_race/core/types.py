@@ -114,12 +114,15 @@ class LaneReading:
     curvature_px: float = 0.0
     left_found: bool = False
     right_found: bool = False
+    # 노란 중앙선 폴백으로 목표선을 세웠는가 (0818: 곡선에서 흰 선이 시야
+    # 밖으로 나가는 프레임의 생존 수단 — lane_detector._fit_center)
+    center_found: bool = False
     lane_width_px: float = 0.0
     lane_side: int = 0
 
     @property
     def valid(self) -> bool:
-        return self.left_found or self.right_found
+        return self.left_found or self.right_found or self.center_found
 
     @property
     def both_found(self) -> bool:
@@ -215,6 +218,15 @@ class ConeReading:
     # 진단한 실패 모드다. policy 가 이 값으로 전방주시거리를 잘라 쓴다.
     gate_depth_px: float = 0.0
     gate_width_px: float = 0.0      # 관측된 게이트 폭 (적응 코리도 학습용)
+    # ── 라이다 게이트 (0818 신설, perception/lidar_cones.py) ──
+    # 카메라 게이트는 조명·반사에 휘둘려 성립률 22~58% 였지만 라이다는 같은
+    # 구간에서 80% 였고, 무엇보다 **미터로 직접** 준다 — px_per_m 추정(미실측
+    # 420) 오차가 통째로 사라진다. policy 는 이 쪽을 1순위로 쓴다.
+    lidar_gate_valid: bool = False
+    lidar_gate_depth_m: float = 0.0
+    lidar_gate_width_m: float = 0.0
+    lidar_gate_lateral_m: float = 0.0   # 게이트 중앙 횡위치 (좌측 +)
+    lidar_cones: int = 0
 
 
 # ──────────────────────────────────────────────────────────────────────

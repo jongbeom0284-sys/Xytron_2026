@@ -49,6 +49,7 @@ from ..core.types import (
 )
 from ..io.motor import MotorPublisher
 from ..perception.cone_detector import ConeDetector
+from ..perception.lidar_cones import LidarGate, find_cone_gate
 from ..perception.lane_detector import LaneDetector
 from ..perception.lidar_tracker import LidarTracker
 from ..io.camera_exposure import CameraExposure
@@ -84,8 +85,12 @@ class RaceNode(Node):
         # 유령 랩이 남아 있어도 데이터 수집 주행이 안 끊긴다). 본선은 3!
         self.declare_parameter("total_laps", 3)
         # 신호등 대기 중 카메라 노출 (0=사용 안 함). 낮출수록 램프만 남는다.
-        # io/camera_exposure.py 주석 참조 — 주행 중에는 절대 적용되지 않는다.
         self.declare_parameter("signal_exposure", 60)
+        # ★ 주행 중 고정 노출 (0 = 자동 노출 유지 = 실측 전 기본값).
+        #   자동 노출은 세션 내내 화면 평균 V 를 109~214 로 흔든다(0818 실측).
+        #   고정하면 그 요동이 사라져 차선 대비가 프레임마다 같아진다.
+        #   **트랙에서 실측해서 넣을 것** — `ros2 run kmu_race exposure_scan`.
+        self.declare_parameter("drive_exposure", 0)
 
         self.debug_gui = bool(self.get_parameter("debug_gui").value)
         self.speed_to_mps = float(self.get_parameter("speed_to_mps").value)
@@ -94,6 +99,7 @@ class RaceNode(Node):
         self.manual_start = bool(self.get_parameter("manual_start").value)
         self.maneuvers_enabled = bool(self.get_parameter("maneuvers_enabled").value)
         self.signal_exposure = int(self.get_parameter("signal_exposure").value)
+        self.drive_exposure = int(self.get_parameter("drive_exposure").value)
         if self.manual_start:
             self.get_logger().warn(
                 "⚠️ 시운전: manual_start=True — /kmu_race/go 수신 시 출발 (본선 금지!)"
@@ -141,6 +147,8 @@ class RaceNode(Node):
         self._lane = LaneReading()
         self._cone = ConeReading()
         self._lidar = LidarReading()
+        self._lidar_gate = LidarGate()
+        self._lidar_gate_t = 0.0
         self._yaw_deg = 0.0
         # 헤딩은 자이로 적분으로 얻는다 — 이 IMU 의 orientation 쿼터니언은
         # 회전을 전혀 담지 못한다는 것이 실차 bag 으로 확정됐다
@@ -198,13 +206,23 @@ class RaceNode(Node):
 
         hz = float(self.get_parameter("control_hz").value)
         self.create_timer(1.0 / hz, self._control_step, callback_group=ctrl_group)
+        # 노출 제어는 v4l2-ctl **subprocess**(read-back 2s 주기, timeout 1.5s)라
+        # 제어 루프 안에서 부르면 USB 가 굼뜬 순간 50Hz 조향이 그만큼 멈춘다
+        # (0818 저녁 감사). 별도 콜백 그룹의 느린 타이머로 뺀다 — 제어 스레드는
+        # 절대 블로킹 호출을 하지 않는다.
+        exp_group = MutuallyExclusiveCallbackGroup()
+        self.create_timer(0.25, self._apply_exposure, callback_group=exp_group)
         self._last_mode = Mode.INIT
         self._log_throttle = 0.0
+        self._calib_warn_t = 0.0
+        self._detect_err_t = 0.0
         # 요 교차검증 경고를 목격 횟수당 1번만 내기 위한 래치
         self._yaw_warned_at_sighting = -1
         self._watcher_logged = False
         # 워처 go 가 정면 물체로 보류됐을 때 붙들어 두는 래치 (위 주석 참조)
         self._pending_go = False
+        # 노출 read-back 주기 검증용 (대기 중 자동 풀림 실측 — _apply_exposure)
+        self._exposure_checked_at = 0.0
 
         self.get_logger().info(
             f"kmu_race up | debug_gui={self.debug_gui} | control={hz:.0f}Hz"
@@ -264,17 +282,49 @@ class RaceNode(Node):
         except Exception as exc:                      # noqa: BLE001
             self.get_logger().warn(f"signal watcher: {exc}")
 
-        self._lane = self.lane_det.detect(frame)
+        # 차선·콘 검출 예외는 노드를 죽이면 안 된다 — 콜백 예외는 executor 를
+        # 통해 spin() 을 끝내고 그건 곧 정지(1분 룰)다. 한 프레임 건너뛰고
+        # 직전 관측을 유지한다 (input_timeout 이 신선도를 따로 감시한다).
+        try:
+            self._lane = self.lane_det.detect(frame)
+        except Exception as exc:                      # noqa: BLE001
+            self._warn_throttled("lane detect", exc)
+            return
 
         # 라바콘 검출은 차선 detect() 가 캐시한 BEV ROI 를 재사용한다 —
         # 여기서 warp 를 또 부르면 프레임당 워프가 2회가 된다 (리뷰 E1).
+        # frame + 워프 행렬을 함께 넘겨 원거리 콘 베이스 투영을 켠다 (0818).
         bev_roi = self.lane_det.last_bev_roi
-        self._cone = self.cone_det.detect(bev_roi)
+        try:
+            self._cone = self.cone_det.detect(
+                bev_roi, frame=frame, warp_m=self.lane_det.warp_matrix()
+            )
+        except Exception as exc:                      # noqa: BLE001
+            self._warn_throttled("cone detect", exc)
+            self._cone = ConeReading()
+        # 라이다 게이트를 합류 (신선할 때만 — 스캔 10~15Hz vs 영상 30Hz).
+        # 미터 단위 직접 관측이라 policy 가 이 쪽을 1순위로 쓴다.
+        lg = self._lidar_gate
+        if lg.valid and (self._now() - self._lidar_gate_t) < 0.4:
+            self._cone = replace(
+                self._cone,
+                lidar_gate_valid=True,
+                lidar_gate_depth_m=lg.depth_m,
+                lidar_gate_width_m=lg.width_m,
+                lidar_gate_lateral_m=lg.lateral_m,
+                lidar_cones=lg.cones,
+            )
 
         self._last_image_t = self._now()
 
         if self.debug_gui:
             self._draw_debug(frame, bev_roi)
+
+    def _warn_throttled(self, what: str, exc: Exception, period_s: float = 2.0) -> None:
+        now = self._now()
+        if now - self._detect_err_t >= period_s:
+            self._detect_err_t = now
+            self.get_logger().error(f"{what} 예외 (프레임 건너뜀): {exc!r}")
 
     def _on_scan(self, msg: LaserScan) -> None:
         self._lidar = self.lidar_trk.update(
@@ -283,30 +333,73 @@ class RaceNode(Node):
             angle_increment=msg.angle_increment,
             now=self._now(),
         )
+        # 라이다 콘 게이트 (0818 신설) — 카메라와 무관한 제2의 눈.
+        # 같은 각도 보정을 그대로 쓴다 (전진축 = 라이다 +124°, 실측 3중 일치).
+        try:
+            self._lidar_gate = find_cone_gate(
+                msg.ranges,
+                msg.angle_min,
+                msg.angle_increment,
+                angle_offset=self.lidar_trk.config.angle_offset,
+            )
+        except Exception as exc:                      # noqa: BLE001
+            self.get_logger().warn(f"lidar cone gate: {exc}")
+            self._lidar_gate = LidarGate()
+        self._lidar_gate_t = self._now()
         self._last_scan_t = self._now()
 
     def _apply_exposure(self) -> None:
-        """대기 중에는 노출을 낮추고, 출발하면 즉시 되돌린다.
+        """대기 중에는 신호등용 저노출, 주행 중에는 **주행용 고정 노출**.
 
-        주행 중 노출을 건드리면 차선 흰색 임계(V 243~255)가 무너지므로
-        WAIT_GREEN 을 벗어나는 순간 자동으로 복귀시킨다.
+        0818 이전에는 주행 시 자동 노출로 복귀시켰다. 그런데 자동 노출은
+        세션 내내 화면 평균 V 를 109~214 로 흔들고(실측), 밝기 분포가 매
+        프레임 바뀌면 차선 검출이 프레임마다 다른 문제를 푼다. drive_exposure
+        를 실측해 넣으면 그 요동이 사라진다.
+
+        drive_exposure=0 이면 종전대로 자동 복귀한다 — **실측 전에는 그게
+        안전하다.** 지어낸 상수로 주행하느니 자동이 낫다.
+        (값 찾기: `ros2 run kmu_race exposure_scan`)
         """
-        if self.signal_exposure <= 0:
+        if self.signal_exposure <= 0 and self.drive_exposure <= 0:
             return
+        try:
+            self._apply_exposure_impl()
+        except Exception as exc:                      # noqa: BLE001
+            self._warn_throttled("exposure", exc)
+
+    def _apply_exposure_impl(self) -> None:
         want = (
             "signal"
             if self.fsm.state in (Mode.INIT, Mode.WAIT_GREEN)
             else "drive"
         )
+        # ★ 0818 실측: 수동 노출이 스스로 풀린다 (run4 115s / run5 80s 후
+        # 밝기 127→192 점프). '한 번 설정'을 믿지 말고 2s 주기로 read-back
+        # 검증 → 어긋나면 재적용한다. 주행 중에도 마찬가지다 — 주행 중에
+        # 풀리면 대비가 무너져 그 랩을 통째로 잃는다.
         if want == self._exposure_mode:
+            now = self._now()
+            if now - self._exposure_checked_at >= 2.0:
+                self._exposure_checked_at = now
+                target = (
+                    self.signal_exposure if want == "signal" else self.drive_exposure
+                )
+                if target > 0 and self.exposure.enforce_manual(target):
+                    self.get_logger().warn(
+                        f"노출이 풀려 있어 재적용 (수동 {target}, {want})"
+                    )
             return
         if want == "signal":
             ok = self.exposure.set_manual(self.signal_exposure)
             msg = f"노출 수동 {self.signal_exposure} (신호등 판독용)"
+        elif self.drive_exposure > 0:
+            ok = self.exposure.set_drive(self.drive_exposure)
+            msg = f"노출 수동 {self.drive_exposure} (주행 고정)"
         else:
             ok = self.exposure.set_auto()
-            msg = "노출 자동 복귀 (주행)"
+            msg = "노출 자동 복귀 (주행 — drive_exposure 미실측)"
         self._exposure_mode = want
+        self._exposure_checked_at = self._now()
         if ok:
             self.get_logger().info(msg)
         else:
@@ -367,7 +460,7 @@ class RaceNode(Node):
                 # 기동에서 빠져나올 때 PID 적분/스무더를 털어 준다.
                 self.policy.pid.reset()
 
-        self._apply_exposure()
+        # (노출 제어는 별도 타이머 — 제어 루프에서 subprocess 를 부르지 않는다)
         cmd = self.policy.update(self.fsm.state, obs, self.ctx, decision)
         # speed_scale 은 최종 명령에만 곱한다 — 조향은 그대로 (동일 곡률 유지).
         # last_speed(→ego_speed_mps 추정)는 스케일된 실제 명령을 반영한다.
@@ -395,15 +488,38 @@ class RaceNode(Node):
                 f"겐트리를 놓쳤다면 min_gantry_span_px 가 너무 높은 것이다"
             )
 
+        # 자이로 바이어스 캘리브가 안 끝났으면 요 적산이 0 에 묶인다 → 요 보충
+        # 랩·지름길 완료 판정이 전부 무력해진다. 출발 대기 중에 크게 알린다
+        # (차를 들고 옮기는 중이면 조용한 3s 창이 안 나온다 — 내려놓고 기다릴 것).
+        if (
+            self.fsm.state is Mode.WAIT_GREEN
+            and not self._heading.calibrated
+            and now - self._calib_warn_t >= 3.0
+        ):
+            self._calib_warn_t = now
+            self.get_logger().warning(
+                "⚠ 자이로 바이어스 캘리브 미완 — 차를 3초 이상 완전히 정지시킬 것 "
+                f"(창 기각 {self._heading.calib_rejects}회). 이대로 출발하면 요 랩 보충·"
+                "지름길 좌회전 완료 판정이 안 된다"
+            )
+
         # 심판이 화면으로 진행 상황을 봐야 하므로(p.16) 상태를 주기적으로 찍는다.
         if now - self._log_throttle > 1.0:
             self._log_throttle = now
+            ln = obs.lane
+            lane_flags = (
+                ("L" if ln.left_found else "-")
+                + ("R" if ln.right_found else "-")
+                + ("C" if ln.center_found else "-")
+            )
             self.get_logger().info(
                 f"{self.fsm.state.value:<12} lap{self.ctx.lap.current_lap}/3 "
                 f"t={self.ctx.elapsed(now):5.1f}s "
                 f"steer={cmd.steer:+6.1f} v={cmd.speed:5.1f} "
+                f"lane={lane_flags} off={ln.offset_px:+5.0f} "
                 f"sig={obs.signal.state.value:<10} "
                 f"front={obs.lidar.front_dist:4.2f}m "
+                f"{'LG' if obs.cone.lidar_gate_valid else ''}"
                 f"{'SHORTCUT-USED' if self.ctx.shortcut_used else ''}"
             )
 
@@ -457,7 +573,9 @@ class RaceNode(Node):
 def main(args=None) -> None:
     rclpy.init(args=args)
     node = RaceNode()
-    executor = MultiThreadedExecutor(num_threads=3)
+    # 4 스레드: 영상·스캔·IMU·제어 + 노출(subprocess, 블로킹 가능) 그룹이 5개라
+    # 3 이면 노출 타이머가 블로킹될 때 제어 스레드가 굶을 수 있다.
+    executor = MultiThreadedExecutor(num_threads=4)
     executor.add_node(node)
     try:
         executor.spin()
@@ -468,8 +586,14 @@ def main(args=None) -> None:
             node.motor.stop()
         except Exception:                              # noqa: BLE001
             pass
-        node.destroy_node()
-        rclpy.shutdown()
+        # SIGTERM(timeout/kill_race.sh)은 rclpy 시그널 핸들러가 컨텍스트를 먼저
+        # 닫는다 — 그 뒤 shutdown() 을 또 부르면 RuntimeError 트레이스백으로
+        # 끝난다 (0818 저녁 스모크에서 목격). try_shutdown 은 멱등이다.
+        try:
+            node.destroy_node()
+        except Exception:                              # noqa: BLE001
+            pass
+        rclpy.try_shutdown()
 
 
 if __name__ == "__main__":

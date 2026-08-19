@@ -27,6 +27,8 @@ setup(
             "preflight = kmu_race.tools.preflight:main",
             "replay = kmu_race.tools.replay:main",
             "lanesim = kmu_race.tools.lanesim:main",
+            "lanebench = kmu_race.tools.lanebench:main",
+            "exposure_scan = kmu_race.tools.exposure_scan:main",
             "teleop = kmu_race.tools.teleop:main",
         ],
     },

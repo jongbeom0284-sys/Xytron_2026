@@ -245,3 +245,47 @@ def test_blocked_idle_still_arms_timeout():
             done = True
             break
     assert done, "blocked 에서도 timeout_s 후에는 빠져나와야 한다"
+
+
+# ──────────────────────────────────────────────────────────────────
+# 0818 저녁 — 폐루프 횡이동 (개루프 풀락 회귀) / 타겟 위치 기반 이동량
+# ──────────────────────────────────────────────────────────────────
+def test_shift_error_closes_when_car_actually_moves():
+    """PID 오차는 '측정 차선 목표 + 이동량' 이라 차가 실제로 옮기면 0 으로
+    닫혀야 한다. 옛 코드는 내부 램프 자체를 오차로 넣어 −50 풀락을 1.7s
+    유지했다 (0818 저녁 수치 재현)."""
+    p = TargetPassing(moving=False)
+    tgt = stationary_target(1.2, y=+0.2)     # 좌차선 → 우측 통과
+    r = run(p, tgt)
+    assert r.side == +1 and p.phase is PassPhase.SHIFT
+    shift = p.target_offset_px
+    assert 100.0 <= shift <= 300.0
+    # 차가 요구 이동량만큼 옮긴 상태를 흉내낸다: 노란선이 −shift 에 보인다
+    for i in range(30):
+        r = p.update(
+            target=tgt, lane_offset_px=-shift, lane_lookahead_px=-shift,
+            lane_side=0, left_clear=True, right_clear=True, now=0.1 + 0.05 * i,
+        )
+    assert p.phase is PassPhase.ALONGSIDE
+    assert abs(r.lateral_offset_px) < 30.0, (
+        f"옮겼는데 오차가 안 닫힌다: {r.lateral_offset_px:+.0f}px")
+
+
+def test_shift_amount_follows_target_lateral_position():
+    """타겟이 통로 가까이(정면 쪽)에 있을수록 더 많이 비켜야 하고, 상한(흰
+    실선 밖)은 넘지 않는다."""
+    p = TargetPassing(moving=False)
+    near_center = abs(p.desired_shift_px(+1, 0.05))
+    in_lane = abs(p.desired_shift_px(+1, 0.25))
+    assert near_center > in_lane
+    assert abs(p.desired_shift_px(+1, -0.5)) <= p.config.pass_offset_px
+    assert abs(p.desired_shift_px(-1, -0.05)) == near_center, "좌우 대칭"
+
+
+def test_shift_starts_from_zero_not_from_lane_offset():
+    """이동량은 0 에서 시작한다 — 측정 오프셋은 매 틱 오차에 더해지므로
+    시작값으로 넣으면 이중 계상돼 과조향이 된다."""
+    p = TargetPassing(moving=False)
+    run(p, stationary_target(1.2, y=+0.3), lane_offset_px=120.0)
+    assert p.phase is PassPhase.SHIFT
+    assert abs(p.offset_px) < 0.5 * abs(p.target_offset_px)

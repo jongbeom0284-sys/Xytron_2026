@@ -73,7 +73,7 @@
 #   왜: 횡오차만 보는 P 제어는 정상 선회 중 구조적으로 언더스티어한다
 #   (필요 조향을 오차가 아니라 곡률이 정하기 때문). 0817 첫 자율주행 실측
 #   1랩 129샘플 최대 조향 19 / 물리 최대 42 → 코너마다 이탈.
-#   road_width_m               0.80   ← 주행로 폭. 게인 자가보정의 기준자
+#   road_width_m               0.825  ← 주행로 전폭 (0818 줄자 0.80~0.85). 게인 자가보정의 기준자
 #   bev_aspect                 0.90   ← BEV 종횡비 s_fwd/s_lat (미실측 추정)
 #   ff_scale                   0.55   ← 곡률 피드포워드 여유 (폴리핏 곡률이
 #                                       기하 예측보다 ~1.6배 크게 나온다)
@@ -92,21 +92,25 @@
 #     대조군(옛 제어기)은 같은 시뮬에서 코너 전부 이탈 → 판별력 확인됨.
 #
 # core/speed_policy.py :: 굽이침 감속 (0817 신설)
-#   steer_rate_full_slow       260    ← 조향 변화율[단위/초] 이 값에서 최대 감속
-#   wind_min_ratio             0.55   ← S자에서 |steer| 만으론 감속이 안 걸린다
+#   steer_rate_full_slow       200    ← 조향 변화율[단위/초] 이 값에서 최대 감속
+#   wind_min_ratio             0.45   ← S자에서 |steer| 만으론 감속이 안 걸린다
 #
 # perception/lane_detector.py :: LaneConfig
 #   white_v                     (243, 255)  ← segi 실차 검증값
 #   canny                       50 / 150
 #   sobel_thresh                50
-#   ★ default_lane_width_px     450         ← segi 실차 검증값. 트랙에서 재확인
+#   ★ default_lane_width_px     670         ← 0818 저녁 실측: 흰↔흰 ≈670px (반차선 335px×2)
+#   half_road_default/min/max   335/200/430 ← 노란 중앙선↔흰 선 [px] (0818 저녁 실측 IQR 325~343)
+#   pair_width_min/max_px       520/900     ← '진짜 양쪽 흰선 쌍' 간격 대역 — 밖이면 한쪽이 가짜(이음새)
+#   center_inside_margin_px     20          ← 중앙선 후보는 흰 선 사이에서만 (바깥 올리브 바닥 차단)
+#   max_heading_slope/curvature 0.6/3.5e-3  ← 검출기 출력 위생 클립 (짧은 피팅 잡음)
 #
 # perception/cone_detector.py :: ConeConfig
 #   ★ lower / upper             (0,108,224) / (28,255,255)  ← segi 실차 검증값
 #   min_section_px              300         ← 노이즈 하한 (진입 임계는 FSM 의
 #                                             cone_min_orange_px=900 하나다 — 리뷰 S2)
-#   min_gate_px / max_gate_px   110 / 620   ← 게이트 간격 허용 범위 (진입 좌우)
-#   gate_y_tol_px               70          ← 게이트 쌍 깊이 근접 (같은 줄 오인 방지)
+#   min_gate_px / max_gate_px   110 / 780   ← 게이트 간격 허용 범위 (0818: 실통로 633px)
+#   gate_y_tol_px               110         ← 게이트 쌍 깊이 근접 (같은 줄 오인 방지)
 #   (0817 추가) gate_depth_px / gate_width_px 를 함께 보고한다 — 전방주시
 #   클램프와 단측 가상 게이트의 입력이다 (core/policy.py 참조)
 #
@@ -174,12 +178,12 @@
 #                                             8/17 새 카메라 실측 6~8px 로 하향)
 #   cone_enter_requires_gate    true        ← 진입은 두 줄 게이트 성립 필수
 #                                             (벽면 보관 콘 무더기 오진입 차단)
-#   cone_gate_lost_exit_s       1.2         ← 게이트가 이만큼 안 생기면 구간
+#   cone_gate_lost_exit_s       4.0         ← 게이트(카메라 **또는 라이다**)가 이만큼 안 생기면 구간
 #                                             종료로 보고 이탈 (무더기 고착 방지)
-#   start_dark_min_s            1.0         ← 출발 블롭 상승엣지(어두운 구간 요구)
+#   start_dark_min_s            3.0         ← 출발 블롭 상승엣지(어두운 구간 요구, 8/17 1.0→3.0)
 #   moving_ratio / min_ego      0.6 / 0.35  ← 정지/주행 판별 (speed_to_mps 와 세트)
 #   target_trigger_dist_m       1.45
-#   ★ shortcut_turn_deg         72.0        ← 지름길 진입 좌회전 완료 판정
+#   ★ shortcut_turn_deg         55.0        ← 지름길 진입 좌회전 완료 판정 (0818 run4 실측 57°)
 #   stop_recover_frames/secs    5 / 0.5     ← STOP 복귀 디바운스 (p.21 1분 룰,
 #                                             STOP 은 터미널이 아니다)
 #   left_latch_min_span_px      5           ← GREEN_LEFT 래치 근접 게이트
@@ -197,7 +201,8 @@
 #     실측 바이어스 gz +2.67°/s (보정 없인 60s 에 160° 가짜 회전).
 #
 # core/target_passing.py :: PassConfig
-#   ★ pass_offset_px            300         ← 차선 폭 실측 후 조정
+#   pass_offset_px              300         ← 횡이동 **상한**[px]. 실제 이동량은 타겟 횡위치에서
+#   clearance_m / px_per_m      0.35 / 810     d = clearance − side·target_y (0818 저녁 폐루프 재설계)
 #   track_corridor_m            1.2         ← 기동 중 타겟 추적 코리도 (0.45 는
 #                                             자기 횡이동에 타겟을 놓친다, 리뷰 C2)
 #   return_deadline_m           0.90        ← 규정 p.32 (고정값, 바꾸지 말 것)
@@ -209,10 +214,8 @@
 #   pressure_boost              1.30
 #
 # core/policy.py :: PolicyConfig
-#   ★ px_per_m                  420         ← BEV 픽셀↔미터. 라바콘 조향에 직결
-#     주의: UMK 실측 기준 차선 0.4m/도로 0.8m. default_lane_width_px(450)와
-#     px_per_m(420)은 같은 BEV 에서 **동시에** 실측해야 한다 — 지금 두 값은
-#     서로 다른 출처라 축척이 안 맞는다 (450px÷420px/m ≈ 1.07m ≠ 0.8m).
+#   px_per_m / px_per_m_fwd     810 / 730   ← BEV 가로 축척 = 0818 저녁 실측(335px↔0.41m).
+#     세로는 bev_aspect 0.9 가정. 카메라 콘 게이트 폴백 경로에만 쓰인다 (라이다 1순위).
 #   shortcut_steer_deg          -34.0
 #   finish_coast s/speed        6.0 / 16    ← 결승 관성 주행: 요 보충 FINISH 는
 #     마지막 커브 출구(결승선 앞)에서 발화할 수 있다 — 즉시 정지 금지,
@@ -223,8 +226,8 @@
 # core/control.py :: 제어 상수
 #   WHEELBASE_M                 0.30        ← ★ 실측 대상 (UMK 실측 0.335 — 복사
 #                                             말고 우리 차를 줄자로 잴 것)
-#   PixelPID kp/kd              0.16 / 0.27
-#   SteerSmoother window/rate   5 / 420°s⁻¹
+#   PixelPID kp/kd              0.34 / 0.27
+#   SteerSmoother window/rate   3 / 420°s⁻¹
 #
 # core/safety.py :: SafetyConfig
 #   camera_degraded_after_s     0.4         ← 크립 강등

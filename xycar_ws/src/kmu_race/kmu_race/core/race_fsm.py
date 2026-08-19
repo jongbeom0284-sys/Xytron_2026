@@ -137,7 +137,10 @@ class FSMConfig:
     # 안 넘는다 (지름길 기회 상실). 실측 하한으로 내린다.
     left_latch_min_span_px: int = 5
     # 진입 좌회전 완료 판정 요 변화량 [deg]
-    shortcut_turn_deg: float = 72.0
+    # ★ 0818 실측 캘리브 (run4 랩3 — 차가 실제로 지름길을 달린 bag):
+    #   진입 좌회전은 약 57°/1.5s 였고 그 뒤는 긴 대각 직선(~7s)이다.
+    #   90° 급전환이 아니다 — 72° 를 기다리면 과회전해 반대편 차선을 문다.
+    shortcut_turn_deg: float = 55.0
     # 요가 안 돌아도 이 시간이 지나면 완료로 보고 차선주행에 넘긴다 (교착 방지)
     shortcut_timeout_s: float = 3.2
 
@@ -393,7 +396,11 @@ class RaceFSM:
             return self._stay(f"turning {turned:.0f}deg")
 
         if self.state is Mode.CONE_DRIVE:
-            if obs.cone.gate_valid:
+            # 게이트 생존 판정은 카메라·라이다 어느 쪽이든 인정한다 (0818 저녁).
+            # policy 는 라이다 게이트를 1순위로 조향하는데 여기서 카메라만 보면
+            # 카메라 게이트 4s 공백(실측 성립률 37~58%)에 라이다가 멀쩡히
+            # 조향 중인 슬라럼 한복판에서 LANE_DRIVE 로 튕겨 나간다.
+            if obs.cone.gate_valid or obs.cone.lidar_gate_valid:
                 self._cone_gate_last_valid = obs.now
             # 규정 p.25: 구간 1분 내 통과 실패 = 실격. 지체가 길어지면 알린다.
             if (
@@ -432,9 +439,12 @@ class RaceFSM:
         # ── LANE_DRIVE 에서의 반응형 진입 ──────────────────────────
         if self.state is Mode.LANE_DRIVE:
             cone_hit = obs.cone.orange_px >= self.config.cone_min_orange_px
+            gate_seen = obs.cone.gate_valid or obs.cone.lidar_gate_valid
             if self.config.cone_enter_requires_gate:
                 # 한쪽 덩어리(벽면 보관 무더기)로는 진입하지 않는다.
-                cone_hit = cone_hit and obs.cone.gate_valid
+                # 게이트는 카메라 또는 라이다 어느 쪽이든 인정 (0818 저녁 —
+                # 라이다 쌍은 미터 직접 관측이라 카메라보다 먼저·자주 선다).
+                cone_hit = cone_hit and gate_seen
             if self._cone_in.update(cone_hit, obs.now):
                 self._cone_out.reset()
                 self._cone_entered_at = obs.now
@@ -443,9 +453,16 @@ class RaceFSM:
                 ctx.log(obs.now, "cone section entered")
                 return self._to(Mode.CONE_DRIVE, "cones detected", ctx, obs.now)
 
+            # ── 전방 타겟(회피/추월) 트리거 ──
+            # ★ 콘 게이트가 보이는 동안은 억제한다 (0818 저녁). 통로 폭 0.91m
+            #   의 콘은 nearest_front 코리도(±0.45m)·1.45m 안에 수시로 들어와
+            #   2틱이면 AVOID_STATIC 이 서는데, 콘 진입(3틱+게이트)보다 빨라
+            #   라바콘 구간 입구에서 회피 기동으로 콘 열에 처박힌다. 좌우 두 줄
+            #   게이트는 '장애물'이 아니라 '지나갈 통로'라는 확정 신호다.
             target = obs.lidar.nearest_front()
             blocked = (
                 self.maneuvers_enabled
+                and not gate_seen
                 and target is not None
                 and target.x <= self.config.target_trigger_dist_m
             )

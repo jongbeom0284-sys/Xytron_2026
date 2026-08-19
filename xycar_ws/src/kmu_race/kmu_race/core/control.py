@@ -111,26 +111,30 @@ class LaneController:
     #   ⇒ k = (축거/0.0068) × s_lat × bev_aspect² × ff_scale
     # 이렇게 하면 px_per_m 실측이 없어도 축척 변화에 자동 추종한다 —
     # 0817 시뮬 스윕에서 축척 420~620 px/m 전 구간 통과의 근거.
-    road_width_m: float = 0.80       # 규정 도면 주행로 폭 (실측 시 갱신)
+    # 0818 오후 사용자 실측: 전폭(흰선↔흰선) 0.80~0.85m, 반차선(흰↔노랑)
+    # 0.40~0.42m. 중앙값 채택 — 곡률 FF 게인의 축척이 이 값에 정비례한다.
+    road_width_m: float = 0.825
     bev_aspect: float = 0.90         # s_fwd/s_lat — 호모그래피 종횡비
     # 0817 시뮬 실측: 폴리핏 곡률이 기하 예측보다 ~1.6배 크게 나온다(BEV
     # 종횡비 미실측 + 엣지 기반 이진화의 영향). 과대 피드포워드는 코너 진입
     # 과조향이 되므로 보수적으로 잡고 부족분은 방향·횡오차 항에 맡긴다.
     ff_scale: float = 0.55           # 안정 여유
-    # 기울기 → 조향 게인. slope 0.2(≈11° 어긋남) 에서 cmd 10 정도가 나온다.
-    # 0818 실차 80→50: 실제 카메라의 폴리핏 기울기는 시뮬보다 잡음이 커서
-    # 80 이면 횡오차 항을 이기고 반대로 꺾는 구간이 생겼다(t=62~70s 실측).
-    k_heading: float = 50.0
-    # ── 검출 품질 게이트 (0818 첫 실차 실측으로 추가) ──
-    # 곡률·기울기 항은 '깨끗한 2차 폴리핏'을 전제한다. 실차에선 한쪽 차선만
-    # 보이거나 콘 하이라이트가 섞이면 폭 추정이 250~350px 로 무너지고, 그때의
-    # 곡률·기울기는 잡음이라 믿으면 반대로 꺾는다 (꼬불길·라바콘 구간 실패의
-    # 원인). 양쪽 차선이 보이고 폭이 정상 대역일 때만 두 항을 켠다 —
-    # 아니면 어제 잘 되던 순수 횡오차 제어로 자동 강등한다.
-    trust_width_min_px: float = 360.0
-    trust_width_max_px: float = 540.0
-    # 신뢰도는 급변하지 않게 EMA (0.3 ≈ 3~4프레임)
-    trust_alpha: float = 0.3
+    # 기울기 → 조향 게인. slope 0.2(≈11° 어긋남) 에서 cmd 16 정도가 나온다.
+    # ★ 0818 낮 회귀 교훈: 아침에 80→50 으로 줄이고 신뢰 게이트를 기울기에도
+    #   걸었더니 시뮬 스윕이 S자 발산(36~57m)으로 무너졌고 실차도 4·5차에서
+    #   3차에 성공했던 코너까지 전부 실패했다. 방향 정렬은 이 제어기의 척추다
+    #   — 80 으로 복원한다. t=62~70s 의 '반대로 꺾기'는 게인이 아니라 검출
+    #   붕괴(노란 중앙선 미사용 + 유리창 반사)가 원인이었다 (프레임 목시).
+    k_heading: float = 80.0
+    # ── (철회) 검출 품질 게이트 ──
+    # 0818 아침에 '폭이 이상하면 FF·기울기를 끈다' 게이트를 넣었다가 같은 날
+    # 철회했다. 실차 4·5차에서 3차에 성공한 코너까지 전부 무너졌고, 시뮬
+    # 스윕도 S자 발산(36~59m)으로 재현됐다 — 게이트가 꺼지는 순간 제어기가
+    # 순수 P 로 강등돼 언더스티어가 재발하는 구조였기 때문이다. 곡률 오염의
+    # 진짜 원인(콘 주황이 차선 이진화에 새는 것)은 lane_detector 의 주황
+    # 제외 마스크로 근본 차단했다. 같은 게이트를 다시 넣고 싶어지면 이 주석을
+    # 먼저 읽을 것: 잡음은 입력(지각)에서 잡아야지 출력(제어)에서 자르면
+    # 제어기의 척추가 부러진다.
     # 곡률·기울기는 짧은 BEV 창의 2차 폴리핏이라 잡음이 크다 — EMA 로 눌러
     # 쓴다. 0.35 는 30fps 에서 시정수 ≈0.1s (코너 진입 지연 무시 가능).
     ema_alpha: float = 0.35
@@ -173,7 +177,6 @@ class LaneController:
     _sat_slow: float = 0.0
     _slope_ema: float = 0.0
     _bias_px: float = 0.0
-    _trust: float = 0.0
     _primed: bool = False
 
     def reset(self) -> None:
@@ -182,7 +185,6 @@ class LaneController:
         self._sat_slow = 0.0
         self._slope_ema = 0.0
         self._bias_px = 0.0
-        self._trust = 0.0
         self._primed = False
 
     def k_curvature(self, lane_width_px: float) -> float:
@@ -204,7 +206,7 @@ class LaneController:
         heading_slope: float,
         curvature_px: float,
         lane_width_px: float = 0.0,
-        both_found: bool = True,
+        both_found: bool = True,   # (미사용) 게이트 철회 후 호환용 — 주석 참조
     ) -> float:
         if not self._primed:
             self._curv_ema = curvature_px
@@ -216,17 +218,9 @@ class LaneController:
             self._slope_ema = a * heading_slope + (1.0 - a) * self._slope_ema
 
 
-        # 검출 품질 → 곡률·기울기 항 신뢰도 (0 이면 순수 횡오차 제어)
-        good = (
-            both_found
-            and self.trust_width_min_px <= lane_width_px <= self.trust_width_max_px
-        )
-        a_t = self.trust_alpha
-        self._trust = a_t * (1.0 if good else 0.0) + (1.0 - a_t) * self._trust
-
         k = self.k_curvature(lane_width_px)
-        ff = max(-self.ff_limit, min(self.ff_limit, k * self._curv_ema)) * self._trust
-        head = self.k_heading * self._slope_ema * self._trust
+        ff = max(-self.ff_limit, min(self.ff_limit, k * self._curv_ema))
+        head = self.k_heading * self._slope_ema
 
         # 아펙스 커팅: 중심선으로는 못 도는 코너에서 목표를 안쪽으로 옮긴다.
         # tight ∈ [-1,1] — +면 우코너(안쪽=오른쪽).

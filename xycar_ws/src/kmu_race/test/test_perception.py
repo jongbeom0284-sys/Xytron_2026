@@ -112,14 +112,22 @@ def test_lidar_handles_inf_and_nan():
 # 부호 — 방향이 맞는가
 # ──────────────────────────────────────────────────────────────────
 def test_lane_offset_sign_follows_car_position():
-    """차가 왼쪽에 치우치면 목표선은 오른쪽(+)에 보여야 한다."""
-    det = LaneDetector()
-    centered = det.detect(road_frame(left_x=140, right_x=500))
+    """차가 왼쪽에 치우치면 목표선은 오른쪽(+)에 보여야 한다.
 
-    det2 = LaneDetector()
-    # 차선을 통째로 오른쪽으로 밀면 = 차가 왼쪽에 있는 상황
-    shifted = det2.detect(road_frame(left_x=240, right_x=600))
+    0818 저녁: 실측 축척(≈810px/m)에서 도로 전폭(670px)은 BEV ROI(640px)보다
+    넓어 '양쪽 흰 선이 나란히 보이는' 프레임은 실차에 없다 — 옛 합성 프레임
+    (간격 270px)은 이제 '같은 물리 선 둘'로 병합되는 퇴화 입력이라, 실차와
+    같은 **단측(오른 흰선만)** 프레임으로 부호를 본다.
+    """
+    def right_only(x):
+        img = np.full((H, W, 3), 40, np.uint8)
+        cv2.line(img, (x, H), (x - 40, H // 2), (255, 255, 255), 12)
+        return img
 
+    centered = LaneDetector().detect(right_only(500))
+    # 흰 선을 오른쪽으로 밀면 = 차가 왼쪽에 있는 상황 → 목표(도로 중앙)도 오른쪽
+    shifted = LaneDetector().detect(right_only(560))
+    assert centered.right_found and shifted.right_found
     assert shifted.offset_px > centered.offset_px
 
 
@@ -403,3 +411,157 @@ def test_cone_single_side_uses_virtual_gate_not_full_lock():
     steer = pol.update(Mode.CONE_DRIVE, obs, ctx, ready).steer
     assert steer > 0.5, "왼쪽 콘만 보이면 오른쪽으로 가야 한다"
     assert abs(steer) < 40.0, "풀락은 반대편 콘 열로 처박는 동작이다"
+
+
+# ──────────────────────────────────────────────────────────────────
+# 0818 낮 실차 회귀 — 노란 중앙선 폴백 / 반사 웅덩이 / 콘 원거리 투영
+# ──────────────────────────────────────────────────────────────────
+def test_yellow_center_fallback_when_white_lines_gone():
+    """곡선에서 흰 선이 시야 밖일 때 노란 점선만으로 목표선이 서야 한다.
+
+    0818 bag 실측: 이 상황(노란곡선 창)에서 검출 유효율 7% → 직진 이탈.
+    폴백 도입 후 87%. 흰 차선이 전혀 없고 노란 점선만 있는 합성 프레임.
+    """
+    from kmu_race.perception.lane_detector import LaneDetector
+
+    img = np.full((480, 640, 3), 120, np.uint8)
+    # 노란 점선 (BGR ≈ H26 S255 V255) — 화면 하단 중앙에 성기게
+    for y in range(300, 460, 50):
+        cv2.rectangle(img, (310, y), (335, y + 30), (0, 200, 255), -1)
+    det = LaneDetector()
+    r = det.detect(img)
+    assert r.valid, "노란 점선만 있는 프레임에서 목표선이 서야 한다"
+    assert r.center_found
+    assert not r.left_found and not r.right_found
+
+
+def test_glare_pool_removed_but_curved_lane_kept():
+    """반사 웅덩이는 지우되 **휜 차선은 살린다** (0818 두 번 데인 지점).
+
+    · 반사 웅덩이 = 뚱뚱하고 사각형을 꽉 채운다(fill 高) → 지운다.
+    · 곡선 차선 = minAreaRect 는 뚱뚱하지만 대각선으로 가로지를 뿐이라
+      성기다(fill 低) → 남긴다. 짧은 변만 보고 지우면 코너에서 차선이
+      통째로 사라진다 (실측 양쪽 검출 27.1%→0.8% 붕괴).
+    """
+    from kmu_race.perception.lane_detector import LaneDetector
+
+    roi = np.full((240, 640, 3), 100, np.uint8)
+    cv2.rectangle(roi, (60, 40), (200, 170), (252, 252, 252), -1)   # 웅덩이
+    cv2.polylines(                                                   # 휜 차선
+        roi,
+        [np.array([[380, 230], [430, 150], [520, 70], [610, 30]], np.int32)],
+        False, (250, 250, 250), 12,
+    )
+    det = LaneDetector()
+    binary = det._binarize(roi)
+    pool = binary[40:170, 60:200]
+    curve = binary[20:240, 360:640]
+    assert np.count_nonzero(pool) < 0.25 * pool.size, "반사 웅덩이가 안 지워짐"
+    assert np.count_nonzero(curve) > 0.02 * curve.size, "휜 차선까지 지워짐"
+
+
+def test_cone_far_projection_creates_gate():
+    """BEV ROI 밖(먼) 콘도 원본 프레임 바닥접점 투영으로 게이트가 된다.
+
+    0818 실차: BEV 근접 밴드만 봐서 통로 한복판에서 게이트 성립률 0~37% →
+    조향 근거 상실. 원본 프레임에 좌우 콘 열이 보이면 게이트가 서야 한다.
+    """
+    from kmu_race.perception.cone_detector import ConeDetector
+    from kmu_race.perception.lane_detector import LaneDetector
+
+    img = np.full((480, 640, 3), 90, np.uint8)
+    # 좌우 콘 열 (주황 BGR) — 원근감 있게: 가까울수록 크고 바깥쪽
+    for (cx, cy, s) in [(150, 430, 34), (200, 360, 26), (240, 310, 20),
+                        (500, 430, 34), (460, 360, 26), (420, 310, 20)]:
+        cv2.rectangle(img, (cx - s // 2, cy - s), (cx + s // 2, cy),
+                      (0, 90, 255), -1)
+    lane = LaneDetector()
+    lane.detect(img)
+    cone = ConeDetector()
+    r = cone.detect(lane.last_bev_roi, frame=img, warp_m=lane.warp_matrix())
+    assert r.detected
+    assert r.gate_valid, "원거리 투영으로 게이트가 서야 한다"
+
+
+# ──────────────────────────────────────────────────────────────────
+# 0818 저녁 실차 프레임 감사 회귀 — 기하 상수 / 가짜 쌍 / 기하 게이트 / 접선
+# ──────────────────────────────────────────────────────────────────
+def _yellow_dashes(img, x, y0=300, y1=470, w=22, dash=28, gap=30):
+    for y in range(y0, y1, dash + gap):
+        cv2.rectangle(img, (x, y), (x + w, y + dash), (30, 215, 240), -1)
+
+
+def test_center_candidate_outside_white_line_is_rejected():
+    """오른 흰선 **바깥**의 노란(올리브 바닥) 조각은 중앙선이 될 수 없다.
+
+    0818 run5 #112/#163/#220: 흰선 바깥 바닥 조각이 노란 게이트를 통과하고
+    span 이 길어 목표선으로 뽑혀 +133~+247px(벽 쪽) 조향. 진짜 점선은 왼쪽.
+    """
+    from kmu_race.perception.lane_detector import LaneDetector
+
+    img = np.full((H, W, 3), 120, np.uint8)
+    cv2.line(img, (500, H), (470, 300), (250, 250, 250), 14)      # 오른 흰선
+    _yellow_dashes(img, 240)                                       # 진짜 중앙선(왼쪽)
+    cv2.rectangle(img, (522, 250), (560, 470), (30, 215, 240), -1)  # 바깥 노란 덩어리(길다)
+    r = LaneDetector().detect(img)
+    assert r.valid
+    assert r.offset_px < -40, f"목표가 오른 흰선 바깥 조각으로 갔다 (offset={r.offset_px:+.0f})"
+
+
+def test_fake_narrow_white_pair_does_not_veto_center_line():
+    """이음새 같은 가짜 흰 선이 진짜 흰 선과 '쌍'을 이뤄도, 간격이 도로 전폭
+    대역(520~900px)이 아니면 중점 목표·교차검증에 쓰지 않는다.
+
+    0818 run5 #159~162: 바닥 이음새(x≈300)+진짜 오른선 → 중점 +80 으로 우측
+    벽 방향 조향, 진짜 노란선은 교차검증에서 기각. 진짜 중앙은 −170.
+    """
+    from kmu_race.perception.lane_detector import LaneDetector
+
+    img = np.full((H, W, 3), 120, np.uint8)
+    cv2.line(img, (500, H), (470, 300), (250, 250, 250), 14)      # 오른 흰선
+    cv2.line(img, (293, H), (285, 300), (235, 235, 235), 5)       # 이음새(얇은 가짜 선, BEV x≈300)
+    _yellow_dashes(img, 240)                                       # 진짜 중앙선
+    r = LaneDetector().detect(img)
+    assert r.valid
+    assert r.center_found, "가짜 쌍의 교차검증이 진짜 노란선을 기각했다"
+    assert r.offset_px < -40, f"목표가 가짜 쌍의 중점으로 갔다 (offset={r.offset_px:+.0f})"
+
+
+def test_heading_uses_tangent_at_nearest_observed_point_and_is_clipped():
+    """헤딩 기울기는 관측 범위 끝의 **접선**이고(LaneFit.at 과 같은 규약),
+    물리적으로 불가능한 값은 검출기 출력에서 잘린다.
+
+    옛 코드는 -(2a·y_near+b) 로 관측 밖까지 2차식을 외삽했다 — 짧은 원거리
+    조각에서 |Δ|×k_heading 가 p90 85cmd (0818 저녁 실측).
+    """
+    from kmu_race.perception.lane_detector import LaneConfig, LaneDetector, LaneFit
+
+    det = LaneDetector()
+    img = np.full((H, W, 3), 120, np.uint8)
+    # 관측 범위 y 20~80 인 강한 곡률 조각: 접선(y=80) 기울기 = 2·0.01·80 − 1.5 = 0.1
+    fit = LaneFit(coef=np.array([0.01, -1.5, 300.0]), y_lo=20.0, y_hi=80.0)
+    det._fit_center = lambda c, lo=None, hi=None: None
+    det._assign_identity = lambda fits, h, w: (None, fit)
+    r = det.detect(img)
+    assert r.right_found
+    assert abs(r.heading_slope - (-0.1)) < 0.02, (
+        f"접선이 아니라 외삽 기울기가 나왔다: {r.heading_slope:+.3f} (외삽이면 -3.28→클립 -0.6)")
+    assert abs(r.curvature_px) <= LaneConfig().max_curvature_px + 1e-9, "곡률 클립이 안 걸렸다"
+
+    # 접선 자체가 비물리적이면 클립
+    fit2 = LaneFit(coef=np.array([0.0, 2.5, 100.0]), y_lo=100.0, y_hi=239.0)
+    det._assign_identity = lambda fits, h, w: (None, fit2)
+    r2 = det.detect(img)
+    assert abs(r2.heading_slope) <= LaneConfig().max_heading_slope + 1e-9
+
+
+def test_half_road_constants_match_measured_geometry():
+    """0818 저녁 실측: 노란선↔흰선 335px, 흰↔흰 ≈670px (≈810 px/m).
+    상수가 되돌아가면 단측 프레임(45%)의 목표가 140px 벽 쪽으로 밀린다."""
+    from kmu_race.perception.lane_detector import LaneConfig
+
+    c = LaneConfig()
+    assert 300 <= c.half_road_default_px <= 370
+    assert c.half_road_max_px >= 400, "max 330 은 진짜 표본의 절반을 기각한다"
+    assert 600 <= c.default_lane_width_px <= 740
+    assert c.pair_width_min_px > c.default_lane_width_px * 0.7

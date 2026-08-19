@@ -56,7 +56,14 @@ class Segment:
 class Track:
     name: str
     segments: List[Segment]
-    lane_width_m: float = 0.80     # 주행로 폭 (규정 도면 기준 실측값)
+    lane_width_m: float = 0.825    # 주행로 전폭 — 0818 사용자 줄자 0.80~0.85
+    # 노란 점선 중앙선 (0818 저녁 추가). 실차 트랙은 흰 실선 외곽 ×2 + 노란
+    # 점선 중앙선이고 검출기는 노란선을 **주역 목표선**으로 쓴다 — 흰 선만
+    # 그리던 옛 시뮬은 실제로 차에 도는 경로를 한 번도 검증하지 못했다.
+    # 점선 길이/간격은 미실측(트랙에서 줄자로 잴 것) — 우선 0.5/0.5m.
+    center_line: bool = True
+    center_dash_m: float = 0.5
+    center_gap_m: float = 0.5
 
     def centerline(self, step: float = 0.01) -> np.ndarray:
         """중심선 점열 [(x, y, heading)] — 원점에서 +x 방향으로 시작."""
@@ -102,12 +109,22 @@ def make_tracks() -> List[Track]:
 # ──────────────────────────────────────────────────────────────────
 @dataclass
 class SimGeometry:
-    """BEV 축척 — 실차 미실측이라 스윕한다."""
-    px_per_m_lat: float = 560.0   # 가로: 차선폭 450px ÷ 0.8m ≈ 562
-    px_per_m_fwd: float = 510.0   # 세로: ROI 240px ÷ 0.47m ≈ 510
+    """BEV 축척.
+
+    ★ 0818 저녁 실측: 노란 중앙선↔흰 선 335px ↔ 반차선 0.41m ⇒ 가로 ≈810
+      px/m (근·원거리 행 동일). 옛 기본값 560 은 '흰선 간격 450px' 가정에서
+      나온 값이었고, 실측 축척(810)으로 돌리자 당시 배포본이 12 시나리오 중
+      5개 이탈했다 — 스윕(450~620)이 실측을 감싸지 못했던 것. 세로 축척은
+      미실측(control.bev_aspect 0.9 가정 → 730). 스윕은 이 값을 중심으로.
+    """
+    px_per_m_lat: float = 810.0
+    px_per_m_fwd: float = 730.0
     near_m: float = 0.25          # ROI 맨 아랫줄이 보는 전방 거리
     frame_w: int = 640
     frame_h: int = 480
+    # 도색 폭 [m] — 실차 테이프 ≈4~5cm (BEV 두께 20~40px 실측과 일치)
+    line_width_m: float = 0.04
+    center_width_m: float = 0.035
 
 
 class BevRenderer:
@@ -124,28 +141,45 @@ class BevRenderer:
         u = g.frame_w / 2.0 + lat * g.px_per_m_lat
         return u, v_warp
 
-    def render(self, lines_car: List[np.ndarray]) -> np.ndarray:
+    def _draw(self, canvas: np.ndarray, pts, thick_px: int) -> None:
+        uv = [self.car_to_warp(f, l) for f, l in pts]
+        uv = [(int(round(u)), int(round(v))) for u, v in uv
+              if -3000 < u < 3000 and -3000 < v < 3000]
+        if len(uv) >= 2:
+            cv2.polylines(canvas, [np.asarray(uv, np.int32)], False,
+                          255, max(3, thick_px), cv2.LINE_AA)
+
+    def render(
+        self,
+        lines_car: List[np.ndarray],
+        center_dashes: Optional[List[np.ndarray]] = None,
+    ) -> np.ndarray:
         """차량 기준 좌표의 차선 점열들 → 카메라 영상 (BGR).
 
         ⚠️ 역워프하면 원본 사다리꼴 밖이 검게 남는데, 그 경계가 Canny 에
         강한 엣지로 잡혀 '가짜 차선'이 된다 (실차 영상엔 없는 인공물이라
         시뮬 결론을 통째로 오염시킨다 — 0817 S자 8m 발산의 정체).
         그래서 **선만** 워프해서 균일한 바닥 위에 합성한다.
+
+        center_dashes: 노란 점선 조각들(차량 기준 점열). 검출기의 노란 게이트
+        (H 22~38, S≥70, V≥110)를 통과하는 색으로 칠한다.
         """
         g = self.geo
-        lines_bev = np.zeros((g.frame_h, g.frame_w), np.uint8)
+        white_bev = np.zeros((g.frame_h, g.frame_w), np.uint8)
         for pts in lines_car:
-            uv = [self.car_to_warp(f, l) for f, l in pts]
-            uv = [(int(round(u)), int(round(v))) for u, v in uv
-                  if -3000 < u < 3000 and -3000 < v < 3000]
-            if len(uv) >= 2:
-                cv2.polylines(lines_bev, [np.asarray(uv, np.int32)], False,
-                              255, 8, cv2.LINE_AA)
-        mask = cv2.warpPerspective(
-            lines_bev, self.M_inv, (g.frame_w, g.frame_h), flags=cv2.INTER_LINEAR
+            self._draw(white_bev, pts, int(round(g.line_width_m * g.px_per_m_lat)))
+        yellow_bev = np.zeros((g.frame_h, g.frame_w), np.uint8)
+        for pts in center_dashes or []:
+            self._draw(yellow_bev, pts, int(round(g.center_width_m * g.px_per_m_lat)))
+        wmask = cv2.warpPerspective(
+            white_bev, self.M_inv, (g.frame_w, g.frame_h), flags=cv2.INTER_LINEAR
+        )
+        ymask = cv2.warpPerspective(
+            yellow_bev, self.M_inv, (g.frame_w, g.frame_h), flags=cv2.INTER_LINEAR
         )
         frame = np.full((g.frame_h, g.frame_w, 3), 168, np.uint8)   # 균일한 바닥
-        frame[mask > 60] = (250, 250, 250)
+        frame[ymask > 60] = (30, 215, 240)     # BGR — HSV ≈ (26, 223, 240)
+        frame[wmask > 60] = (250, 250, 250)
         return frame
 
 
@@ -247,6 +281,13 @@ def simulate(
 
         # ── 차량 기준 차선 점열 만들기 — **지연된 과거 자세**로 본다 ──
         sx, sy, sth = pose_hist[max(0, len(pose_hist) - 1 - sense_lag)]
+
+        def to_car(px: float, py: float) -> Tuple[float, float]:
+            dx, dy = px - sx, py - sy
+            fwd = dx * math.cos(sth) + dy * math.sin(sth)
+            lat = -(-dx * math.sin(sth) + dy * math.cos(sth))
+            return fwd, lat
+
         lines = []
         for side in (-1.0, +1.0):
             pts = []
@@ -254,15 +295,32 @@ def simulate(
                 px, py, pth = center[k]
                 lx = px - side * half * -math.sin(pth)
                 ly = py - side * half * math.cos(pth)
-                dx, dy = lx - sx, ly - sy
-                fwd = dx * math.cos(sth) + dy * math.sin(sth)
-                lat = -(-dx * math.sin(sth) + dy * math.cos(sth))
+                fwd, lat = to_car(lx, ly)
                 if 0.05 < fwd < 1.6 and abs(lat) < 1.2:
                     pts.append((fwd, lat))
             if len(pts) >= 2:
                 lines.append(np.asarray(pts))
 
-        frame = renderer.render(lines)
+        # 노란 점선 중앙선 — 트랙에 고정된 패턴 (중심선 인덱스 = cm 단위 거리)
+        dashes: List[np.ndarray] = []
+        if track.center_line:
+            period = max(0.02, track.center_dash_m + track.center_gap_m)
+            cur: List[Tuple[float, float]] = []
+            for k in range(j, min(len(center), j + 200)):
+                px, py, _pth = center[k]
+                on = (k * 0.01) % period < track.center_dash_m
+                fwd, lat = to_car(px, py)
+                vis = 0.05 < fwd < 1.6 and abs(lat) < 1.2
+                if on and vis:
+                    cur.append((fwd, lat))
+                elif cur:
+                    if len(cur) >= 2:
+                        dashes.append(np.asarray(cur))
+                    cur = []
+            if len(cur) >= 2:
+                dashes.append(np.asarray(cur))
+
+        frame = renderer.render(lines, dashes)
         lane = det.detect(frame)
         if not lane.valid:
             lost += 1
@@ -349,12 +407,16 @@ def main(argv=None) -> None:
 
     speeds = tuple(float(s) for s in args.speeds.split(","))
     if not args.sweep:
-        ok = print_table(run_all(speeds), "기본 축척 (lat 560 / fwd 510 px/m)")
+        ok = print_table(run_all(speeds), "기본 축척 (lat 810 / fwd 730 px/m — 0818 실측)")
         print("\n종합:", "✅ 전 시나리오 통과" if ok else "❌ 실패 시나리오 있음")
         return
 
+    # 스윕은 실측(810)을 중심으로 가로 ±13%, 세로(미실측) ±20% 를 덮는다.
+    # 실측 밖 축척에서만 통과하는 게인은 실차에서 깨진다 (0818 저녁: 450~620
+    # 스윕을 통과한 배포본이 810 에서 5/12 이탈).
     all_ok = True
-    for lat, fwd in ((450.0, 420.0), (560.0, 510.0), (620.0, 600.0)):
+    for lat, fwd in ((700.0, 630.0), (810.0, 730.0), (920.0, 830.0),
+                     (810.0, 590.0), (810.0, 880.0)):
         geo = SimGeometry(px_per_m_lat=lat, px_per_m_fwd=fwd)
         ok = print_table(run_all(speeds, geo), f"축척 lat={lat:.0f} fwd={fwd:.0f} px/m")
         all_ok &= ok

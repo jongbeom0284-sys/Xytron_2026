@@ -597,3 +597,70 @@ def test_finish_stays_terminal():
     for i in range(20):
         fsm.step(make_obs(t + 0.1 * i), ctx, READY)
     assert fsm.state is Mode.FINISH
+
+
+# ──────────────────────────────────────────────────────────────────
+# 0818 저녁 — 라이다 게이트 통합 / 콘 구간 입구의 회피 오발동
+# ──────────────────────────────────────────────────────────────────
+def _with_lidar_gate(obs, depth_m=0.9, width_m=0.9):
+    from dataclasses import replace
+    return replace(
+        obs,
+        cone=replace(
+            obs.cone, lidar_gate_valid=True, lidar_gate_depth_m=depth_m,
+            lidar_gate_width_m=width_m, lidar_cones=2,
+        ),
+    )
+
+
+def test_cone_section_survives_on_lidar_gate_alone():
+    """카메라 게이트가 4s 넘게 안 서도 **라이다 게이트**가 살아 있으면 구간에
+    머문다. policy 는 라이다를 1순위로 조향 중인데 FSM 이 카메라만 보고
+    이탈시키면 슬라럼 한복판에서 콘에 오염된 차선 추종으로 떨어진다."""
+    fsm, ctx = RaceFSM(), RaceContext()
+    t = _start(fsm, ctx)
+    for i in range(5):
+        fsm.step(make_obs(t + 0.1 * i, cone_px=5000, gate_valid=True), ctx, READY)
+    assert fsm.state is Mode.CONE_DRIVE
+    # 카메라 게이트 없음(gate_valid=False), 라이다 게이트만 6초 동안
+    for i in range(60):
+        obs = _with_lidar_gate(make_obs(t + 0.5 + 0.1 * i, cone_px=3000))
+        fsm.step(obs, ctx, READY)
+    assert fsm.state is Mode.CONE_DRIVE, "라이다 게이트가 살아 있는데 구간을 이탈했다"
+
+
+def test_cone_entry_accepts_lidar_gate():
+    """진입 게이트 조건은 카메라 또는 라이다 어느 쪽이든 만족하면 된다."""
+    fsm, ctx = RaceFSM(), RaceContext()
+    t = _start(fsm, ctx)
+    for i in range(5):
+        fsm.step(_with_lidar_gate(make_obs(t + 0.1 * i, cone_px=5000)), ctx, READY)
+    assert fsm.state is Mode.CONE_DRIVE
+
+
+def test_cone_gate_suppresses_front_target_trigger_in_lane_drive():
+    """콘 게이트가 보이는 동안 전방 타겟(콘!)으로 AVOID 가 서면 안 된다.
+
+    통로 0.91m 의 콘은 nearest_front 코리도(±0.45m)·1.45m 안에 수시로 들어와
+    2틱이면 회피가 서는데 콘 진입(3틱+게이트)보다 빠르다 — 라바콘 입구에서
+    회피 기동으로 콘 열에 처박히는 경로."""
+    fsm, ctx = RaceFSM(), RaceContext()
+    t = _start(fsm, ctx)
+    # 게이트는 보이지만 아직 진입 디바운스 전(첫 틱) + 콘이 전방 1.2m 코리도 안
+    obs = _with_lidar_gate(
+        make_obs(t, cone_px=2000, front_target=stationary_target(1.2, y=0.3))
+    )
+    fsm.step(obs, ctx, READY)
+    fsm.step(_with_lidar_gate(
+        make_obs(t + 0.02, cone_px=2000, front_target=stationary_target(1.2, y=0.3))
+    ), ctx, READY)
+    assert fsm.state not in (Mode.AVOID_STATIC, Mode.OVERTAKE), (
+        f"콘 게이트가 보이는데 {fsm.state.value} 로 갔다")
+
+    # 대조: 게이트가 없으면 같은 타겟에 정상 반응해야 한다
+    fsm2, ctx2 = RaceFSM(), RaceContext()
+    t2 = _start(fsm2, ctx2)
+    for i in range(3):
+        fsm2.step(make_obs(t2 + 0.02 * i, front_target=stationary_target(1.2, y=0.3)),
+                  ctx2, READY)
+    assert fsm2.state in (Mode.AVOID_STATIC, Mode.OVERTAKE)

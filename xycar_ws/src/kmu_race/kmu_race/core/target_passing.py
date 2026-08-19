@@ -35,7 +35,17 @@ class PassPhase(str, Enum):
 
 @dataclass
 class PassConfig:
-    # 옆 차선으로 옮겨갈 목표 횡편차 [px, BEV 기준]. 차선 폭 실측 후 조정할 것.
+    # ── 횡이동량 (0818 저녁 재설계) ──
+    # 옛 코드는 고정 300px 을 옆으로 갔다. 실측 축척 ≈810 px/m 에서 300px 은
+    # 0.37m — 도로 반폭 0.41m 이라 차(폭 0.30m) 오른 바퀴가 흰 실선을 넘는다.
+    # 필요한 이동량은 타겟의 횡위치에서 나온다:
+    #     d = clearance − side·target_y   (target_y 좌측+, side +1=우측 통과)
+    # 예) 타겟이 좌차선 중앙(+0.2m)이고 우측 통과 → 0.35−0.2 = 0.15m ≈ 120px
+    #     타겟이 거의 정면(+0.05m) → 0.30m ≈ 245px (여전히 도로 안)
+    clearance_m: float = 0.35          # 차 반폭 0.15 + 모형 반폭 ~0.15 + 여유
+    px_per_m: float = 810.0            # BEV 가로 축척 (0818 실측)
+    min_shift_px: float = 100.0        # 이보다 작은 이동은 무의미
+    # 최대 횡이동 [px] — 상한(안전 캡). 0.37m: 이 이상은 흰 실선 밖이다.
     pass_offset_px: float = 300.0
     # 기동 중 타겟을 계속 추적할 횡방향 코리도 반폭 [m]. 기본 nearest_front
     # 코리도(0.45m)는 '내 경로를 막는가' 용이라, 내가 옆 차선으로 0.7m 비키는
@@ -92,12 +102,25 @@ class TargetPassing:
     def reset(self) -> None:
         self.phase = PassPhase.IDLE
         self.side = 0
+        # ★ offset_px 는 '차선 목표에 더하는 부호 있는 횡이동량'[px] 이다 —
+        #   측정된 lane_offset_px 에 이 값을 더한 것이 PID 오차가 된다. 옛
+        #   코드는 이 램프 자체를 오차로 넣어 측정과 무관한 개루프 풀락(−50,
+        #   1.7s)이 됐다 (0818 저녁 수치 재현). 차가 실제로 d 만큼 옮기면
+        #   lane_offset_px → −side·d 가 되어 오차가 0 으로 닫힌다 (폐루프).
         self.offset_px = 0.0
         self.target_offset_px = 0.0
         self._clear_cnt = 0
         self._conflict_cnt = 0
         self._started_at: Optional[float] = None
         self._passed_target_x: Optional[float] = None
+
+    def desired_shift_px(self, side: int, target_y: float) -> float:
+        """타겟 횡위치에서 필요한 부호 있는 횡이동량 [px] (설정 주석의 식)."""
+        cfg = self.config
+        d_m = cfg.clearance_m - side * target_y
+        d_px = d_m * cfg.px_per_m
+        d_px = max(cfg.min_shift_px, min(cfg.pass_offset_px, d_px))
+        return side * d_px
 
     # ── 방향 선택 ─────────────────────────────────────────────────
     def choose_side(
@@ -207,8 +230,8 @@ class TargetPassing:
                     status = "blocked"
                 else:
                     self.side = side
-                    self.offset_px = lane_offset_px
-                    self.target_offset_px = lane_offset_px + side * cfg.pass_offset_px
+                    self.offset_px = 0.0
+                    self.target_offset_px = self.desired_shift_px(side, target_y)
                     self.phase = PassPhase.SHIFT
                     self._started_at = now
 
@@ -219,9 +242,7 @@ class TargetPassing:
                     other = -self.side
                     if self._side_clear(other, left_clear, right_clear):
                         self.side = other
-                        self.target_offset_px = (
-                            lane_offset_px + other * cfg.pass_offset_px
-                        )
+                        self.target_offset_px = self.desired_shift_px(other, target_y)
                         self._conflict_cnt = 0
                     else:
                         self.phase = PassPhase.RETURN
@@ -229,6 +250,9 @@ class TargetPassing:
                         status = "blocked"
             else:
                 self._conflict_cnt = 0
+                if target_present:
+                    # 타겟이 옆으로 움직이면(방해차량) 필요한 이동량도 따라간다
+                    self.target_offset_px = self.desired_shift_px(self.side, target_y)
 
             self.offset_px += cfg.lateral_alpha_out * (
                 self.target_offset_px - self.offset_px
@@ -261,8 +285,11 @@ class TargetPassing:
                 done = True
                 status = "idle"
 
+        # PID 오차 = 측정된 차선 목표 + 부호 있는 횡이동량 (근/원거리 혼합).
+        # 차가 옮겨가면 lane_offset_px 가 −offset_px 로 다가가 오차가 닫힌다.
         steer_target_px = (
-            (1.0 - cfg.preview) * self.offset_px + cfg.preview * lane_lookahead_px
+            (1.0 - cfg.preview) * (lane_offset_px + self.offset_px)
+            + cfg.preview * (lane_lookahead_px + self.offset_px)
         )
 
         speed = self._speed_for_phase()

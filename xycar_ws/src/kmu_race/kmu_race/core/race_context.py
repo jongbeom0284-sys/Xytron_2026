@@ -229,6 +229,11 @@ class RaceContext:
         """
         if self.race_started_at is None:
             return 0.0
+        # 시운전(total_laps 99 = 랩 무제한)에서는 '남은 바퀴' 개념이 없다 —
+        # 계산하면 per_lap 이 2.4s 로 나와 출발부터 압박 1.0 → LANE_DRIVE 속도
+        # ×1.3 이 걸린다 ("40%" 로 돌린다고 믿었는데 실제 52%, 0818 저녁 감사).
+        if TOTAL_LAPS > 3:
+            return 0.0
         laps_left = max(0, TOTAL_LAPS - self.lap.current_lap + 1)
         if laps_left == 0:
             return 0.0
