@@ -18,7 +18,18 @@ def test_record_drive_speed_is_selected_before_start_and_capped_at_half_mps():
     assert "DEFAULT_SPEED_MPS = 0.50" in server
     assert "f'max_speed_mps:={self.speed_mps:.2f}'" in server
     assert "[0.2,0.3,0.4,0.5]" in app
-    assert "JSON.stringify({speed_mps:recordDriveSettings.speed})" in app
+    assert "speed_mps:recordDriveSettings.speed" in app
+
+
+def test_record_drive_carries_the_manoeuvre_switch_to_the_launch():
+    """회피 허용 여부는 웹에서 고르고 launch 인자로 넘어간다. 기본은 꺼짐이다."""
+    server, app = _sources()
+
+    assert "def start(self, speed_mps=None, maneuvers_enabled=False):" in server
+    assert "maneuvers_enabled:=" in server
+    assert "body.get('maneuvers_enabled', False)" in server
+    assert "recordDriveSettings={speed:0.5,maneuvers:false}" in app
+    assert "maneuvers_enabled:recordDriveSettings.maneuvers" in app
 
 
 def test_record_drive_sessions_are_unique_and_pause_keeps_the_open_session():

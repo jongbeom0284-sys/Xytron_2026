@@ -4,11 +4,12 @@
 한쪽 차선이 장애물 차량에 막히면 반대편 차선 중앙으로 비켜서고, 추월이 끝나면
 다시 중앙으로 돌아온다.
 
-점유 판정은 두 근거가 모두 있어야 확정된다.
+점유 판정은 네 근거가 모두 있어야 확정된다.
   1. 카메라: 그쪽 차선의 주행 가능 폭이 반대편보다 뚜렷하게 좁다
-  2. 라이다: 같은 쪽에 임계 거리 이내의 물체가 실제로 있다
-라이다만으로는 확정하지 않는다. 벽과 연석이 같은 거리에 잡히기 때문이다.
-카메라만으로도 확정하지 않는다. 그림자와 노면 얼룩이 영역을 갉아먹기 때문이다.
+  2. 카메라: 그 차선 자신의 평상시 폭 대비 뚜렷하게 줄었다 (벽을 낀 구간 배제)
+  3. 라이다: 같은 쪽 옆 차선 코리도에 임계 거리 이내의 물체가 있다
+  4. 기하: 지금 직선 구간이다 (대회 장애물은 직선 차선에만 놓인다)
+라이다만으로는 확정하지 않는다. 카메라만으로도 확정하지 않는다.
 """
 
 from __future__ import annotations
@@ -49,6 +50,11 @@ class LanePolicyConfig:
 
     lidar_confirm_distance_m: float = 1.60
     lidar_maximum_age_sec: float = 0.50
+
+    # 회피는 직선 구간에서만 허용한다. 코너에서는 목표선이 크게 기울어 좌우 폭이
+    # 원근으로 왜곡되고, 어차피 대회 장애물은 직선 차선에만 놓인다.
+    straight_only: bool = True
+    maximum_heading_deg: float = 12.0
 
     enter_hold_sec: float = 0.30
     clear_hold_sec: float = 0.40
@@ -235,6 +241,7 @@ class LanePolicy:
         now: float,
         frame_width: int,
         maneuvers_enabled: bool = True,
+        heading_deg: float | None = None,
     ) -> LaneDecision:
         config = self._config
         if self._target_x is None:
@@ -247,7 +254,7 @@ class LanePolicy:
             return self._decide(center_x_px, CENTER, None, dt, frame_width, "maneuvers_disabled")
 
         self._update_baseline(occupancy)
-        confirmed = self._confirmed_side(occupancy, sectors, now)
+        confirmed = self._confirmed_side(occupancy, sectors, now, heading_deg)
         self._advance_state(confirmed, speed_mps, dt, now)
 
         # 상태를 먼저 옮긴 뒤 목표를 정한다. 전환된 프레임부터 새 차선을 향하게 하기
@@ -336,10 +343,20 @@ class LanePolicy:
         self._baseline_frames += 1
 
     def _confirmed_side(
-        self, occupancy: LaneOccupancy, sectors: LidarSectors, now: float
+        self,
+        occupancy: LaneOccupancy,
+        sectors: LidarSectors,
+        now: float,
+        heading_deg: float | None,
     ) -> str | None:
         side = occupancy.narrow_side
         if side is None:
+            return None
+        if (
+            self._config.straight_only
+            and heading_deg is not None
+            and abs(heading_deg) > self._config.maximum_heading_deg
+        ):
             return None
         # 평상시 폭을 아직 배우지 못했으면 판단을 보류한다 (닫힘 방향으로 실패).
         if self._baseline_frames < self._config.baseline_warmup_frames:

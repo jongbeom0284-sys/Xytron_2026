@@ -516,6 +516,7 @@ class RecordDriveController:
         self.control_status_at = 0.0
         self.lane_status = {}
         self.speed_mps = self.DEFAULT_SPEED_MPS
+        self.maneuvers_enabled = False
         enable_qos = QoSProfile(depth=1)
         enable_qos.reliability = ReliabilityPolicy.RELIABLE
         enable_qos.durability = DurabilityPolicy.TRANSIENT_LOCAL
@@ -546,7 +547,7 @@ class RecordDriveController:
             self.last_heartbeat_at = time.monotonic()
             return self.status_unlocked()
 
-    def start(self, speed_mps=None):
+    def start(self, speed_mps=None, maneuvers_enabled=False):
         with self.lock:
             if self.state in ('starting', 'running', 'paused', 'ending'):
                 raise RuntimeError('기록 주행이 이미 실행 중입니다')
@@ -570,11 +571,15 @@ class RecordDriveController:
                     f'{self.MAX_SPEED_MPS:.2f} m/s로 선택하세요'
                 )
             self.speed_mps = speed_mps
+            self.maneuvers_enabled = bool(maneuvers_enabled)
 
             self._publish_enabled(False)
             recording = self.node.start_recording(
                 kind='lane_drive',
-                metadata={'speed_mps': self.speed_mps},
+                metadata={
+                    'speed_mps': self.speed_mps,
+                    'maneuvers_enabled': self.maneuvers_enabled,
+                },
             )
             recording_path = Path(recording['path'])
             self.log_handle = open(
@@ -590,6 +595,7 @@ class RecordDriveController:
                         'armed:=true',
                         'start_perception:=false',
                         f'max_speed_mps:={self.speed_mps:.2f}',
+                        f"maneuvers_enabled:={'true' if self.maneuvers_enabled else 'false'}",
                     ],
                     stdout=self.log_handle,
                     stderr=subprocess.STDOUT,
@@ -726,6 +732,7 @@ class RecordDriveController:
             'speed_min_mps': self.MIN_SPEED_MPS,
             'speed_max_mps': self.MAX_SPEED_MPS,
             'selected_speed_mps': self.speed_mps,
+            'maneuvers_enabled': self.maneuvers_enabled,
             'can_start': self.state in ('idle', 'finished', 'error'),
             'can_pause': self.state == 'running',
             'can_resume': self.state == 'paused',
@@ -1114,7 +1121,10 @@ class DashboardRequestHandler(SimpleHTTPRequestHandler):
                 controller = self.server.dashboard_node.record_drive
                 if action == 'start':
                     body = self._read_json()
-                    return self._json(200, controller.start(body.get('speed_mps')))
+                    return self._json(200, controller.start(
+                        body.get('speed_mps'),
+                        body.get('maneuvers_enabled', False),
+                    ))
                 actions = {
                     'pause': controller.pause,
                     'resume': controller.resume,

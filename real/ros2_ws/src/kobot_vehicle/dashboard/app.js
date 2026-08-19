@@ -25,7 +25,7 @@ let latestLane={state:'WAITING',mode:'WAITING',confidence:0,center_offset_px:0};
 let recordingState={active:false,frames:0,last_path:''};
 let motorState={usb:false,stack_running:false,stack_state:'unknown',active:false,missing_processes:[],result:'잠김',error:null};
 let recordDriveState={state:'idle',result:'대기 중',can_start:true,can_pause:false,can_resume:false,can_finish:false,recording:{frames:0}};
-let recordDriveSettings={speed:0.5};
+let recordDriveSettings={speed:0.5,maneuvers:false};
 let recoveryState={busy:false,result:'복구 대기 중',error:null,components:{}};
 let driveSettings={speed:0.5,duration:10,steering:'center'};
 let driveStateText='잠김';
@@ -93,10 +93,11 @@ function laneStreamTopic(){
 }
 
 function laneCard(){
-  return `<div class="card-heading"><div><p class="eyebrow">TWINMIXING CUDA · MOTOR OFF</p><h3>센터 갭 / 영역 중앙 추종</h3></div><span class="live-badge">LIVE</span></div>
+  return `<div class="card-heading"><div><p class="eyebrow">TWINMIXING CUDA · MOTOR OFF</p><h3>노란 중앙선 우선 추종</h3></div><span class="live-badge">LIVE</span></div>
     <div class="camera-frame lane-frame"><img class="lane-stream" data-topic="${laneStreamTopic()}" data-stream-topic="${laneStreamTopic()}" src="${streamUrl(laneStreamTopic())}" alt="차선 인식 결과 영상"></div>
     <div class="metric"><span>인식 상태</span><strong class="lane-status">${laneStatusText()}</strong></div>
-    <p class="helper">파랑: 주행 영역 · 노랑: 인식 중앙선 · 하늘색: 차량 예정 경로 · 빨간 십자: 목표점 · 흰 화살표: 조향 방향</p>`;
+    <div class="metric"><span>주행 라인</span><strong class="lane-drive-line">${laneDriveLineText()}</strong></div>
+    <p class="helper">노랑: 중앙선 · 주황: 왼쪽 차선 · 보라: 오른쪽 차선 · 하늘색: 예정 경로 · 빨간 십자: 목표점</p>`;
 }
 
 function lidarCard(){
@@ -160,7 +161,9 @@ function driveCard(){
           ${[0.2,0.3,0.4,0.5].map(speed=>`<option value="${speed}" ${recordDriveSettings.speed===speed?'selected':''}>${speed.toFixed(2)} m/s</option>`).join('')}
         </select>
       </label>
+      <label class="record-drive-maneuvers-field"><input class="record-drive-maneuvers" type="checkbox" ${recordDriveSettings.maneuvers?'checked':''}> 장애물 회피 허용 (차선 이동)</label>
       <p class="record-drive-help">시작 전 선택 · Space 일시정지/재개 · 종료 시 별도 폴더 저장</p>
+      <p class="record-drive-help">회피를 끄면 중앙선만 따라갑니다. 먼저 중앙선 추종부터 확인하세요.</p>
       <div class="record-drive-actions"><button class="primary" data-drive-action="record-start">기록 주행 시작</button><button data-drive-action="record-toggle">일시정지</button><button class="danger" data-drive-action="record-finish">기록 주행 종료</button></div>
       <p class="record-drive-state">${recordDriveState.result||'대기 중'}</p>
     </section>
@@ -208,6 +211,7 @@ function refreshDynamicValues(){
   document.querySelectorAll('.system-host').forEach(el=>el.textContent=latestHost);
   document.querySelectorAll('.system-power').forEach(el=>el.textContent=latestPower);
   document.querySelectorAll('.lane-status').forEach(el=>el.textContent=laneStatusText());
+  document.querySelectorAll('.lane-drive-line').forEach(el=>el.textContent=laneDriveLineText());
   document.querySelectorAll('.ultra-value').forEach(el=>{
     const value=latestUltrasonic[el.dataset.sensor];
     const marker=el.closest('.ultrasonic-marker');
@@ -225,9 +229,19 @@ function refreshDynamicValues(){
   refreshDriveUi();
 }
 
+function laneDriveLineText(){
+  const lines={CENTER:'중앙선 · 2차선 중앙',SHIFT_LEFT:'왼쪽 차선으로 회피 중',SHIFT_RIGHT:'오른쪽 차선으로 회피 중',RETURNING:'중앙 복귀 중'};
+  const line=lines[latestLane.drive_line]||latestLane.drive_line||'-';
+  if(latestLane.maneuvers_enabled===false)return `${line} · 회피 꺼짐`;
+  const blocked=latestLane.blocked_side==='left'?'왼쪽 막힘':latestLane.blocked_side==='right'?'오른쪽 막힘':null;
+  const lidar=[['왼',latestLane.lidar_left_m],['앞',latestLane.lidar_front_m],['오',latestLane.lidar_right_m]]
+    .map(([name,value])=>`${name} ${Number.isFinite(value)?Number(value).toFixed(2)+'m':'-'}`).join(' · ');
+  return `${line}${blocked?' · '+blocked:''} · 라이다 ${lidar}`;
+}
+
 function laneStatusText(){
   const labels={TRACKING:'추적 중',HOLD:'차선 끊김 · 이전값 유지',HOLD_LAST:'인식 없음 · 마지막값 계속 유지',WAITING:'차선 대기',ERROR:'오류'};
-  const sources={CENTER_GAP:'센터 갭',REGION_CENTER:'영역 중앙',NONE:'경로 없음'};
+  const sources={YELLOW_LINE:'노란 중앙선',YELLOW_LINE_GHOST:'노란 중앙선 외삽',CENTER_GAP:'센터 갭',REGION_CENTER:'영역 중앙',NONE:'경로 없음'};
   const mode=latestLane.mode||latestLane.state||'WAITING';
   const offset=Number(latestLane.center_offset_px||0);
   return `${labels[mode]||mode} · ${sources[latestLane.path_source]||latestLane.path_source||'경로 없음'} · 신뢰도 ${Number(latestLane.confidence||0).toFixed(2)} · d 오차 ${offset>=0?'+':''}${offset.toFixed(0)}px`;
@@ -255,6 +269,8 @@ grid.addEventListener('change',event=>{
   if(steering)driveSettings.steering=steering.value;
   const recordSpeed=event.target.closest('.record-drive-speed');
   if(recordSpeed){recordDriveSettings.speed=Number(recordSpeed.value);refreshDriveButtons()}
+  const recordManeuvers=event.target.closest('.record-drive-maneuvers');
+  if(recordManeuvers){recordDriveSettings.maneuvers=recordManeuvers.checked;refreshDriveButtons()}
 });
 
 grid.addEventListener('input',event=>{
@@ -554,7 +570,7 @@ async function handleDriveAction(action){
   if(action==='record-start'){
     motorBusy=true;setDriveState('기록 주행 준비 중');refreshDriveButtons();
     try{
-      recordDriveState=await api('/api/record-drive/start',{method:'POST',body:JSON.stringify({speed_mps:recordDriveSettings.speed})});
+      recordDriveState=await api('/api/record-drive/start',{method:'POST',body:JSON.stringify({speed_mps:recordDriveSettings.speed,maneuvers_enabled:recordDriveSettings.maneuvers})});
       setDriveState('차선 인식 준비 중');toast('기록 주행 준비를 시작했습니다');
     }catch(error){setDriveState(`기록 주행 오류 · ${error.message}`);toast(`기록 주행 오류: ${error.message}`)}
     finally{motorBusy=false;refreshDriveUi()}
