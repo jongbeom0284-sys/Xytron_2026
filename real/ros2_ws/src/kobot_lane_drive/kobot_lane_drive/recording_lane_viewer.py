@@ -20,7 +20,10 @@ import cv2
 import numpy as np
 
 from .geometry import move_towards as _move_towards
+from .lane_policy import EMPTY_OCCUPANCY, LanePolicyConfig, measure_lanes
+from .obstacle_lidar import EMPTY_SECTORS
 from .twinmixing_center import TwinMixingCenterConfig, extract_center_path, letterbox, render_overlay, restore_mask
+from .yellow_center import YellowCenterConfig, YellowCenterTracker, extract_yellow_center
 
 SESSION_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
 FRAME_NAME = re.compile(r"^\d{6}\.jpg$", re.IGNORECASE)
@@ -135,6 +138,8 @@ def prepare_session(record_root: Path, session_name: str, torch, model, device: 
     overlays = session_path / CACHE_NAME / "overlays"
     overlays.mkdir(parents=True, exist_ok=True)
     stamps, config = _timestamps(session_path, sources), TwinMixingCenterConfig()
+    yellow_config, policy_config = YellowCenterConfig(), LanePolicyConfig()
+    tracker = YellowCenterTracker(yellow_config)
     steering = last_control = last_valid = last_valid_steering = fps = 0.0
     records = []
     for index, (path, stamp) in enumerate(zip(sources, stamps)):
@@ -150,25 +155,41 @@ def prepare_session(record_root: Path, session_name: str, torch, model, device: 
         size = (frame.shape[1], frame.shape[0])
         driving = restore_mask(driving_logits.argmax(1)[0].byte().cpu().numpy(), padding, size)
         lane = restore_mask(lane_logits.argmax(1)[0].byte().cpu().numpy(), padding, size)
-        result = extract_center_path(driving, lane, config)
+        # 우선순위 1: 색으로 확인된 노란 중앙선. 실패하면 센터 갭 / 영역 중앙으로 내려간다.
+        yellow_result, yellow_evidence = extract_yellow_center(
+            frame, driving, lane, yellow_config, config
+        )
+        tracked = tracker.update(yellow_result, frame.shape[1])
+        if tracked.found and tracked.confidence >= MINIMUM_CONFIDENCE:
+            result = tracked
+        else:
+            result = extract_center_path(driving, lane, config)
+        occupancy = (
+            measure_lanes(driving, result.fitted_points, policy_config)
+            if result.found
+            else EMPTY_OCCUPANCY
+        )
         if result.found and result.confidence >= MINIMUM_CONFIDENCE:
             dt = .05 if last_control <= 0 else max(.001, min(.20, stamp - last_control)); last_control = stamp
             normalized = float(result.center_offset_px) / max(1.0, frame.shape[1] * .5)
             target = float(np.clip(-.42 * 4.0 * normalized, -MAX_STEERING_RAD, MAX_STEERING_RAD))
             steering = _move_towards(steering, steering + .35 * (target - steering), 1.20 * dt)
-            reason = "twinmixing_region_center" if result.path_source == "REGION_CENTER" else "twinmixing_center_gap"
+            reason = f"target_{result.path_source.lower()}"
             last_valid, last_valid_steering, mode = stamp, steering, "TRACKING"
         elif last_valid > 0:
             steering, mode, reason = last_valid_steering, "HOLD_LAST", "hold_last_without_timeout"
         else:
-            steering, mode, reason = 0.0, "WAITING", "center_gap_not_found"
-        output = render_overlay(frame, driving, lane, result, steering, inference_ms, fps, device, mode)
+            steering, mode, reason = 0.0, "WAITING", "target_line_not_found"
+        output = render_overlay(
+            frame, driving, lane, result, steering, inference_ms, fps, device, mode,
+            yellow_mask=yellow_evidence, occupancy=occupancy, sectors=EMPTY_SECTORS,
+        )
         cv2.rectangle(output, (8, frame.shape[0] - 38), (410, frame.shape[0] - 8), (0, 0, 0), -1)
         color = (80, 220, 120) if mode == "TRACKING" else (0, 210, 255) if mode == "HOLD_LAST" else (80, 80, 255)
         cv2.putText(output, f"CONTROL {mode} | {reason}", (17, frame.shape[0] - 17), cv2.FONT_HERSHEY_SIMPLEX, .52, color, 2, cv2.LINE_AA)
         if not cv2.imwrite(str(overlays / path.name), output, [cv2.IMWRITE_JPEG_QUALITY, 92]):
             raise RuntimeError(f"오버레이 저장 실패: {path.name}")
-        records.append({"index": index, "filename": path.name, "timestamp": stamp, "state": result.state, "path_source": result.path_source, "mode": mode, "confidence": round(float(result.confidence), 4), "center_offset_px": None if result.center_offset_px is None else round(float(result.center_offset_px), 2), "heading_deg": None if result.heading_deg is None else round(float(result.heading_deg), 2), "steering_rad": round(float(steering), 5), "reason": reason, "inference_ms": round(inference_ms, 2), "device": device})
+        records.append({"index": index, "filename": path.name, "timestamp": stamp, "state": result.state, "path_source": result.path_source, "mode": mode, "confidence": round(float(result.confidence), 4), "center_offset_px": None if result.center_offset_px is None else round(float(result.center_offset_px), 2), "heading_deg": None if result.heading_deg is None else round(float(result.heading_deg), 2), "steering_rad": round(float(steering), 5), "reason": reason, "inference_ms": round(inference_ms, 2), "device": device, "ghost_frames": tracker.blind_frames, "narrow_side": occupancy.narrow_side, "left_lane_width_px": round(float(occupancy.left_width_px), 1), "right_lane_width_px": round(float(occupancy.right_width_px), 1)})
         if index % 25 == 0 or index == len(sources) - 1:
             print(f"[{session_name}] {index + 1}/{len(sources)}", flush=True)
     payload = {"session": session_name, "started_at": datetime.fromtimestamp(stamps[0]).isoformat(timespec="seconds"), "generated_at": datetime.now().isoformat(timespec="seconds"), "runtime": "pytorch_cuda_fp16", "frames": records}

@@ -1,6 +1,7 @@
 twinmixing_center_drive:
   ros__parameters:
     image_topic: /image_raw
+    lidar_topic: /scan
     debug_image_topic: /kobot_lane_drive/twinmixing_center/debug_image
     status_topic: /kobot_lane_drive/twinmixing_center/status
     drive_preview_topic: /kobot_lane_drive/twinmixing_center/drive_preview
@@ -8,6 +9,8 @@ twinmixing_center_drive:
     debug_publish_hz: 7.0
     variant: large
     use_fp16: true
+
+    # --- 중심 경로 추출 (우선순위 2·3단계) ---
     roi_top_ratio: 0.46
     roi_bottom_ratio: 0.97
     row_step: 4
@@ -20,6 +23,61 @@ twinmixing_center_drive:
     minimum_region_width_ratio: 0.12
     region_search_half_width_ratio: 0.40
     minimum_confidence: 0.35
+
+    # --- 노란 중앙선 (우선순위 1단계) ---
+    # 조명이 바뀌면 재빌드 없이 여기만 고친다. 노출 조정과 함께 현장에서 다시 맞춘다.
+    yellow_enabled: true
+    yellow_hue_low: 15
+    yellow_hue_high: 45
+    yellow_saturation_low: 55
+    yellow_saturation_high: 255
+    yellow_value_low: 110
+    yellow_value_high: 255
+    yellow_lane_dilate_px: 5
+    yellow_open_kernel_px: 3
+    yellow_search_half_width_ratio: 0.34
+    yellow_maximum_run_width_ratio: 0.22
+    yellow_minimum_run_pixels: 3
+    yellow_minimum_rows: 8
+    # 점선 구간에서 목표선을 유지하는 최대 프레임 수
+    yellow_ghost_maximum_frames: 20
+    yellow_history_size: 10
+    yellow_minimum_confidence: 0.30
+
+    # --- 차선 점유 판정과 회피 ---
+    # 기본값은 꺼짐. 노란선 추종만 먼저 검증한 뒤 launch 인자로 켠다.
+    maneuvers_enabled: false
+    lane_sample_rows: 14
+    lane_roi_top_ratio: 0.52
+    lane_roi_bottom_ratio: 0.95
+    lane_minimum_width_ratio: 0.05
+    lane_narrow_width_ratio: 0.55
+    lane_narrow_rows_required: 4
+    # 그 차선 자신의 평상시 폭 대비 이 비율 아래로 줄어야 장애물로 인정한다.
+    # 벽을 낀 구간처럼 원래 좁은 쪽을 상시 장애물로 오인하지 않기 위한 조건이다.
+    lane_width_drop_ratio: 0.60
+    lane_baseline_alpha: 0.05
+    lane_baseline_warmup_frames: 20
+    policy_enter_hold_sec: 0.30
+    policy_clear_hold_sec: 0.40
+    policy_pass_distance_m: 0.70
+    policy_target_rate_px_s: 260.0
+    policy_shift_speed_scale: 0.75
+    policy_return_tolerance_px: 12.0
+
+    # --- 라이다 구역 ---
+    # xycar_lidar 원시 0 rad 은 후방을 본다. pi 를 더해 0 = 정면으로 맞춘다.
+    lidar_angle_offset_rad: 3.141592653589793
+    lidar_front_half_deg: 18.0
+    lidar_side_minimum_deg: 12.0
+    lidar_side_maximum_deg: 75.0
+    lidar_minimum_range_m: 0.15
+    lidar_maximum_range_m: 6.0
+    lidar_minimum_hits: 5
+    lidar_confirm_distance_m: 1.60
+    lidar_maximum_age_sec: 0.50
+
+    # --- 조향과 속도 ---
     speed_mps: 0.50
     steering_sign: -1.0
     steering_kp: 0.42
