@@ -174,6 +174,7 @@ class TwinMixingCenterNode(Node):
         self.declare_parameter("lookahead_y_ratio", 0.67)
         self.declare_parameter("minimum_region_width_ratio", 0.12)
         self.declare_parameter("region_search_half_width_ratio", 0.40)
+        self.declare_parameter("region_fill_gap_ratio", 0.035)
         self.declare_parameter("minimum_confidence", 0.35)
 
         # 노란 중앙선 (1단계). 조명이 바뀌면 재빌드 없이 여기만 고친다.
@@ -273,6 +274,7 @@ class TwinMixingCenterNode(Node):
             region_search_half_width_ratio=float(
                 self._value("region_search_half_width_ratio")
             ),
+            region_fill_gap_ratio=float(self._value("region_fill_gap_ratio")),
         )
 
     def _build_yellow_config(self) -> YellowCenterConfig:
