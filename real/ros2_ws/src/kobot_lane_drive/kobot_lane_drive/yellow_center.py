@@ -75,8 +75,8 @@ class YellowCenterConfig:
     row_step: int = 4
 
     # 세로 사다리꼴. 아래는 넓고 위는 좁다. 화면 폭 대비 반폭 비율이다.
-    roi_bottom_half_width_ratio: float = 0.42
-    roi_top_half_width_ratio: float = 0.14
+    roi_bottom_half_width_ratio: float = 0.48
+    roi_top_half_width_ratio: float = 0.30
 
     # lane_mask 를 살짝 부풀려 색 마스크와 교차시킨다. 세그멘테이션 경계가 한두 픽셀
     # 어긋나도 노란 픽셀을 놓치지 않기 위해서다.
@@ -88,11 +88,14 @@ class YellowCenterConfig:
     minimum_run_pixels: int = 3
     minimum_rows: int = 8
 
-    # 후보 좌우에 주행 가능 영역을 요구하는 선택 조건. 노란 구조물을 배제할 수는
-    # 있지만, 한쪽 도로만 보이는 프레임에서도 중앙선은 따라가야 하므로 기본은 끈다.
-    require_road_on_both_sides: bool = False
+    # 후보가 도로에 붙어 있을 것을 요구한다. 도로 위에 그려진 선이거나(겹침),
+    # 두 주행영역 사이 틈에 있는 선이어야 한다. 벽의 나무 슬랫을 거르는 조건이다.
+    require_road_anchor: bool = True
     side_support_ratio: float = 0.02
     side_search_ratio: float = 0.10
+
+    # 예전 방식. 좌우 도로를 둘 다 요구하면 한쪽만 보이는 프레임에서 중앙선을 놓친다.
+    require_road_on_both_sides: bool = False
 
     ghost_maximum_frames: int = 20
     history_size: int = 10
@@ -220,14 +223,38 @@ def _has_road_on_both_sides(
     return left_road >= support_px and right_road >= support_px
 
 
+def _is_anchored_to_road(
+    driving_row: np.ndarray,
+    start: int,
+    end: int,
+    support_px: int,
+    search_px: int,
+) -> bool:
+    """후보가 도로에 붙어 있는가.
+
+    도로 위에 그려진 선이면 후보 픽셀이 주행영역과 겹친다. 두 주행영역 사이 틈에
+    있는 선이면 좌우 모두에 주행영역이 있다. 벽의 구조물은 둘 다 아니다.
+    """
+    if int(driving_row[start : end + 1].sum()) > 0:
+        return True
+    return _has_road_on_both_sides(driving_row, start, end, support_px, search_px)
+
+
 def extract_yellow_center(
     frame_bgr: np.ndarray,
     driving_mask: np.ndarray,
     lane_mask: np.ndarray | None,
     config: YellowCenterConfig | None = None,
     center_config: TwinMixingCenterConfig | None = None,
+    seed_x: float | None = None,
 ) -> tuple[CenterPathResult, np.ndarray]:
     """노란 중앙선 경로와 근거 마스크를 돌려준다.
+
+    seed_x 는 아래쪽 행 스캔을 시작할 x 다. 직전 프레임에서 확정한 경로의 바닥 x 를
+    넘기면 프레임 사이 연속성이 생긴다. 없으면 화면 중앙에서 시작한다.
+
+    매번 화면 중앙에서 시작하면, 곡선에서 중앙선이 중앙에서 멀어졌을 때 바닥 근처의
+    엉뚱한 노란 조각이 더 가깝다는 이유로 시작점이 되어 거기서부터 잘못 따라간다.
 
     실패하면 state="LOST" 인 결과를 준다. 호출자는 그때 센터 갭으로 내려간다.
     """
@@ -249,7 +276,7 @@ def extract_yellow_center(
     side_search = max(side_support * 2, int(round(width * config.side_search_ratio)))
     driving = driving_mask.astype(bool)
 
-    expected_x = width * 0.5
+    expected_x = width * 0.5 if seed_x is None else float(np.clip(seed_x, 0.0, width - 1.0))
     samples: list[tuple[float, float]] = []
     widths: list[float] = []
     for y in rows:
@@ -261,6 +288,10 @@ def extract_yellow_center(
             center = (start + end) * 0.5
             distance = abs(center - expected_x)
             if distance > search_half:
+                continue
+            if config.require_road_anchor and not _is_anchored_to_road(
+                driving[y], start, end, side_support, side_search
+            ):
                 continue
             if config.require_road_on_both_sides and not _has_road_on_both_sides(
                 driving[y], start, end, side_support, side_search

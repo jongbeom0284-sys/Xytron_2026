@@ -40,8 +40,8 @@ twinmixing_center_drive:
     # 노란선 전용 ROI. 세로는 y=240 부터, 가로는 화면 중앙 기준 사다리꼴이다.
     # 아래 42%, 위 14% 반폭. 먼 행일수록 좁게 봐서 벽과 바닥을 애초에 뺀다.
     yellow_roi_top_ratio: 0.50
-    yellow_roi_bottom_half_width_ratio: 0.42
-    yellow_roi_top_half_width_ratio: 0.14
+    yellow_roi_bottom_half_width_ratio: 0.48
+    yellow_roi_top_half_width_ratio: 0.30
     yellow_hue_low: 15
     yellow_hue_high: 45
     yellow_saturation_low: 55
@@ -56,6 +56,9 @@ twinmixing_center_drive:
     yellow_minimum_rows: 8
     # 선택 조건. 노란 배리어를 배제할 수 있지만 한쪽 도로만 보이는 프레임에서
     # 중앙선을 놓친다. 실측에서 검출률이 87% -> 31% 로 떨어져 기본은 끈다.
+    # 후보가 도로에 붙어 있을 것을 요구한다. 도로 위에 그려졌거나 두 주행영역 사이
+    # 틈에 있어야 한다. 벽의 나무 슬랫을 거르는 조건이다.
+    yellow_require_road_anchor: true
     yellow_require_road_on_both_sides: false
     yellow_side_support_ratio: 0.02
     yellow_side_search_ratio: 0.10

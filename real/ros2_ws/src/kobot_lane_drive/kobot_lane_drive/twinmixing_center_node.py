@@ -70,6 +70,15 @@ def _install_optional_thop_stub() -> None:
     sys.modules["thop"] = module
 
 
+def _path_bottom_x(result) -> float | None:
+    """맞춘 경로의 가장 아래쪽 x. 다음 프레임 스캔 시작점으로 쓴다."""
+    points = getattr(result, "fitted_points", None)
+    if points is None or len(points) < 2:
+        return None
+    bottom = int(points[:, 1].argmax())
+    return float(points[bottom, 0])
+
+
 class TwinMixingCenterNode(Node):
     """노란 중앙선 우선 주행 판단. 모터 publisher 없음."""
 
@@ -102,6 +111,7 @@ class TwinMixingCenterNode(Node):
         self._last_cross_error = 0.0
         self._last_tangent = 0.0
         self._last_normalized_error = 0.0
+        self._yellow_seed_x: float | None = None
         self._error_rate = 0.0
         self._last_valid_preview: tuple[float, float, float] | None = None
         self._fps = 0.0
@@ -173,8 +183,8 @@ class TwinMixingCenterNode(Node):
         self.declare_parameter("yellow_lab_minimum_b", 132.0)
         self.declare_parameter("yellow_lab_tophat_width_px", 81)
         self.declare_parameter("yellow_roi_top_ratio", 0.50)
-        self.declare_parameter("yellow_roi_bottom_half_width_ratio", 0.42)
-        self.declare_parameter("yellow_roi_top_half_width_ratio", 0.14)
+        self.declare_parameter("yellow_roi_bottom_half_width_ratio", 0.48)
+        self.declare_parameter("yellow_roi_top_half_width_ratio", 0.30)
         self.declare_parameter("yellow_hue_low", 15)
         self.declare_parameter("yellow_hue_high", 45)
         self.declare_parameter("yellow_saturation_low", 55)
@@ -187,6 +197,7 @@ class TwinMixingCenterNode(Node):
         self.declare_parameter("yellow_maximum_run_width_ratio", 0.22)
         self.declare_parameter("yellow_minimum_run_pixels", 3)
         self.declare_parameter("yellow_minimum_rows", 8)
+        self.declare_parameter("yellow_require_road_anchor", True)
         self.declare_parameter("yellow_require_road_on_both_sides", False)
         self.declare_parameter("yellow_side_support_ratio", 0.02)
         self.declare_parameter("yellow_side_search_ratio", 0.10)
@@ -291,6 +302,7 @@ class TwinMixingCenterNode(Node):
             maximum_run_width_ratio=float(self._value("yellow_maximum_run_width_ratio")),
             minimum_run_pixels=int(self._value("yellow_minimum_run_pixels")),
             minimum_rows=int(self._value("yellow_minimum_rows")),
+            require_road_anchor=bool(self._value("yellow_require_road_anchor")),
             require_road_on_both_sides=bool(
                 self._value("yellow_require_road_on_both_sides")
             ),
@@ -476,8 +488,14 @@ class TwinMixingCenterNode(Node):
 
         if bool(self.get_parameter("yellow_enabled").value):
             yellow_result, yellow_evidence = extract_yellow_center(
-                frame, driving, lane, self._yellow_config, self._config
+                frame,
+                driving,
+                lane,
+                self._yellow_config,
+                self._config,
+                seed_x=self._yellow_seed_x,
             )
+            self._yellow_seed_x = _path_bottom_x(yellow_result)
             tracked = self._yellow_tracker.update(yellow_result, frame.shape[1])
             if tracked.found and tracked.confidence >= minimum_yellow:
                 if tracked.path_source == YELLOW_SOURCE:
@@ -485,6 +503,7 @@ class TwinMixingCenterNode(Node):
                 ghost = tracked  # 실측 도로를 먼저 보고, 없을 때만 쓴다
         else:
             self._yellow_tracker.reset()
+            self._yellow_seed_x = None
 
         gap = extract_center_path(driving, lane, self._config)
         if gap.found and gap.confidence >= float(
