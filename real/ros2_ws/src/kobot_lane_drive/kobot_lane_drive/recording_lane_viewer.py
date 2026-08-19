@@ -19,6 +19,7 @@ from urllib.parse import parse_qs, urlparse
 import cv2
 import numpy as np
 
+from .geometry import move_towards as _move_towards
 from .twinmixing_center import TwinMixingCenterConfig, extract_center_path, letterbox, render_overlay, restore_mask
 
 SESSION_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -124,10 +125,6 @@ def _timestamps(session_path: Path, frames: list[Path]) -> list[float]:
                     pass
     base = frames[0].stat().st_mtime
     return [values.get(frame.name, base + i / 8.0) for i, frame in enumerate(frames)]
-
-
-def _move_towards(current: float, target: float, step: float) -> float:
-    return min(target, current + step) if target > current else max(target, current - step)
 
 
 def prepare_session(record_root: Path, session_name: str, torch, model, device: str) -> dict[str, object]:

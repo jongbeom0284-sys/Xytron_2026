@@ -1,15 +1,16 @@
 from pathlib import Path
 
 
-def test_sensor_launch_uses_white_left_and_never_starts_motor_bridge():
+def test_sensor_launch_uses_twinmixing_and_never_starts_motor_bridge():
     package_root = Path(__file__).parents[1]
     source = (package_root / "launch" / "sensors.launch.py").read_text(
         encoding="utf-8"
     )
 
     assert "lane_preview" not in source
-    assert "package='kobot_lane_drive', executable='white_left_drive'" in source
-    assert "white_left_drive_bridge" not in source
+    assert "package='kobot_lane_drive', executable='twinmixing_center_drive'" in source
+    assert "twinmixing_center_drive_bridge" not in source
+    assert "white_left" not in source
     assert "/xycar_motor" not in source
 
 

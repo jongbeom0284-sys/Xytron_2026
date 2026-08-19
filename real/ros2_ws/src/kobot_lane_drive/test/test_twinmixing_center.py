@@ -36,9 +36,19 @@ def test_extracts_middle_gap_between_two_drive_areas():
     assert result.confidence >= 0.35
 
 
-def test_rejects_single_unseparated_drive_area():
+def test_single_drive_area_falls_back_to_region_center():
+    """도로가 하나로만 인식되면 그 영역의 중앙을 따라간다 (우선순위 3단계)."""
     driving = np.zeros((480, 640), dtype=bool)
     driving[220:470, 80:560] = True
+    result = extract_center_path(driving)
+    assert result.found
+    assert result.path_source == "REGION_CENTER"
+    assert result.center_offset_px is not None
+    assert abs(result.center_offset_px) < 20
+
+
+def test_reports_lost_when_no_drive_area_exists():
+    driving = np.zeros((480, 640), dtype=bool)
     result = extract_center_path(driving)
     assert not result.found
     assert result.state == "LOST"
