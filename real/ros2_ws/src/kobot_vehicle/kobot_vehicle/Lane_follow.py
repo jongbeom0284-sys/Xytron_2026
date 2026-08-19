@@ -150,22 +150,22 @@ class TrackDriveNode(Node):
         self.obstacle_dir_pub = self.create_publisher(String, "/yolo/obstacle_dir", 10)
         
         # ======================================================================
-        # [HSV 차선 파라미터 (ROS2 파라미터 선언)]
+        # [HSV 차선 파라미터 (실측 튜닝값 반영)]
         # ======================================================================
-        # 1. 노란색 차선 HSV 파라미터 (실측 튜닝값)
-        self.declare_parameter('h_low', 15)
-        self.declare_parameter('h_high', 45)
-        self.declare_parameter('s_low', 40)
+        # 1. 노란색 차선 HSV 파라미터
+        self.declare_parameter('h_low', 39)
+        self.declare_parameter('h_high', 93)
+        self.declare_parameter('s_low', 0)
         self.declare_parameter('s_high', 255)
-        self.declare_parameter('v_low', 100)
+        self.declare_parameter('v_low', 34)
         self.declare_parameter('v_high', 255)
 
-        # 2. 흰색 차선 HSV 파라미터 (Fallback 및 회피 주행용)
-        self.declare_parameter('w_h_low', 0)
+        # 2. 흰색 차선 HSV 파라미터
+        self.declare_parameter('w_h_low', 85)
         self.declare_parameter('w_h_high', 180)
-        self.declare_parameter('w_s_low', 0)
-        self.declare_parameter('w_s_high', 80)
-        self.declare_parameter('w_v_low', 120)
+        self.declare_parameter('w_s_low', 115)
+        self.declare_parameter('w_s_high', 255)
+        self.declare_parameter('w_v_low', 75)
         self.declare_parameter('w_v_high', 255)
 
         if Config.PUBLISH_DEBUG:
@@ -180,20 +180,20 @@ class TrackDriveNode(Node):
                 cv2.namedWindow("Trackbars", cv2.WINDOW_NORMAL)
                 cv2.resizeWindow("Trackbars", 500, 500)
                 
-                # 노란색 차선 HSV 트랙바
-                cv2.createTrackbar("Y_H_MIN", "Trackbars", 15, 180, nothing)
-                cv2.createTrackbar("Y_H_MAX", "Trackbars", 45, 180, nothing)
-                cv2.createTrackbar("Y_S_MIN", "Trackbars", 40, 255, nothing)
+                # 노란색 차선 HSV 트랙바 (실측 튜닝값 적용)
+                cv2.createTrackbar("Y_H_MIN", "Trackbars", 39, 180, nothing)
+                cv2.createTrackbar("Y_H_MAX", "Trackbars", 93, 180, nothing)
+                cv2.createTrackbar("Y_S_MIN", "Trackbars", 0, 255, nothing)
                 cv2.createTrackbar("Y_S_MAX", "Trackbars", 255, 255, nothing)
-                cv2.createTrackbar("Y_V_MIN", "Trackbars", 100, 255, nothing)
+                cv2.createTrackbar("Y_V_MIN", "Trackbars", 34, 255, nothing)
                 cv2.createTrackbar("Y_V_MAX", "Trackbars", 255, 255, nothing)
                 
-                # 흰색 차선 HSV 트랙바
-                cv2.createTrackbar("W_H_MIN", "Trackbars", 0, 180, nothing)
+                # 흰색 차선 HSV 트랙바 (실측 튜닝값 적용)
+                cv2.createTrackbar("W_H_MIN", "Trackbars", 85, 180, nothing)
                 cv2.createTrackbar("W_H_MAX", "Trackbars", 180, 180, nothing)
-                cv2.createTrackbar("W_S_MIN", "Trackbars", 0, 255, nothing)
-                cv2.createTrackbar("W_S_MAX", "Trackbars", 80, 255, nothing)
-                cv2.createTrackbar("W_V_MIN", "Trackbars", 120, 255, nothing)
+                cv2.createTrackbar("W_S_MIN", "Trackbars", 115, 255, nothing)
+                cv2.createTrackbar("W_S_MAX", "Trackbars", 255, 255, nothing)
+                cv2.createTrackbar("W_V_MIN", "Trackbars", 75, 255, nothing)
                 cv2.createTrackbar("W_V_MAX", "Trackbars", 255, 255, nothing)
                 
                 self.gui_available = True

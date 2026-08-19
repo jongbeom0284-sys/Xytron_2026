@@ -279,8 +279,8 @@ cone_corridor_drive:
     cone_target_lookahead_m: 0.72           # 목표점 Lookahead 거리 (고속 안정화: 0.72m)
     cone_steering_gain: 1.8                 # 조향 추종 게인 (고속 언더스티어 원천 차단)
     cone_heading_gain: 0.18                 # 코너 벽면 곡률 피드포워드 게인
-    cone_drive_speed_mps: 0.65              # B안 최고 직선 속도 (0.65 m/s, 약 8.1 단위)
-    cone_corner_speed_mps: 0.45             # B안 최고 코너 속도 (0.45 m/s, 약 5.6 단위)
+    cone_drive_speed_mps: 0.70              # 최고 직선 속도 (0.70 m/s, 약 8.8 단위)
+    cone_corner_speed_mps: 0.55             # 최고 코너 속도 (0.55 m/s, 약 6.9 단위)
     cone_detection_min_slices: 1            # 유효 슬라이스 최소 개수 (단일 슬라이스 지속 추종)
     cone_detection_min_total_points: 2      # 라바콘 감지 인정 최소 점수
     cone_steering_filter_alpha: 0.70        # 조향 저역통과 필터 (고속 즉각 반응)
@@ -297,7 +297,7 @@ twinmixing_center_drive_bridge:
     enable_topic: /kobot_lane_drive/record_drive/enabled
     # 인식이나 상태가 이만큼 끊기면 0 을 보낸다.
     command_timeout_sec: 0.30
-    max_speed_mps: 0.70
+    max_speed_mps: 0.75
     max_steering_rad: 0.476
     # /xycar_motor 형식으로 바꾸는 계수. legacy 각 = -조향rad / angle_scale
     angle_scale: 0.0068
