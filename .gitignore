@@ -7,7 +7,9 @@ Thumbs.db
 **/install/
 **/log/
 **/.venv/
-real/models/*.pth
+# 모델 가중치는 커밋하지 않는다 (TwinMixing large.pth 는 6MB 라 예외로 포함)
+*.pth
+!**/third_party/TwinMixing/pretrained/*.pth
 **/third_party/CLRerNet/dataset/
 **/third_party/CLRerNet/**/*.so
 **/third_party/CLRerNet/**/*.egg-info/
