@@ -57,7 +57,21 @@ ros2 launch kobot_vehicle teleop.launch.py armed:=true # 센서 재사용 + 모�
 
 웹 대시보드(`:8000`)의 `기록 주행` 패널에서 속도와 **장애물 회피 허용** 여부를
 고르고 시작한다. 회피는 기본 꺼짐이다. 중앙선 추종부터 확인한 뒤 켠다.
-절차는 [docs/OPERATIONS.md](docs/OPERATIONS.md) 7절.
+절차는 [docs/OPERATIONS.md](docs/OPERATIONS.md) 8절.
+
+## 카메라 설정이 먼저다
+
+중앙선을 **색으로** 고르기 때문에 카메라 설정이 틀리면 인식이 통째로 틀어진다.
+주행 전에 확인한다.
+
+```bash
+v4l2-ctl -d /dev/videoCAM --get-ctrl=white_balance_temperature,exposure_time_absolute,brightness
+```
+
+화이트밸런스 **2800**, 노출 40, 밝기 0 이어야 한다. 값의 출처는
+`kobot_vehicle/config/camera.yaml` 하나이고, `sensors.launch.py` 가 기동 8초 뒤
+`v4l2-ctl` 로 장치에 직접 쓴다 (`usb_cam` 은 파라미터를 읽기만 하고 장치에 쓰지 않는다).
+자세한 내용은 [docs/OPERATIONS.md](docs/OPERATIONS.md) 5절.
 
 ## 차 없이 검증하기
 
@@ -77,6 +91,7 @@ ros2 run kobot_lane_drive recording_lane_viewer --prepare-session <세션> --pre
 | [OPERATIONS.md](docs/OPERATIONS.md) | 빌드·검증·테스트 주행 절차 |
 | [HARDWARE_AND_VESC.md](docs/HARDWARE_AND_VESC.md) | 하드웨어와 VESC 기준값 |
 | [PROVENANCE.md](docs/PROVENANCE.md) | 외부 원본과 우리가 고친 범위 |
+| [RACE_STRATEGY.md](docs/RACE_STRATEGY.md) | 대회 전략과 성능 목표 |
 
 > 경고: 대시보드의 모터 HTTP API 에는 인증이 없다. 신뢰된 로컬망이나 Tailscale
 > 안에서만 쓰고 인터넷에 직접 공개하지 않는다.

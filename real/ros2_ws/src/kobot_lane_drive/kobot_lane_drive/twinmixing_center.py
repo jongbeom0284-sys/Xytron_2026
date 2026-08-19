@@ -1,3 +1,23 @@
+"""TwinMixing 마스크에서 따라갈 선 하나를 뽑는다 — 주행 우선순위 2·3단계.
+
+노란 중앙선(yellow_center.py)이 실패했을 때 쓰는 폴백 두 가지가 여기 있다.
+
+  2단계 CENTER_GAP     주행 가능 영역이 두 덩이로 갈렸을 때 그 사이 틈의 중앙
+  3단계 REGION_CENTER  덩이가 하나뿐이면 그 덩이의 중앙
+
+행 단위로 후보 x 를 모은 뒤 `_robust_polyfit` 으로 2차 곡선을 맞춘다. MAD 기반
+이상치 제거가 들어 있어 몇 행이 튀어도 선이 끌려가지 않는다. 이 피팅기는
+yellow_center.py 도 그대로 재사용한다.
+
+`fill_narrow_gaps` 는 3단계 **직전에만** 부른다. 중앙선 자국이 도로를 두 조각으로
+가르면 REGION_CENTER 가 넓은 쪽 하나만 골라 중앙이 크게 치우치기 때문인데,
+센터 갭 판정이 끝나기 전에 부르면 진짜로 갈라진 도로까지 메워 버린다.
+
+`render_overlay` 는 웹 화면을 그린다. 판단에는 관여하지 않는다.
+
+ROS 에 의존하지 않는다. 입력은 numpy 배열, 출력은 CenterPathResult 다.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -310,41 +330,6 @@ def extract_center_path(
         region_lane_supported += int(lane[y, max(0, int(center) - 5):min(width, int(center) + 6)].any())
         expected_x = 0.72 * expected_x + 0.28 * center
     return _fit_path(region_samples, region_widths, region_lane_supported, attempted_rows, width, height, config, "REGION_CENTER")
-
-
-def _lane_side_masks(
-    driving: np.ndarray, fitted_points: np.ndarray
-) -> tuple[np.ndarray, np.ndarray]:
-    """중앙선을 기준으로 주행 영역을 좌/우 차선으로 가른다 (화면 표시용)."""
-    height, width = driving.shape
-    center_x = np.full(height, np.nan, dtype=np.float64)
-    if fitted_points is not None and len(fitted_points) >= 2:
-        ys = np.clip(fitted_points[:, 1].astype(int), 0, height - 1)
-        center_x[ys] = fitted_points[:, 0]
-        known = np.flatnonzero(~np.isnan(center_x))
-        if known.size >= 2:
-            rows = np.arange(height)
-            center_x = np.interp(rows, known, center_x[known], left=np.nan, right=np.nan)
-    valid = ~np.isnan(center_x)
-    if not valid.any():
-        empty = np.zeros_like(driving)
-        return empty, empty
-    columns = np.arange(width)[None, :]
-    boundary = np.where(valid, center_x, -1.0)[:, None]
-    inside = valid[:, None]
-    left = driving & inside & (columns < boundary)
-    right = driving & inside & (columns > boundary)
-    return left, right
-
-
-def _tint(overlay: np.ndarray, mask: np.ndarray, colour, strength: float) -> None:
-    if not np.any(mask):
-        return
-    layer = np.zeros_like(overlay)
-    layer[:] = colour
-    overlay[mask] = cv2.addWeighted(
-        overlay[mask], 1.0 - strength, layer[mask], strength, 0
-    )
 
 
 def _lane_side_masks(

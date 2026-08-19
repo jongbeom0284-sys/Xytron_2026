@@ -84,22 +84,56 @@ status_node → /kobot/status → dashboard 장치 상태
 | 변환 | `/ackermann_cmd` | Ackermann 명령 |
 | VESC 출력 | `/commands/motor/speed`, `/commands/servo/position` | ERPM, servo position |
 
-### 차선 상태 JSON 주요 필드
+### 차선 상태 JSON 필드
+
+**무엇을 봤나**
 
 | 필드 | 뜻 |
 |---|---|
 | `path_source` | `YELLOW_LINE` / `YELLOW_LINE_GHOST` / `CENTER_GAP` / `REGION_CENTER` / `NONE` |
-| `mode` | `TRACKING` / `HOLD_LAST` / `WAITING` / `ERROR` |
+| `state`, `mode` | `TRACKING` / `HOLD_LAST` / `WAITING` / `ERROR` |
+| `confidence` | 목표선 신뢰도 0~1 |
+| `center_offset_px` | 목표선의 화면 중앙 대비 오차 |
+| `lookahead_x_px`, `lookahead_y_px` | 조향 기준점. 오차는 **이 점**에서 잰다 |
+| `heading_deg` | 목표선의 화면상 방향 |
+| `center_gap_width_px` | 두 주행영역 사이 틈의 평균 폭 |
+| `lane_support_ratio` | 목표선이 `lane_mask` 위에 놓인 비율 |
+| `path_points` | 피팅에 쓰인 행 수 |
+| `ghost_frames` | 노란선 외삽 연속 프레임 수. 0 이면 지금 실제로 보고 있다 |
+
+**어떻게 판단했나**
+
+| 필드 | 뜻 |
+|---|---|
 | `drive_line` | `CENTER` / `SHIFT_LEFT` / `SHIFT_RIGHT` / `RETURNING` |
 | `blocked_side` | `left` / `right` / `null` |
 | `target_x_px` | 레이트 리밋을 거친 최종 목표 x |
-| `center_offset_px` | 중앙선 자체의 화면 중앙 대비 오차 |
+| `speed_scale` | 상태별 속도 배율 (`SHIFT`·`RETURNING` 은 0.75) |
 | `left_lane_width_px`, `right_lane_width_px` | 좌우 차선 평균 폭 |
 | `narrow_side` | 카메라가 좁다고 본 쪽 |
-| `lidar_left_m`, `lidar_front_m`, `lidar_right_m` | 코리도 안 최근접 전방 거리 |
-| `ghost_frames` | 노란선 외삽 연속 프레임 수 |
+| `lidar_front_m`, `lidar_left_m`, `lidar_right_m` | 코리도 안 최근접 거리 |
 | `maneuvers_enabled` | 회피 허용 여부 |
+
+**얼마나 꺾었나** — 조향이 왜 그 값이 됐는지 되짚을 때 쓰는 필드다.
+텔레메트리 CSV 에도 같은 이름으로 기록된다.
+
+| 필드 | 뜻 |
+|---|---|
+| `cross_error_px` | 제어에 실제로 들어간 가로 오차 (P 항의 입력) |
+| `error_rate` | 그 오차의 시간 변화율 (D 항의 입력) |
+| `steering_deadband_px` | 이 값 안쪽 오차는 0 으로 죽인다 |
+| `lane_tangent_deg` | 화면상 차선 기울기. **표시·진단 전용, 제어에 안 쓴다** |
+| `steering_rad` | 최종 조향 |
+| `speed_mps` | 최종 속도 |
+
+**얼마나 빨랐나**
+
+| 필드 | 뜻 |
+|---|---|
+| `inference_ms`, `inference_fps` | 모델 추론 시간과 실효 주기 |
+| `device`, `runtime` | `cuda` / `pytorch_cuda_fp16` |
 | `motor_output` | 항상 `false` (이 노드는 모터를 발행하지 않는다) |
+| `reason` | 사람이 읽는 한 줄 사유 |
 
 ## HTTP API
 

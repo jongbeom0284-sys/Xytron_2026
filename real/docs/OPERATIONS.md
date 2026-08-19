@@ -35,7 +35,7 @@ real/scripts/build_jetson.sh --packages-select kobot_lane_drive
 
 ```bash
 source /opt/ros/humble/setup.bash
-cd real/ros2_ws/src/kobot_lane_drive && python3 -m pytest test -q   # 37개
+cd real/ros2_ws/src/kobot_lane_drive && python3 -m pytest test -q   # 54개
 cd ../kobot_vehicle             && python3 -m pytest test -q        # 21개
 ```
 
@@ -74,12 +74,45 @@ ros2 launch kobot_vehicle sensors.launch.py # 서비스를 쓰지 않을 때만
 센서 서비스가 실행 중일 때 같은 launch 를 또 띄우면 카메라와 직렬 장치를
 중복 점유한다. 금지한다.
 
-## 5. 무모터 인식 확인
+## 5. 카메라 설정 — 인식의 전제
+
+이 차는 **색으로** 중앙선을 고른다. 카메라 설정이 틀리면 그 아래 인식·판단·조향이
+전부 같이 틀어진다. 주행 전에 반드시 확인한다.
+
+```bash
+v4l2-ctl -d /dev/videoCAM --get-ctrl=white_balance_temperature,exposure_time_absolute,brightness,auto_exposure,white_balance_automatic
+```
+
+기대값:
+
+| 항목 | 값 | 확인 |
+|---|---|---|
+| `white_balance_temperature` | **2800** | 이보다 높으면 화면이 초록으로 뜬다 |
+| `white_balance_automatic` | 0 | 켜져 있으면 프레임마다 색이 흔들린다 |
+| `exposure_time_absolute` | 40 | |
+| `auto_exposure` | 1 (수동) | 3 이면 자동. 흰 바닥에 물려 화면이 날아간다 |
+| `brightness` | 0 | 50 이면 화면이 완전히 날아간다 |
+
+**값의 출처는 `kobot_vehicle/config/camera.yaml` 하나다.** `usb_cam` 은 이 값들을
+ROS 파라미터로 읽기만 하고 장치에는 쓰지 않기 때문에, `sensors.launch.py` 가
+노드 기동 8초 뒤 같은 값을 `v4l2-ctl` 로 한 번 더 건다. 값을 바꾸려면 yaml 을 고치고
+센서 서비스를 재시작한다 — 코드를 고칠 필요 없다.
+
+```bash
+sudo systemctl restart kobot-sensors.service   # 차선 화면이 20~30초 끊긴다
+```
+
+**대회장에서 조명이 다르면 다시 맞춘다.** `camera_tuner.html`(:8000) 로 손으로
+바꿔 보거나, 전 조합을 찍어 눈으로 고른다. 수치가 아니라 **노란 마스크를 원본 위에
+겹쳐** 보고, 마스크가 중앙선 위에만 얹혔는지로 판단한다. 마스크가 차체나 노면으로
+번지면 그 조합은 탈락이다.
+
+## 6. 무모터 인식 확인
 
 대시보드(`http://100.95.40.26:8000`)의 차선 카드에서 확인한다.
 
 - **인식 상태** — `노란 중앙선` 이 기본이어야 한다. `센터 갭`/`영역 중앙` 이
-  계속 나오면 노란색 HSV 임계나 카메라 노출을 다시 맞춘다.
+  계속 나오면 **먼저 카메라 설정(§5)** 을 확인하고, 그 다음 `yellow_lab_margin` 을 본다.
 - **주행 라인** — `중앙선 · 2차선 중앙` + 라이다 세 방향 거리
 - 오버레이 색: 노랑 = 중앙선, 주황 = 왼쪽 차선, 보라 = 오른쪽 차선,
   하늘색 = 예정 경로, 빨간 십자 = 목표점
@@ -90,7 +123,7 @@ ros2 launch kobot_vehicle sensors.launch.py # 서비스를 쓰지 않을 때만
 ros2 topic echo --once /kobot_lane_drive/twinmixing_center/status
 ```
 
-## 6. 차 없이 검증하기 — 녹화 재생
+## 7. 차 없이 검증하기 — 녹화 재생
 
 실차를 세워 두고 지난 주행 영상에 현재 인식 코드를 그대로 돌릴 수 있다.
 
@@ -107,7 +140,7 @@ ros2 run kobot_lane_drive recording_lane_viewer --prepare-session <세션이름>
 `path_source` 분포로 노란선 검출률을, `narrow_side` 로 오검출 경향을 본다.
 녹화에는 라이다가 없으므로 회피 판정은 이 방법으로 검증되지 않는다.
 
-## 7. 테스트 주행
+## 8. 테스트 주행
 
 웹 `기록 주행` 패널에서 시작한다. 서버가
 `twinmixing_center_record_drive.launch.py armed:=true start_perception:=false` 를
@@ -146,7 +179,7 @@ ros2 launch kobot_lane_drive twinmixing_center_record_drive.launch.py armed:=fal
 `/xycar_motor` publisher, `/dev/ttyMOTOR` 점유, 조향 부호를 다시 확인하고
 별도 승인을 받는다.
 
-## 8. 웹 확인 항목
+## 9. 웹 확인 항목
 
 - 속도 안내 최대값과 input `max` 가 `2.16 m/s` 로 일치
 - WASD keydown 동안 `/xycar_motor` 20 Hz 지속 발행
@@ -157,7 +190,7 @@ ros2 launch kobot_lane_drive twinmixing_center_record_drive.launch.py armed:=fal
 - 구성요소 재시작은 녹화·기록 주행·시간 주행 중에는 거부된다
 - 모터 API 에 인증이 없다. 인터넷에 직접 노출하지 않는다
 
-## 9. 실제 모터 시험
+## 10. 실제 모터 시험
 
 문서만으로 승인되지 않는다. 실행 전 명시적 승인을 다시 받는다.
 
@@ -171,7 +204,7 @@ ros2 launch kobot_lane_drive twinmixing_center_record_drive.launch.py armed:=fal
 
 `motor.launch.py` 의 `armed:=false` 기본값을 바꾸지 않는다.
 
-## 10. systemd 와 udev
+## 11. systemd 와 udev
 
 `real/system/` 은 설치 예제다. checkout 만으로 복사·enable·start 되지 않는다.
 실제 경로와 사용자·그룹을 검토한 뒤 승인받아 설치한다.
@@ -179,6 +212,18 @@ ros2 launch kobot_lane_drive twinmixing_center_record_drive.launch.py armed:=fal
 `real/system/sudoers/kobot-sensors` 는 `/etc/sudoers.d/kobot-sensors` 에
 root 소유·`0440` 으로 설치하고 `visudo -cf` 로 검사한다. 이 규칙은
 `kobot-sensors.service` 의 start/stop/restart 만 허용한다.
+
+## 문제 해결
+
+| 증상 | 원인 | 조치 |
+|---|---|---|
+| `/dev/ttyMOTOR` 없음 | 모터 전원 스위치 꺼짐 | 고장이 아니다. 스위치를 켜고 재무장 |
+| 차선 화면이 20~30초 검게 | 센서 서비스 재시작 후 CUDA 모델 로딩 | 기다린다. 재시작할 거면 **미리 알린다** |
+| 상태가 계속 `센터 갭`/`영역 중앙` | 노란선 미검출 | 먼저 §5 카메라 값부터 확인. 그 다음 `yellow_lab_margin` |
+| 화면 전체가 초록빛 | 화이트밸런스가 2800 이 아님 | §5 |
+| 목표선이 도로 밖 나무 기둥 위 | 도로 거리 필터가 느슨 | `yellow_maximum_road_distance_ratio` 를 줄인다 |
+| 인식 노드가 살아 있는데 `status` 발행 0, CPU ~4% | **GPU 무거운 재생·스윕 스크립트를 돌린 직후 3회 재현.** 두 번째 CUDA 모델 적재와 충돌하는 것으로 보인다 (원인 미확정) | `sudo systemctl restart kobot-sensors.service`. 주행 중에는 GPU 스크립트를 돌리지 않는다 |
+| 라이다 거리가 전부 `null` | 각도 보정 틀어짐 | `lidar_angle_offset_rad` 는 실측값 `-2.1217`. 라이다를 다시 장착했다면 재실측 |
 
 ## 롤백
 
