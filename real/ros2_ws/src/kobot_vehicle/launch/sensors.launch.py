@@ -1,10 +1,38 @@
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, SetEnvironmentVariable
+from launch.actions import (
+    DeclareLaunchArgument,
+    ExecuteProcess,
+    SetEnvironmentVariable,
+    TimerAction,
+)
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 import os
+
+import yaml
+
+
+def camera_control_command(config_dir):
+    """usb_cam 이 장치에 쓰지 못하는 v4l2 제어를 직접 건다.
+
+    usb_cam 은 camera.yaml 의 brightness/autoexposure/exposure 를 ROS 파라미터로는
+    읽지만 실제 장치에는 쓰지 않는다. 2026-08-19 재부팅 후 확인: 파라미터는
+    autoexposure=False, exposure=40 인데 장치는 auto_exposure=3(자동),
+    exposure_time_absolute=157 이었다. 그래서 노드가 뜬 뒤 같은 값을 한 번 더 건다.
+
+    값의 출처는 camera.yaml 하나로 유지한다. 여기에 숫자를 새로 박지 않는다.
+    """
+    with open(os.path.join(config_dir, 'camera.yaml'), encoding='utf-8') as handle:
+        params = yaml.safe_load(handle)['/**']['ros__parameters']
+    device = params.get('video_device', '/dev/videoCAM')
+    controls = ','.join([
+        'brightness=%d' % int(params.get('brightness', 0)),
+        'auto_exposure=%s' % ('3' if params.get('autoexposure', True) else '1'),
+        'exposure_time_absolute=%d' % int(params.get('exposure', 157)),
+    ])
+    return ['v4l2-ctl', '-d', device, '--set-ctrl', controls]
 
 
 def generate_launch_description():
@@ -47,4 +75,9 @@ def generate_launch_description():
         Node(package='rosbridge_server', executable='rosbridge_websocket',
              parameters=[{'port': 9090}]),
         Node(package='kobot_vehicle', executable='dashboard_server', output='screen'),
+        TimerAction(
+            period=8.0,
+            actions=[ExecuteProcess(cmd=camera_control_command(config), output='screen')],
+            condition=IfCondition(camera),
+        ),
     ])
