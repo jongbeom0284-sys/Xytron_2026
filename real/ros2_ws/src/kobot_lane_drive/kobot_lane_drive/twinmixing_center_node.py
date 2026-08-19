@@ -206,7 +206,7 @@ class TwinMixingCenterNode(Node):
         self.declare_parameter("yellow_ghost_maximum_seconds", 1.0)
         self.declare_parameter("yellow_ghost_maximum_frames", 30)
         self.declare_parameter("yellow_history_size", 10)
-        self.declare_parameter("yellow_minimum_confidence", 0.30)
+        self.declare_parameter("yellow_minimum_confidence", 0.35)
 
         # 차선 점유와 회피
         self.declare_parameter("maneuvers_enabled", False)
@@ -280,7 +280,18 @@ class TwinMixingCenterNode(Node):
         )
 
     def _build_yellow_config(self) -> YellowCenterConfig:
+        # 노란선 채택 임계는 주행 게이트(minimum_confidence)보다 낮을 수 없다.
+        # 낮으면 그 사이 신뢰도의 검출이 "채택은 됐는데 주행엔 못 쓰는" 상태가 되어
+        # 유지 타이머만 초기화하고 차는 HOLD_LAST 로 굳는다.
+        yellow_minimum = float(self._value("yellow_minimum_confidence"))
+        drive_minimum = float(self._value("minimum_confidence"))
+        if yellow_minimum < drive_minimum:
+            self.get_logger().warning(
+                f"yellow_minimum_confidence {yellow_minimum:.2f} < minimum_confidence "
+                f"{drive_minimum:.2f}: 노란선 채택 임계를 {drive_minimum:.2f} 로 올려 쓴다"
+            )
         return YellowCenterConfig(
+            minimum_confidence=max(yellow_minimum, drive_minimum),
             detector=str(self._value("yellow_detector")),
             lab_margin=float(self._value("yellow_lab_margin")),
             lab_minimum_b=float(self._value("yellow_lab_minimum_b")),
@@ -494,12 +505,12 @@ class TwinMixingCenterNode(Node):
         노란선의 대안이 아니라 그냥 잡음이고, 거기로 한 프레임 튀었다가 다음
         프레임에 노란선으로 돌아오면 조향이 그만큼 흔들린다. 그래서 유지가 먼저다.
 
-        유지 구간에서는 신뢰도로 다시 거르지 않는다. 직전에 쓰던 목표를 그대로
-        이어 가는 것이 목적이라 판단 기준은 "얼마나 오래됐나" 하나뿐이다.
-        한도를 넘기면 트래커가 스스로 포기하고(found=False) 도로로 내려간다.
+        신뢰도 판정은 트래커 한 곳에서만 한다. 임계 미만의 약한 검출은 트래커가
+        못 본 것으로 흘려보내므로(타이머·기준선 불변) 여기서 다시 거를 것이 없다.
+        유지본도 마찬가지 — 판단 기준은 "얼마나 오래됐나" 하나뿐이고, 한도를
+        넘기면 트래커가 스스로 포기하고(found=False) 도로로 내려간다.
         """
         yellow_evidence = None
-        minimum_yellow = float(self.get_parameter("yellow_minimum_confidence").value)
 
         if bool(self.get_parameter("yellow_enabled").value):
             yellow_result, yellow_evidence = extract_yellow_center(
@@ -510,14 +521,16 @@ class TwinMixingCenterNode(Node):
                 self._config,
                 seed_x=self._yellow_seed_x,
             )
-            self._yellow_seed_x = _path_bottom_x(yellow_result)
             tracked = self._yellow_tracker.update(yellow_result, frame.shape[1], now)
+            # 다음 프레임 스캔 시작점은 실제로 채택된 노란선에서만 잇는다.
+            # 약한 검출에서 이으면 엉뚱한 노란 조각이 다음 스캔을 끌고 간다.
+            self._yellow_seed_x = (
+                _path_bottom_x(tracked)
+                if tracked.found and tracked.path_source == YELLOW_SOURCE
+                else None
+            )
             if tracked.found:
-                if tracked.path_source == YELLOW_SOURCE:
-                    if tracked.confidence >= minimum_yellow:
-                        return tracked, yellow_evidence
-                else:
-                    return tracked, yellow_evidence
+                return tracked, yellow_evidence
         else:
             self._yellow_tracker.reset()
             self._yellow_seed_x = None
