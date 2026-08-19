@@ -149,8 +149,10 @@ def test_candidate_must_be_anchored_to_the_road():
             lane[y, x0:x1] = True
         return frame, driving, lane
 
-    anchored = YellowCenterConfig(detector=HSV_ABSOLUTE)
-    assert anchored.require_road_anchor
+    # 기본은 꺼짐. 216 번의 나무 기둥은 막았지만 1 번에서 진짜 중앙선까지 걷어냈다.
+    # 중앙선이 주행영역 가장자리 바로 바깥에 놓이면 나무와 기하학적으로 구분되지 않는다.
+    assert not YellowCenterConfig().require_road_anchor
+    anchored = YellowCenterConfig(detector=HSV_ABSOLUTE, require_road_anchor=True)
 
     # 도로 밖의 노란 구조물은 걸러진다
     assert not extract_yellow_center(*scene("off_road"), anchored, CENTER_CONFIG)[0].found

@@ -198,7 +198,7 @@ class TwinMixingCenterNode(Node):
         self.declare_parameter("yellow_maximum_run_width_ratio", 0.22)
         self.declare_parameter("yellow_minimum_run_pixels", 3)
         self.declare_parameter("yellow_minimum_rows", 8)
-        self.declare_parameter("yellow_require_road_anchor", True)
+        self.declare_parameter("yellow_require_road_anchor", False)
         self.declare_parameter("yellow_require_road_on_both_sides", False)
         self.declare_parameter("yellow_side_support_ratio", 0.02)
         self.declare_parameter("yellow_side_search_ratio", 0.10)
