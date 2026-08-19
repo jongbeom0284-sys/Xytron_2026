@@ -112,17 +112,22 @@ twinmixing_center_drive:
     steering_kp: 0.42
     # 4.0 은 오차 91px 만에 최대 조향에 닿아 오버슈트를 키웠다. 절반으로 낮추고
     # 부족한 반응은 차선 기울기 항이 메운다.
-    steering_output_gain: 2.0
+    # 12:23 주행에서 오차 119px 에 legacy 54(최대 70의 77%)까지 갔다. 더 낮춘다.
+    steering_output_gain: 1.4
     # 가로오차의 시간 미분. 중앙에 닿기 전에 조향을 풀어 S 자 진동을 없앤다.
     # 화면 속 차선 기울기는 쓰지 않는다. 원근 때문에 나란히 선 차도 기울기가 음수로
     # 나와 가로오차와 반대로 작용하고, 실제로 조향 부호를 뒤집은 적이 있다.
-    steering_kd: 0.35
+    # 미분이 비례의 절반도 안 돼 복귀 중에도 조향이 안 풀렸다. 크게 올린다.
+    steering_kd: 0.9
     steering_rate_filter_alpha: 0.30
+    # 중앙 여유 구간. 차선 반폭 250px 기준 10%. 이 안에서는 조향하지 않는다.
+    steering_deadband_px: 25.0
     # 가로오차를 재는 행. 차 바로 앞이라야 실제 이탈량이 된다.
     steering_near_y_ratio: 0.76
     # 경로가 이보다 짧으면 기울기를 믿지 않고 가로오차만 쓴다 (화면 높이 대비)
     steering_minimum_span_ratio: 0.06
-    steering_filter_alpha: 0.35
+    # 저역통과가 느려 조향이 오차보다 늦게 따라왔다. 지연을 줄인다.
+    steering_filter_alpha: 0.55
     max_steering_rad: 0.476
     max_steering_rate_rad_s: 1.20
 

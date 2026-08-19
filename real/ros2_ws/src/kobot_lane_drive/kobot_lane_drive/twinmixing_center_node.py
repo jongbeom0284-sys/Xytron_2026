@@ -232,13 +232,14 @@ class TwinMixingCenterNode(Node):
         self.declare_parameter("steering_kp", 0.42)
         # 4.0 은 오차 91px 만에 최대 조향에 닿아 오버슈트를 키웠다. 절반으로 낮추고
         # 부족한 반응은 차선 기울기 항이 메운다.
-        self.declare_parameter("steering_output_gain", 2.0)
+        self.declare_parameter("steering_output_gain", 1.4)
         # 화면 기울기 항은 쓰지 않는다. 원근이 섞여 가로오차와 반대로 작용했다.
-        self.declare_parameter("steering_kd", 0.35)
+        self.declare_parameter("steering_kd", 0.9)
+        self.declare_parameter("steering_deadband_px", 25.0)
         self.declare_parameter("steering_rate_filter_alpha", 0.30)
         self.declare_parameter("steering_near_y_ratio", 0.76)
         self.declare_parameter("steering_minimum_span_ratio", 0.06)
-        self.declare_parameter("steering_filter_alpha", 0.35)
+        self.declare_parameter("steering_filter_alpha", 0.55)
         self.declare_parameter("max_steering_rad", 0.476)
         self.declare_parameter("max_steering_rate_rad_s", 1.20)
 
@@ -436,7 +437,11 @@ class TwinMixingCenterNode(Node):
             0.001, min(0.20, now - self._last_control_at)
         )
         self._last_control_at = now
-        normalized_error = cross_error_px / max(1.0, width * 0.5)
+        # 중앙 여유 구간. 딱 끊으면 경계에서 튀므로 초과분만 남긴다.
+        deadband = float(self.get_parameter("steering_deadband_px").value)
+        magnitude = max(0.0, abs(cross_error_px) - deadband)
+        effective_error = magnitude if cross_error_px >= 0.0 else -magnitude
+        normalized_error = effective_error / max(1.0, width * 0.5)
 
         raw_rate = (normalized_error - self._last_normalized_error) / dt
         self._last_normalized_error = normalized_error
@@ -636,6 +641,9 @@ class TwinMixingCenterNode(Node):
             "cross_error_px": rounded(self._last_cross_error),
             "lane_tangent_deg": rounded(math.degrees(self._last_tangent)),
             "error_rate": rounded(self._error_rate, 3),
+            "steering_deadband_px": float(
+                self.get_parameter("steering_deadband_px").value
+            ),
             "steering_rad": round(float(steering), 5),
             "speed_mps": round(float(preview[1]), 3),
             "inference_ms": round(inference_ms, 2),
