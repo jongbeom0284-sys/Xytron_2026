@@ -3,7 +3,10 @@
 import numpy as np
 import pytest
 
-from kobot_lane_drive.twinmixing_center import TwinMixingCenterConfig
+from kobot_lane_drive.twinmixing_center import (
+    TwinMixingCenterConfig,
+    extract_center_path,
+)
 from kobot_lane_drive.yellow_center import (
     GHOST_SOURCE,
     HSV_ABSOLUTE,
@@ -207,3 +210,37 @@ def test_lab_relative_reports_lost_without_a_line():
         frame, driving, lane, YellowCenterConfig(detector=LAB_RELATIVE), CENTER_CONFIG
     )
     assert not result.found
+
+
+def test_ghost_never_outranks_a_real_road_measurement():
+    """외삽본은 실측이 없을 때만 쓴다.
+
+    12:23 주행 231 번에서 인식 구간의 97% 가 어두워 노란선을 못 봤는데도, 도로가
+    보이는 상태에서 3 프레임 전 잔상을 계속 따라갔다. 외삽 신뢰도가 20 프레임에
+    걸쳐 떨어지므로 최대 1.3 초까지 실측 도로를 무시했다.
+
+    노드의 선택 로직을 그대로 흉내 내 순서를 검증한다.
+    """
+    frame, driving, lane = _scene(center_shift=40)
+    config = YellowCenterConfig(detector=HSV_ABSOLUTE)
+    valid, _ = extract_yellow_center(frame, driving, lane, config, CENTER_CONFIG)
+    assert valid.found
+
+    tracker = YellowCenterTracker(config)
+    tracker.update(valid, WIDTH)
+
+    blank_frame, blank_driving, blank_lane = _scene(paint_yellow=False)
+    lost, _ = extract_yellow_center(
+        blank_frame, blank_driving, blank_lane, config, CENTER_CONFIG
+    )
+    ghost = tracker.update(lost, WIDTH)
+    assert ghost.path_source == GHOST_SOURCE
+    assert ghost.confidence >= 0.30, "외삽본이 임계 위에 있어야 이 상황이 재현된다"
+
+    # 노드와 같은 순서: 실측 노란선이 아니면 도로를 먼저 본다
+    road = extract_center_path(blank_driving, blank_lane, CENTER_CONFIG)
+    assert road.found, "이 장면에서는 도로가 보인다"
+
+    chosen = ghost if ghost.path_source == YELLOW_SOURCE else road
+    assert chosen.path_source != GHOST_SOURCE
+    assert chosen.path_source in ("CENTER_GAP", "REGION_CENTER")

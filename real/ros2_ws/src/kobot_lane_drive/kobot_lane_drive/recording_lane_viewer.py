@@ -23,7 +23,7 @@ from .geometry import move_towards as _move_towards
 from .lane_policy import EMPTY_OCCUPANCY, LanePolicyConfig, measure_lanes
 from .obstacle_lidar import EMPTY_SECTORS
 from .twinmixing_center import TwinMixingCenterConfig, extract_center_path, letterbox, render_overlay, restore_mask
-from .yellow_center import YellowCenterConfig, YellowCenterTracker, extract_yellow_center
+from .yellow_center import YELLOW_SOURCE, YellowCenterConfig, YellowCenterTracker, extract_yellow_center
 
 SESSION_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
 FRAME_NAME = re.compile(r"^\d{6}\.jpg$", re.IGNORECASE)
@@ -160,10 +160,17 @@ def prepare_session(record_root: Path, session_name: str, torch, model, device: 
             frame, driving, lane, yellow_config, config
         )
         tracked = tracker.update(yellow_result, frame.shape[1])
+        # 외삽본은 실측 도로가 없을 때만 쓴다. 노드와 같은 순서다.
+        ghost = None
+        result = None
         if tracked.found and tracked.confidence >= MINIMUM_CONFIDENCE:
-            result = tracked
-        else:
-            result = extract_center_path(driving, lane, config)
+            if tracked.path_source == YELLOW_SOURCE:
+                result = tracked
+            else:
+                ghost = tracked
+        if result is None:
+            road = extract_center_path(driving, lane, config)
+            result = road if road.found else (ghost if ghost is not None else road)
         occupancy = (
             measure_lanes(driving, result.fitted_points, policy_config)
             if result.found
