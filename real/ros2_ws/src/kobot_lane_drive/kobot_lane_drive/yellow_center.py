@@ -103,9 +103,13 @@ class YellowCenterConfig:
     # 예전 방식. 좌우 도로를 둘 다 요구하면 한쪽만 보이는 프레임에서 중앙선을 놓친다.
     require_road_on_both_sides: bool = False
 
-    ghost_maximum_frames: int = 20
+    # 노란선이 끊긴 뒤 직전 목표를 유지할 시간. 이 시간 안에는 도로 폴백보다 우선한다.
+    # 실측에서 노란선이 사라지는 프레임은 주행영역 인식도 함께 무너져 있었다 —
+    # 그 순간의 도로 중앙은 노란선의 대안이 아니라 잡음이다.
+    ghost_maximum_seconds: float = 1.0
+    # 시각을 넘겨주지 않는 호출자(단위 시험 등)를 위한 백스톱. 시간 한도가 우선이다.
+    ghost_maximum_frames: int = 30
     history_size: int = 10
-    ghost_confidence_floor: float = 0.20
 
 
 def _row_bounds(height: int, config: YellowCenterConfig) -> tuple[int, int]:
@@ -345,45 +349,81 @@ def extract_yellow_center(
 
 
 class YellowCenterTracker:
-    """점선 구간에서 노란 중앙선 목표를 유지하는 외삽기.
+    """노란 중앙선이 끊긴 동안 직전 목표를 유지하는 외삽기.
 
-    최근 lookahead x 를 기억해 두고, 검출이 끊기면 추세를 연장한다. 연속 실패가
-    ghost_maximum_frames 를 넘으면 포기하고 호출자가 다음 우선순위로 내려가게 한다.
+    최근 lookahead x 를 기억해 두고, 검출이 끊기면 그 추세를 연장한다. 점선 구간의
+    빈 칸을 메우는 것이 원래 목적이었지만, 지금은 그보다 넓게 쓴다 — 노란선이
+    사라지는 프레임은 주행영역 인식도 같이 무너져 있어서, 곧바로 도로 중앙으로
+    내려가면 잡음을 따라가게 된다. 그래서 유지 구간 동안은 호출자가 도로보다
+    이쪽을 먼저 쓴다.
+
+    유지 한도는 ghost_maximum_seconds(기본 1.0초)다. 프레임 수가 아니라 시간으로
+    재는 이유는 추론 주기가 9~15Hz 사이에서 움직이기 때문이다. 같은 프레임 수가
+    상황에 따라 1.3초도 되고 2.2초도 됐다.
+
+    유지 중에는 신뢰도를 깎지 않는다. 직전에 쓰던 목표를 그대로 이어 가는 것이
+    목적인데, 신뢰도를 깎으면 호출자 쪽 임계에 걸려 한도 전에 스스로 끊긴다.
+    한도를 넘으면 포기하고 호출자가 다음 우선순위로 내려가게 한다.
     """
 
     def __init__(self, config: YellowCenterConfig | None = None) -> None:
         self._config = config or YellowCenterConfig()
         self._history: list[float] = []
         self._blind_frames = 0
+        self._blind_seconds = 0.0
         self._last_valid: CenterPathResult | None = None
+        self._last_valid_at: float | None = None
 
     @property
     def blind_frames(self) -> int:
         return self._blind_frames
 
+    @property
+    def blind_seconds(self) -> float:
+        """마지막 실측 노란선 이후 흐른 시간. 시각을 안 넘기면 0 이다."""
+        return self._blind_seconds
+
     def reset(self) -> None:
         self._history.clear()
         self._blind_frames = 0
+        self._blind_seconds = 0.0
         self._last_valid = None
+        self._last_valid_at = None
 
-    def update(self, result: CenterPathResult, width: int) -> CenterPathResult:
+    def update(
+        self, result: CenterPathResult, width: int, now: float | None = None
+    ) -> CenterPathResult:
+        """한 프레임을 받아 실측 노란선이면 그대로, 아니면 유지본을 낸다.
+
+        now 는 단조 증가 시각(초)이다. 넘기면 유지 한도를 시간으로 재고,
+        넘기지 않으면 프레임 수 백스톱만 걸린다.
+        """
         if result.found and result.lookahead is not None:
             self._history.append(float(result.lookahead[0]))
             if len(self._history) > self._config.history_size:
                 self._history.pop(0)
             self._blind_frames = 0
+            self._blind_seconds = 0.0
             self._last_valid = result
+            self._last_valid_at = None if now is None else float(now)
             return result
-        return self._ghost(width)
+        return self._ghost(width, now)
 
-    def _ghost(self, width: int) -> CenterPathResult:
+    def _ghost(self, width: int, now: float | None) -> CenterPathResult:
         if self._last_valid is None or self._last_valid.lookahead is None:
             return self._last_valid if self._last_valid is not None else _lost_result()
-        if self._blind_frames >= self._config.ghost_maximum_frames:
+
+        # 시각을 받았을 때만 시간으로 잰다. 못 받으면 프레임 백스톱이 유일한 한도다.
+        timed = now is not None and self._last_valid_at is not None
+        elapsed = max(0.0, float(now) - self._last_valid_at) if timed else 0.0
+        expired_by_time = timed and elapsed >= self._config.ghost_maximum_seconds
+        expired_by_frames = self._blind_frames >= self._config.ghost_maximum_frames
+        if expired_by_time or expired_by_frames:
             self.reset()
             return _lost_result()
 
         self._blind_frames += 1
+        self._blind_seconds = elapsed
         step = 0.0
         if len(self._history) >= 3:
             recent = self._history[-min(5, len(self._history)) :]
@@ -394,15 +434,12 @@ class YellowCenterTracker:
         lookahead_x = int(
             round(max(0.0, min(width - 1.0, self._history[-1] + step * self._blind_frames)))
         )
-        decay = 1.0 - self._blind_frames / float(self._config.ghost_maximum_frames)
-        confidence = max(
-            self._config.ghost_confidence_floor, previous.confidence * max(0.0, decay)
-        )
         anchor_x = width * 0.5
+        # 신뢰도는 그대로 물려준다. 깎으면 호출자의 minimum_confidence 임계에 걸려
+        # 한도(1초)를 채우기 전에 유지가 끊긴다. 끊는 판단은 시간 하나로만 한다.
         return replace(
             previous,
             path_source=GHOST_SOURCE,
-            confidence=confidence,
             lookahead=(lookahead_x, lookahead_y),
             center_offset_px=float(lookahead_x - anchor_x),
         )
