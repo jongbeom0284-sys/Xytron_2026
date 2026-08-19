@@ -165,8 +165,16 @@ def test_candidate_must_be_anchored_to_the_road():
     on_road = extract_yellow_center(*scene("on_road"), anchored, CENTER_CONFIG)[0]
     assert on_road.found and on_road.path_source == YELLOW_SOURCE
 
-    # 조건을 끄면 도로 밖 구조물도 통과한다 — 걸러낸 주체가 이 조건임을 확인한다
-    relaxed = YellowCenterConfig(detector=HSV_ABSOLUTE, require_road_anchor=False)
+    # 이제는 거리 조건이 1차 방어선이다. 도로에서 40px 넘게 떨어진 구조물은
+    # require_road_anchor 를 꺼도 걸러진다. 실측에서 나무 슬랫이 107px 였다.
+    default = YellowCenterConfig(detector=HSV_ABSOLUTE)
+    assert not default.require_road_anchor
+    assert not extract_yellow_center(*scene("off_road"), default, CENTER_CONFIG)[0].found
+
+    # 거리 조건까지 풀면 통과한다 — 걸러낸 주체가 그 조건임을 확인한다
+    relaxed = YellowCenterConfig(
+        detector=HSV_ABSOLUTE, maximum_road_distance_ratio=1.0
+    )
     assert extract_yellow_center(*scene("off_road"), relaxed, CENTER_CONFIG)[0].found
 
 

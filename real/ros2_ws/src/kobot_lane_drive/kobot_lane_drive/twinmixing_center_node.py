@@ -198,6 +198,7 @@ class TwinMixingCenterNode(Node):
         self.declare_parameter("yellow_maximum_run_width_ratio", 0.22)
         self.declare_parameter("yellow_minimum_run_pixels", 3)
         self.declare_parameter("yellow_minimum_rows", 8)
+        self.declare_parameter("yellow_maximum_road_distance_ratio", 0.0625)
         self.declare_parameter("yellow_require_road_anchor", False)
         self.declare_parameter("yellow_require_road_on_both_sides", False)
         self.declare_parameter("yellow_side_support_ratio", 0.02)
@@ -304,6 +305,9 @@ class TwinMixingCenterNode(Node):
             maximum_run_width_ratio=float(self._value("yellow_maximum_run_width_ratio")),
             minimum_run_pixels=int(self._value("yellow_minimum_run_pixels")),
             minimum_rows=int(self._value("yellow_minimum_rows")),
+            maximum_road_distance_ratio=float(
+                self._value("yellow_maximum_road_distance_ratio")
+            ),
             require_road_anchor=bool(self._value("yellow_require_road_anchor")),
             require_road_on_both_sides=bool(
                 self._value("yellow_require_road_on_both_sides")
