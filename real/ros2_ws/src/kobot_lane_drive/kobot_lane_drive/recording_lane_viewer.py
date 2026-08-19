@@ -182,7 +182,7 @@ def prepare_session(record_root: Path, session_name: str, torch, model, device: 
             steering, mode, reason = 0.0, "WAITING", "target_line_not_found"
         output = render_overlay(
             frame, driving, lane, result, steering, inference_ms, fps, device, mode,
-            yellow_mask=yellow_evidence, occupancy=occupancy, sectors=EMPTY_SECTORS,
+            yellow_mask=yellow_evidence, occupancy=occupancy, sectors=EMPTY_SECTORS, draw_hud=True,
         )
         cv2.rectangle(output, (8, frame.shape[0] - 38), (410, frame.shape[0] - 8), (0, 0, 0), -1)
         color = (80, 220, 120) if mode == "TRACKING" else (0, 210, 255) if mode == "HOLD_LAST" else (80, 80, 255)

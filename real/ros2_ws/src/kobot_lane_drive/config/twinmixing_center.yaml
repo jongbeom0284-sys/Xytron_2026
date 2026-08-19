@@ -11,7 +11,9 @@ twinmixing_center_drive:
     use_fp16: true
 
     # --- 중심 경로 추출 (우선순위 2·3단계) ---
-    roi_top_ratio: 0.46
+    # 480 높이 기준 y=300 아래만 본다. 위쪽 먼 영역은 벽/천장/조명이 섞여
+    # 목표선을 흔들기만 한다. 가까운 노면만 보면 인식이 안정된다.
+    roi_top_ratio: 0.625
     roi_bottom_ratio: 0.97
     row_step: 4
     search_half_width_ratio: 0.24
@@ -53,7 +55,7 @@ twinmixing_center_drive:
     # 기본값은 꺼짐. 노란선 추종만 먼저 검증한 뒤 launch 인자로 켠다.
     maneuvers_enabled: false
     lane_sample_rows: 14
-    lane_roi_top_ratio: 0.52
+    lane_roi_top_ratio: 0.66
     lane_roi_bottom_ratio: 0.95
     lane_minimum_width_ratio: 0.05
     lane_narrow_width_ratio: 0.55
@@ -75,7 +77,9 @@ twinmixing_center_drive:
 
     # --- 라이다 구역 ---
     # xycar_lidar 원시 0 rad 은 후방을 본다. pi 를 더해 0 = 정면으로 맞춘다.
-    lidar_angle_offset_rad: 3.141592653589793
+    # 실측 2026-08-19: 라이다가 차 앞으로 튀어나와 있어 후방 163도를 차체가 가린다.
+    # 가림 구간 원시 220.4~22.7도, 후방 중심 301.6도 -> 정면은 원시 121.6도.
+    lidar_angle_offset_rad: -2.1217
     # 부채꼴이 아니라 차량 좌표계의 직사각 코리도로 자른다. 차량은 늘 차선 안에
     # 있으므로 옆 차선 차량은 이 상자에 들어오고, 벽과 연석은 상자 밖에 남는다.
     lidar_forward_minimum_m: 0.35

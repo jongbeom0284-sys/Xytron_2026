@@ -6,7 +6,7 @@
 옆이라 앞쪽 거리가 모자란 곳)에 있으므로 애초에 후보가 되지 않는다.
 
 좌표 규약: x 는 왼쪽이 양수, y 는 앞쪽이 양수.
-xycar_lidar 의 원시 0 rad 은 후방을 보므로 angle_offset_rad(기본 pi)로 정면에 맞춘다.
+라이다가 차 앞으로 돌출 장착돼 후방 163도는 차체가 가린다. 실측으로 정면이 원시 121.6도라
 
 ROS 에 의존하지 않는다. ranges 는 그냥 float 시퀀스다.
 """
@@ -22,7 +22,8 @@ import numpy as np
 
 @dataclass(frozen=True)
 class LidarSectorConfig:
-    angle_offset_rad: float = math.pi
+    # 실측 기본값. 라이다가 차 앞으로 돌출 장착돼 정면이 원시 121.6도다.
+    angle_offset_rad: float = -2.1217
 
     # 앞쪽으로 볼 구간. 너무 가까우면 차체와 노면, 너무 멀면 다음 코너의 벽이 들어온다.
     forward_minimum_m: float = 0.35

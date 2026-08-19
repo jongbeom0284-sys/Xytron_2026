@@ -95,8 +95,7 @@ function laneStreamTopic(){
 function laneCard(){
   return `<div class="card-heading"><div><p class="eyebrow">TWINMIXING CUDA · MOTOR OFF</p><h3>노란 중앙선 우선 추종</h3></div><span class="live-badge">LIVE</span></div>
     <div class="camera-frame lane-frame"><img class="lane-stream" data-topic="${laneStreamTopic()}" data-stream-topic="${laneStreamTopic()}" src="${streamUrl(laneStreamTopic())}" alt="차선 인식 결과 영상"></div>
-    <div class="metric"><span>인식 상태</span><strong class="lane-status">${laneStatusText()}</strong></div>
-    <div class="metric"><span>주행 라인</span><strong class="lane-drive-line">${laneDriveLineText()}</strong></div>
+    <div class="lane-stats">${laneStatsHtml()}</div>
     <p class="helper">노랑: 중앙선 · 주황: 왼쪽 차선 · 보라: 오른쪽 차선 · 하늘색: 예정 경로 · 빨간 십자: 목표점</p>`;
 }
 
@@ -210,8 +209,7 @@ function refreshDynamicValues(){
   document.querySelectorAll('.system-motor').forEach(el=>el.textContent=latestMotor);
   document.querySelectorAll('.system-host').forEach(el=>el.textContent=latestHost);
   document.querySelectorAll('.system-power').forEach(el=>el.textContent=latestPower);
-  document.querySelectorAll('.lane-status').forEach(el=>el.textContent=laneStatusText());
-  document.querySelectorAll('.lane-drive-line').forEach(el=>el.textContent=laneDriveLineText());
+  document.querySelectorAll('.lane-stats').forEach(el=>el.innerHTML=laneStatsHtml());
   document.querySelectorAll('.ultra-value').forEach(el=>{
     const value=latestUltrasonic[el.dataset.sensor];
     const marker=el.closest('.ultrasonic-marker');
@@ -227,6 +225,38 @@ function refreshDynamicValues(){
   const recordText=recordingState.active?`저장 중 · ${recordingState.frames}장 · ${recordingState.path}`:recordingState.last_path?`저장 완료 · ${recordingState.frames}장 · ${recordingState.last_path}`:'저장 대기 중';
   document.querySelectorAll('.record-status').forEach(el=>el.textContent=recordText);
   refreshDriveUi();
+}
+
+function laneNumber(value,digits,unit){
+  const number=Number(value);
+  return Number.isFinite(number)?number.toFixed(digits)+(unit||''):'-';
+}
+
+function laneStatsHtml(){
+  const sources={YELLOW_LINE:'노란 중앙선',YELLOW_LINE_GHOST:'노란선 외삽',CENTER_GAP:'센터 갭',REGION_CENTER:'영역 중앙',NONE:'없음'};
+  const modes={TRACKING:'추적',HOLD:'유지',HOLD_LAST:'마지막값 유지',WAITING:'대기',ERROR:'오류'};
+  const lines={CENTER:'중앙',SHIFT_LEFT:'좌 회피',SHIFT_RIGHT:'우 회피',RETURNING:'복귀'};
+  const blocked={left:'왼쪽',right:'오른쪽'};
+  const ghost=Number(latestLane.ghost_frames||0);
+  const cells=[
+    ['목표선',sources[latestLane.path_source]||latestLane.path_source||'-'],
+    ['상태',modes[latestLane.mode]||latestLane.mode||'-'],
+    ['신뢰도',laneNumber(latestLane.confidence,2)],
+    ['주행 라인',(lines[latestLane.drive_line]||latestLane.drive_line||'-')+(latestLane.maneuvers_enabled===false?' (회피 꺼짐)':'')],
+    ['중앙 오차',laneNumber(latestLane.center_offset_px,0,' px')],
+    ['헤딩',laneNumber(latestLane.heading_deg,1,'°')],
+    ['조향',laneNumber(latestLane.steering_rad,3,' rad')],
+    ['속도',laneNumber(latestLane.speed_mps,2,' m/s')],
+    ['차선폭 좌',laneNumber(latestLane.left_lane_width_px,0,' px')],
+    ['차선폭 우',laneNumber(latestLane.right_lane_width_px,0,' px')],
+    ['막힘',blocked[latestLane.blocked_side]||(latestLane.narrow_side?blocked[latestLane.narrow_side]+'(의심)':'없음')],
+    ['외삽',ghost?ghost+' 프레임':'-'],
+    ['라이다 좌',laneNumber(latestLane.lidar_left_m,2,' m')],
+    ['라이다 앞',laneNumber(latestLane.lidar_front_m,2,' m')],
+    ['라이다 우',laneNumber(latestLane.lidar_right_m,2,' m')],
+    ['추론',laneNumber(latestLane.inference_fps,1,' fps')],
+  ];
+  return cells.map(([label,value])=>`<div><span>${label}</span><strong>${value}</strong></div>`).join('');
 }
 
 function laneDriveLineText(){

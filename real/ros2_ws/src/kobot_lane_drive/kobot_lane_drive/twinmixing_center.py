@@ -315,6 +315,41 @@ def _tint(overlay: np.ndarray, mask: np.ndarray, colour, strength: float) -> Non
     )
 
 
+def _lane_side_masks(
+    driving: np.ndarray, fitted_points: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """중앙선을 기준으로 주행 영역을 좌/우 차선으로 가른다 (화면 표시용)."""
+    height, width = driving.shape
+    center_x = np.full(height, np.nan, dtype=np.float64)
+    if fitted_points is not None and len(fitted_points) >= 2:
+        ys = np.clip(fitted_points[:, 1].astype(int), 0, height - 1)
+        center_x[ys] = fitted_points[:, 0]
+        known = np.flatnonzero(~np.isnan(center_x))
+        if known.size >= 2:
+            rows = np.arange(height)
+            center_x = np.interp(rows, known, center_x[known], left=np.nan, right=np.nan)
+    valid = ~np.isnan(center_x)
+    if not valid.any():
+        empty = np.zeros_like(driving)
+        return empty, empty
+    columns = np.arange(width)[None, :]
+    boundary = np.where(valid, center_x, -1.0)[:, None]
+    inside = valid[:, None]
+    left = driving & inside & (columns < boundary)
+    right = driving & inside & (columns > boundary)
+    return left, right
+
+
+def _tint(overlay: np.ndarray, mask: np.ndarray, colour, strength: float) -> None:
+    if not np.any(mask):
+        return
+    layer = np.zeros_like(overlay)
+    layer[:] = colour
+    overlay[mask] = cv2.addWeighted(
+        overlay[mask], 1.0 - strength, layer[mask], strength, 0
+    )
+
+
 def render_overlay(
     frame: np.ndarray,
     driving_mask: np.ndarray,
@@ -329,6 +364,7 @@ def render_overlay(
     decision=None,
     occupancy=None,
     sectors=None,
+    draw_hud: bool = False,
 ) -> np.ndarray:
     overlay = frame.copy()
     driving = driving_mask.astype(bool)
@@ -383,6 +419,9 @@ def render_overlay(
                 overlay, result.lookahead, (0, 255, 255), cv2.MARKER_TILTED_CROSS, 18, 2,
                 cv2.LINE_AA,
             )
+
+    if not draw_hud:
+        return overlay
 
     direction = "CENTER"
     if result.center_offset_px is not None:

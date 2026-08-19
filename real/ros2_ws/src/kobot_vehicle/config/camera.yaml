@@ -8,3 +8,7 @@
     frame_id: default_cam
     camera_name: kobot_camera
     camera_info_url: file:///home/xytron/2026_Xytron/real/calibration/kobot_camera.yaml
+    # 실내 조명 반사 대응. 자동 노출은 흰 바닥에 물려 화면이 날아간다.
+    brightness: 0
+    autoexposure: false
+    exposure: 40
