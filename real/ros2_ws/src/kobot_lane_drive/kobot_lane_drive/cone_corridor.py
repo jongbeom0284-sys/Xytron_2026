@@ -394,13 +394,23 @@ def analyze_cone_corridor(
     if total_count < config.detection_min_total_points or not cone_centers:
         return EMPTY_CORRIDOR_RESULT
 
-    # 좌/우 시작 후보 콘 (차량 전방 근거리)
-    left_roots = [c for c in cone_centers if c[0] > 0.05 and c[1] <= 0.90] or [c for c in cone_centers if c[0] > 0.0]
-    right_roots = [c for c in cone_centers if c[0] < -0.05 and c[1] <= 0.90] or [c for c in cone_centers if c[0] < 0.0]
+    # 좌/우 시작 후보 콘 (차량 전방 근거리 0.75m 이내 실제 좌측/우측 콘만 루트로 선정)
+    left_roots = [c for c in cone_centers if c[0] > 0.05 and c[1] <= 0.75]
+    right_roots = [c for c in cone_centers if c[0] < -0.05 and c[1] <= 0.75]
 
-    # 체이닝으로 연속된 실제 벽면만 추적 (멀리 떨어진 코너 탈출부 콘과의 대각선 연결 방지)
-    left_cones = chain_cone_boundary(left_roots, cone_centers, config.max_cone_link_distance_m)
-    right_cones = chain_cone_boundary(right_roots, cone_centers, config.max_cone_link_distance_m)
+    # 우측/좌측 벽면 독립 체이닝 및 상호 배제
+    # (코너 선회 시 반대편으로 휘어지는 외벽 콘들이 양쪽 벽에 중복 할당되는 현상 원천 방지)
+    right_dist = min([math.hypot(c[0], c[1]) for c in right_roots], default=float('inf'))
+    left_dist = min([math.hypot(c[0], c[1]) for c in left_roots], default=float('inf'))
+
+    if right_dist <= left_dist:
+        right_cones = chain_cone_boundary(right_roots, cone_centers, config.max_cone_link_distance_m) if right_roots else []
+        remaining = [c for c in cone_centers if c not in right_cones]
+        left_cones = chain_cone_boundary(left_roots, remaining, config.max_cone_link_distance_m) if left_roots else []
+    else:
+        left_cones = chain_cone_boundary(left_roots, cone_centers, config.max_cone_link_distance_m) if left_roots else []
+        remaining = [c for c in cone_centers if c not in left_cones]
+        right_cones = chain_cone_boundary(right_roots, remaining, config.max_cone_link_distance_m) if right_roots else []
 
     # 라바콘을 연결한 가상 폴리라인 벽으로 슬라이스 생성
     slices = build_polyline_corridor_slices(left_cones, right_cones, config)

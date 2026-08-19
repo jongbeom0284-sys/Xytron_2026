@@ -687,13 +687,22 @@ function drawOneLidar(canvas){
     return chain;
   }
 
-  const leftRoots = allCones.filter(c => c.meanX > 0.05 && c.meanY <= 0.90);
-  if(leftRoots.length === 0) leftRoots.push(...allCones.filter(c => c.meanX > 0));
-  const rightRoots = allCones.filter(c => c.meanX < -0.05 && c.meanY <= 0.90);
-  if(rightRoots.length === 0) rightRoots.push(...allCones.filter(c => c.meanX < 0));
+  const leftRoots = allCones.filter(c => c.meanX > 0.05 && c.meanY <= 0.75);
+  const rightRoots = allCones.filter(c => c.meanX < -0.05 && c.meanY <= 0.75);
 
-  const leftChain = chainCones(leftRoots, allCones);
-  const rightChain = chainCones(rightRoots, allCones);
+  const rightDist = rightRoots.length ? Math.min(...rightRoots.map(c => Math.hypot(c.meanX, c.meanY))) : Infinity;
+  const leftDist = leftRoots.length ? Math.min(...leftRoots.map(c => Math.hypot(c.meanX, c.meanY))) : Infinity;
+
+  let leftChain = [], rightChain = [];
+  if(rightDist <= leftDist){
+    rightChain = chainCones(rightRoots, allCones);
+    const remForLeft = allCones.filter(c => !rightChain.includes(c));
+    leftChain = chainCones(leftRoots, remForLeft);
+  } else {
+    leftChain = chainCones(leftRoots, allCones);
+    const remForRight = allCones.filter(c => !leftChain.includes(c));
+    rightChain = chainCones(rightRoots, remForRight);
+  }
 
   if(leftChain.length > 1){
     ctx.strokeStyle='#2563eb';
