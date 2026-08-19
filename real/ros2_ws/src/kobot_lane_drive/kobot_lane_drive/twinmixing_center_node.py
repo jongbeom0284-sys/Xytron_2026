@@ -201,7 +201,7 @@ class TwinMixingCenterNode(Node):
         self.declare_parameter("policy_maximum_heading_deg", 12.0)
 
         # 라이다 구역
-        self.declare_parameter("lidar_angle_offset_rad", float(np.pi))
+        self.declare_parameter("lidar_angle_offset_rad", -2.1217)
         self.declare_parameter("lidar_forward_minimum_m", 0.35)
         self.declare_parameter("lidar_forward_maximum_m", 2.50)
         self.declare_parameter("lidar_side_lateral_minimum_m", 0.12)

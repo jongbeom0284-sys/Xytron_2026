@@ -140,6 +140,10 @@ def extract_yellow_center(
 
     y_top = int(round(height * config.roi_top_ratio))
     y_bottom = min(height - 1, int(round(height * config.roi_bottom_ratio)))
+    # ROI 밖의 노란 픽셀은 쓰지 않으므로 근거 마스크에서도 지운다.
+    # 화면에 남겨 두면 벽면 반사가 검출된 것처럼 보여 오해를 부른다.
+    evidence[:y_top] = False
+    evidence[y_bottom + 1:] = False
     rows = range(y_bottom, y_top - 1, -max(1, config.row_step))
     attempted_rows = len(rows)
     search_half = max(12, int(round(width * config.search_half_width_ratio)))
