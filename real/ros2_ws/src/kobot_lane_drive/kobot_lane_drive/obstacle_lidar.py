@@ -37,7 +37,7 @@ class LidarSectorConfig:
     # 정면 코리도 (자기 차선 폭)
     front_lateral_maximum_m: float = 0.20
 
-    minimum_range_m: float = 0.15
+    minimum_range_m: float = 0.10
     maximum_range_m: float = 6.0
     # 이만큼의 점이 동의해야 물체로 인정한다. 반사 한 점으로 차선을 넘지 않기 위해서다.
     minimum_hits: int = 5

@@ -10,6 +10,25 @@ ROS 에 의존하지 않는다. 브리지의 안전 판단(ready/fresh)을 명�
 
 from __future__ import annotations
 
+import math
+
+
+def limit_forward_speed(planned_speed_mps: float, maximum_speed_mps: float) -> float:
+    """Return the one forward speed that planner, status and bridge must share.
+
+    The cone planner has several speed sources (straight, corner, single-wall and
+    hold-over).  A launch-time speed limit is a *hard cap* over every one of those
+    sources, not a replacement for just the straight speed.  Keeping this tiny
+    operation in the ROS-free command module lets both sides of the preview
+    contract use exactly the same finite/non-negative behaviour.
+    """
+
+    planned = float(planned_speed_mps)
+    maximum = float(maximum_speed_mps)
+    if not math.isfinite(planned) or not math.isfinite(maximum):
+        return 0.0
+    return min(max(0.0, planned), max(0.0, maximum))
+
 
 def make_legacy_command(
     steering_rad: float | None,

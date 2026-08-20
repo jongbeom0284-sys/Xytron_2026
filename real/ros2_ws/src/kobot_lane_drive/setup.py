@@ -21,13 +21,20 @@ def install_tree(source: str, destination: str) -> list[tuple[str, list[str]]]:
 data_files = [
     ("share/ament_index/resource_index/packages", ["resource/" + PACKAGE_NAME]),
     ("share/" + PACKAGE_NAME, ["package.xml", "README.md", "PROVENANCE.md"]),
-    ("share/" + PACKAGE_NAME + "/launch", [
-        "launch/twinmixing_center_record_drive.launch.py",
-        "launch/cone_corridor_drive.launch.py",
-    ]),
-    ("share/" + PACKAGE_NAME + "/config", [
-        "config/twinmixing_center.yaml",
-    ]),
+    (
+        "share/" + PACKAGE_NAME + "/launch",
+        [
+            "launch/twinmixing_center_record_drive.launch.py",
+            "launch/cone_corridor_drive.launch.py",
+        ],
+    ),
+    (
+        "share/" + PACKAGE_NAME + "/config",
+        [
+            "config/twinmixing_center.yaml",
+            "config/cone_corridor_robust.yaml",
+        ],
+    ),
 ]
 data_files += install_tree("third_party/TwinMixing", "third_party/TwinMixing")
 
