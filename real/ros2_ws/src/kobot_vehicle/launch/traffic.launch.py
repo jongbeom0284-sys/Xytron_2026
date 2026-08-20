@@ -1,21 +1,16 @@
-import os
 from launch import LaunchDescription
-from launch.actions import SetEnvironmentVariable
 from launch_ros.actions import Node
 
 
 def generate_launch_description():
-    # ultralytics가 설치되어 있는 clrernet_eval venv 경로 추가
-    clrernet_site = '/home/xytron/clrernet_eval/venv/lib/python3.10/site-packages'
-    inherited_pythonpath = os.environ.get('PYTHONPATH', '')
-    pythonpath = clrernet_site + (os.pathsep + inherited_pythonpath if inherited_pythonpath else '')
-
+    # 정규화 색도 + 원형성 방식이라 YOLO 도 ultralytics 도 쓰지 않는다.
+    # numpy 충돌을 피하려고 별도 venv 를 PYTHONPATH 에 넣지 않는다.
     return LaunchDescription([
-        SetEnvironmentVariable('PYTHONPATH', pythonpath),
         Node(
             package='kobot_vehicle',
             executable='traffic_perception',
             name='traffic_perception_node',
             output='screen',
+            parameters=[{'debug_image': True, 'max_hz': 20.0}],
         ),
     ])

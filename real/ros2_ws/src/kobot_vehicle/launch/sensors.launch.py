@@ -78,6 +78,12 @@ def generate_launch_description():
                  get_package_share_directory('kobot_yolop_drive'),
                  'config', 'yolop_drive.yaml')],
              condition=IfCondition(camera), output='screen'),
+        # 신호등 인식: 정규화 색도 + 원형성.
+        # torch 도 TensorRT 도 YOLO 도 쓰지 않는다. numpy + OpenCV 만으로 약 25ms.
+        Node(package='kobot_vehicle', executable='traffic_perception',
+             name='traffic_perception_node',
+             parameters=[{'debug_image': True, 'max_hz': 20.0}],
+             condition=IfCondition(camera), output='screen'),
         Node(package='kobot_vehicle', executable='ultrasonic_node',
              parameters=[os.path.join(config, 'ultrasonic.yaml')], condition=IfCondition(ultrasonic)),
         Node(package='kobot_vehicle', executable='imu_node',

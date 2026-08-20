@@ -8,9 +8,9 @@ const recoveryDialog=document.querySelector('#recovery-dialog');
 const recoveryDialogContent=document.querySelector('#recovery-dialog-content');
 const deviceLabels={camera:'카메라',lidar:'LiDAR',ultrasonic:'초음파',imu:'IMU'};
 const deviceOrder=['camera','lidar','ultrasonic','imu'];
-const recoveryLabels={camera:'카메라',lane:'차선 인식',video:'영상 서버',lidar:'LiDAR',ultrasonic:'초음파',imu:'IMU'};
+const recoveryLabels={camera:'카메라',lane:'차선 인식(YOLOPv2)',video:'영상 서버',lidar:'LiDAR',ultrasonic:'초음파',imu:'IMU'};
 const recoveryOrder=['camera','lane','video','lidar','ultrasonic','imu'];
-const viewLabels={camera:'전방 카메라',lane:'차선 인식',lidar:'LiDAR 점 화면',ultrasonic:'초음파 배치',imu:'IMU 자세',system:'차량 상태',drive:'주행 테스트',empty:'비어 있음'};
+const viewLabels={camera:'전방 카메라',lane:'차선 + 신호등 인식',lidar:'LiDAR 점 화면',ultrasonic:'초음파 배치',imu:'IMU 자세',system:'차량 상태',drive:'주행 테스트',empty:'비어 있음'};
 const defaultSlots=['camera','lane','lidar','ultrasonic','imu','system','empty','empty','empty'];
 const ultraIndex={left:0,right:4,rearLeft:7,rear:6,rearRight:5};
 let deviceApiState={};
@@ -22,6 +22,8 @@ let latestMotor='확인 중';
 let latestHost='kobot';
 let latestPower='대기 중';
 let latestLane={state:'WAITING',mode:'WAITING',confidence:0,center_offset_px:0};
+let latestTraffic={state:'none',stable:'none',ko:'없음',boxes:[],lamps:0,ms:0,w:640,h:480};
+let latestTrafficAt=0;
 let recordingState={active:false,frames:0,last_path:''};
 let motorState={usb:false,stack_running:false,stack_state:'unknown',active:false,missing_processes:[],result:'잠김',error:null};
 let recordDriveState={state:'idle',result:'대기 중',can_start:true,can_pause:false,can_resume:false,can_finish:false,recording:{frames:0}};
@@ -93,10 +95,28 @@ function laneStreamTopic(){
 }
 
 function laneCard(){
-  return `<div class="card-heading"><div><p class="eyebrow">TWINMIXING CUDA · MOTOR OFF</p><h3>노란 중앙선 우선 추종</h3></div><span class="live-badge">LIVE</span></div>
-    <div class="camera-frame lane-frame"><img class="lane-stream" data-topic="${laneStreamTopic()}" data-stream-topic="${laneStreamTopic()}" src="${streamUrl(laneStreamTopic())}" alt="차선 인식 결과 영상"></div>
+  return `<div class="card-heading"><div><p class="eyebrow">YOLOPv2 CUDA · 신호등 색도판정 · MOTOR OFF</p><h3>차선 + 신호등 인식</h3></div><span class="live-badge">LIVE</span></div>
+    <div class="camera-frame lane-frame"><img class="lane-stream" data-topic="${laneStreamTopic()}" data-stream-topic="${laneStreamTopic()}" src="${streamUrl(laneStreamTopic())}" alt="차선 인식 결과 영상"><div class="signal-overlay"></div></div>
+    ${signalCardHtml()}
     <div class="lane-stats">${laneStatsHtml()}</div>
-    <p class="helper">노랑: 중앙선 · 주황: 왼쪽 차선 · 보라: 오른쪽 차선 · 하늘색: 예정 경로 · 빨간 십자: 목표점</p>`;
+    <p class="helper">노랑: 중앙선 · 주황: 왼쪽 차선 · 보라: 오른쪽 차선 · 하늘색: 예정 경로 · 빨간 십자: 목표점 · 청록 테두리: 인식된 신호등 램프</p>`;
+}
+
+const SIGNAL_LABEL={red:'빨간불',yellow:'노란불',green:'초록불',left:'좌회전',none:'신호 없음'};
+
+function signalCardHtml(){
+  return `<div class="signal-card" data-signal="none">
+    <div class="signal-lamps">
+      <span class="lamp" data-lamp="red"></span>
+      <span class="lamp" data-lamp="yellow"></span>
+      <span class="lamp" data-lamp="left">←</span>
+      <span class="lamp" data-lamp="green"></span>
+    </div>
+    <div class="signal-text">
+      <strong class="signal-name">신호 없음</strong>
+      <span class="signal-sub">노드 대기 중</span>
+    </div>
+  </div>`;
 }
 
 function lidarCard(){
@@ -204,7 +224,54 @@ function renderGrid(){
   refreshDynamicValues();
 }
 
+function signalStale(){
+  return !latestTrafficAt || (performance.now()-latestTrafficAt)>1500;
+}
+
+function renderSignalCards(){
+  const stale=signalStale();
+  const state=stale?'none':(latestTraffic.state||'none');
+  const label=stale?'신호 없음':(SIGNAL_LABEL[state]||state);
+  const sub=stale
+    ? '신호등 노드 신호 없음 · traffic.launch.py 실행 필요'
+    : `램프 ${latestTraffic.lamps||0}개 · ${Number(latestTraffic.ms||0).toFixed(0)}ms · 안정 ${SIGNAL_LABEL[latestTraffic.stable]||'-'}`;
+  document.querySelectorAll('.signal-card').forEach(card=>{
+    card.dataset.signal=state;
+    const name=card.querySelector('.signal-name');
+    if(name)name.textContent=label;
+    const note=card.querySelector('.signal-sub');
+    if(note)note.textContent=sub;
+    card.querySelectorAll('.lamp').forEach(lamp=>{
+      const which=lamp.dataset.lamp;
+      const on=(state==='left')?(which==='left'||which==='green'):(which===state);
+      lamp.classList.toggle('on',on);
+    });
+  });
+  document.querySelectorAll('.signal-overlay').forEach(drawSignalOverlay);
+}
+
+function drawSignalOverlay(layer){
+  const frame=layer.parentElement, image=frame&&frame.querySelector('img');
+  if(!image){layer.innerHTML='';return;}
+  const boxes=signalStale()?[]:(latestTraffic.boxes||[]);
+  if(!boxes.length){layer.innerHTML='';return;}
+  // object-fit: contain 이라 실제 그려진 영역만큼 오프셋을 계산한다
+  const cw=frame.clientWidth, ch=frame.clientHeight;
+  const nw=latestTraffic.w||image.naturalWidth||640;
+  const nh=latestTraffic.h||image.naturalHeight||480;
+  if(cw<2||ch<2||nw<2||nh<2){layer.innerHTML='';return;}
+  const scale=Math.min(cw/nw,ch/nh), dw=nw*scale, dh=nh*scale;
+  const ox=(cw-dw)/2, oy=(ch-dh)/2;
+  layer.innerHTML=boxes.map(box=>{
+    const pad=6;
+    const left=ox+box.x*dw-pad, top=oy+box.y*dh-pad;
+    const width=box.w*dw+pad*2, height=box.h*dh+pad*2;
+    return `<i class="signal-box c-${box.c}" style="left:${left.toFixed(1)}px;top:${top.toFixed(1)}px;width:${width.toFixed(1)}px;height:${height.toFixed(1)}px"></i>`;
+  }).join('');
+}
+
 function refreshDynamicValues(){
+  renderSignalCards();
   document.querySelectorAll('.imu-value').forEach(el=>el.textContent=latestImu);
   document.querySelectorAll('.system-motor').forEach(el=>el.textContent=latestMotor);
   document.querySelectorAll('.system-host').forEach(el=>el.textContent=latestHost);
@@ -507,6 +574,13 @@ new ROSLIB.Topic({ros,name:'/imu',messageType:'sensor_msgs/Imu'}).subscribe(mess
 });
 
 new ROSLIB.Topic({ros,name:'/scan',messageType:'sensor_msgs/LaserScan'}).subscribe(message=>{latestScan=message;refreshDynamicValues()});
+
+new ROSLIB.Topic({ros,name:'/traffic_light/state',messageType:'std_msgs/String'}).subscribe(message=>{
+  try{latestTraffic=JSON.parse(message.data);latestTrafficAt=performance.now();}catch(error){return}
+  renderSignalCards();
+});
+setInterval(renderSignalCards,400);
+addEventListener('resize',renderSignalCards);
 
 let latestCone = null;
 let latestConeAt = 0;

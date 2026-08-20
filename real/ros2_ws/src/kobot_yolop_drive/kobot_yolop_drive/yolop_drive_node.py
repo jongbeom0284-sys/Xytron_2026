@@ -48,6 +48,15 @@ from kobot_yolop_drive.lane_core import (
 STOP = (0.0, 0.0)
 
 
+# 신호등 노드는 약 15Hz 로 돈다. 아래 장수는 그 기준이다.
+STOP_RELEASE_SEC = 1.0   # red 를 이 시간 넘게 못 보면 정지를 푼다
+RED_CONFIRM = 3          # 빨간불 확정에 필요한 연속 장수 (약 0.2초)
+GO_CONFIRM = 7           # 초록·좌회전 확정에 필요한 연속 장수 (약 0.47초)
+GO_LOCK_SEC = 10.0       # 확정 뒤 신호등 인식을 통째로 쉬는 시간 (빨간불 포함)
+STRAIGHT_HOLD_SEC = 3.0  # 직진 확정 직후 조향을 줄여 직진만 하는 시간
+STRAIGHT_HOLD_GAIN = 0.15  # 그동안 조향에 곱하는 값. 0 이면 완전 직진
+
+
 class YolopDriveNode(Node):
     # 트랙에서 재시작 없이 조정할 수 있는 값과 허용 범위.
     # 범위를 벗어난 값은 거부한다. 안전 상한을 코드에 남겨 둔다.
@@ -97,6 +106,17 @@ class YolopDriveNode(Node):
         self._recording = None
         self._record_rows = 0
 
+        # 신호등 연동 상태. 신호등을 지나면 상태가 none 이 되므로
+        # 마지막으로 본 초록/좌회전을 물고 있는다.
+        self._straight = False        # 초록불에서 켜고 좌회전에서 끈다
+        self._traffic_stop = False    # 빨간불에서 켜고 초록/좌회전에서 끈다
+        self._traffic_state = 'none'
+        self._traffic_at = 0.0
+        self._last_red_at = 0.0       # 마지막으로 red 를 본 시각
+        self._recent = []             # 최근 신호. 연속 장수를 센다
+        self._go_locked_until = 0.0   # 이 시각까지 신호등을 아예 안 읽는다
+        self._straight_hold_until = 0.0  # 이 시각까지 조향을 줄여 직진만 한다
+
         self.tracker = LaneTracker(self._lane_config())
         self._load_model()
 
@@ -116,6 +136,8 @@ class YolopDriveNode(Node):
                                  self._on_enable, 10)
         self.create_subscription(Bool, '/kobot_yolop/record',
                                  self._on_record, 10)
+        self.create_subscription(String, '/traffic_light/state',
+                                 self._on_traffic, 10)
         # 대시보드 기록주행 카드가 쓰는 토픽. QoS 를 발행측과 맞춘다.
         dashboard_qos = QoSProfile(depth=1)
         dashboard_qos.reliability = ReliabilityPolicy.RELIABLE
@@ -392,6 +414,67 @@ class YolopDriveNode(Node):
         if not want:
             self._publish_motor(*STOP)
 
+    def _on_traffic(self, message: String) -> None:
+        """신호등 상태를 받아 정지와 직진 트리거를 물린다.
+
+        빨간불   RED_CONFIRM 장 연속이면 정지. 잠금과 무관하게 항상 읽는다
+        초록불   GO_CONFIRM 장 연속이면 직진 확정. 이후 GO_LOCK_SEC 간 안 읽는다
+        좌회전   GO_CONFIRM 장 연속이면 직진 해제. 오염을 그대로 두어 좌측을 따른다
+        노란불   아무것도 바꾸지 않는다. 하던 대로 간다
+        없음     아무것도 바꾸지 않는다. 신호등을 지난 뒤가 여기다
+        """
+        try:
+            state = str(json.loads(message.data).get('state', 'none'))
+        except Exception:  # noqa: BLE001
+            return
+        now = time.monotonic()
+        self._traffic_state = state
+        self._traffic_at = now
+
+        # 잠금 중에는 신호등 인식 자체를 쉰다. 빨간불도 안 읽는다.
+        # 확정한 판단을 흔들 것이 없으니 그 사이 오검출에 면역이다.
+        if now < self._go_locked_until:
+            return
+
+        self._recent.append(state)
+        if len(self._recent) > GO_CONFIRM:
+            self._recent.pop(0)
+
+        def run_of(want, need):
+            tail = self._recent[-need:]
+            return len(tail) == need and all(v == want for v in tail)
+
+        # 빨간불. 잠금과 무관하게 언제나 본다. 언제 초록으로 바뀔지 모른다.
+        if state == 'red':
+            if run_of('red', RED_CONFIRM):
+                if not self._traffic_stop:
+                    self.get_logger().warning(
+                        '빨간불 %d장 연속 — 정지' % RED_CONFIRM)
+                self._traffic_stop = True
+                self._last_red_at = now
+            return
+
+        if state not in ('green', 'left'):
+            return
+        if not run_of(state, GO_CONFIRM):
+            return
+
+        self._traffic_stop = False
+        self._go_locked_until = now + GO_LOCK_SEC
+        self._recent.clear()
+        if state == 'green':
+            self._straight = True
+            self._straight_hold_until = now + STRAIGHT_HOLD_SEC
+            self.get_logger().info(
+                '초록불 %d장 연속 — 직진 확정. %.0f초 조향 억제, %.0f초 신호 무시'
+                % (GO_CONFIRM, STRAIGHT_HOLD_SEC, GO_LOCK_SEC))
+        else:
+            self._straight = False
+            self._straight_hold_until = 0.0
+            self.get_logger().info(
+                '좌회전 %d장 연속 — 직진 해제, %.0f초간 신호 무시'
+                % (GO_CONFIRM, GO_LOCK_SEC))
+
     def _on_record(self, message: Bool) -> None:
         if bool(message.data):
             self._start_record()
@@ -470,6 +553,8 @@ class YolopDriveNode(Node):
             try:
                 started = time.perf_counter()
                 lane, road = self._infer(bgr)
+                # 직진 트리거. 꺼져 있으면 기존 동작 그대로다.
+                self.tracker.config.straight_only = self._straight
                 result = self.tracker.process(bgr, lane, road,
                                               time.monotonic())
                 self._latency_ms = (time.perf_counter() - started) * 1000.0
@@ -501,6 +586,12 @@ class YolopDriveNode(Node):
     # ------------------------------------------------------------ 제어
     def _on_control(self) -> None:
         now = time.monotonic()
+        # red 를 STOP_RELEASE_SEC 넘게 못 보면 정지를 스스로 푼다.
+        # 신호등이 시야를 벗어나거나 오검출이 한 번 났을 때 갇히지 않게 한다.
+        if self._traffic_stop and (now - self._last_red_at) > STOP_RELEASE_SEC:
+            self._traffic_stop = False
+            self.get_logger().info(
+                '빨간불이 %.1f초 안 보임 — 정지 해제' % STOP_RELEASE_SEC)
         with self._lock:
             payload = self._result
             enabled = self._enabled
@@ -524,7 +615,12 @@ class YolopDriveNode(Node):
                 if fault is None and enabled:
                     steer = float(np.clip(result.steer, -self.max_steer,
                                           self.max_steer))
-                    speed = self.speed_units
+                    # 직진 확정 직후에는 조향을 줄여 사실상 직진만 한다.
+                    # 삼거리에서 좌회전 차선으로 끌려가는 것을 막는다.
+                    if now < self._straight_hold_until:
+                        steer *= STRAIGHT_HOLD_GAIN
+                    # 빨간불이면 속도만 0 으로 떨군다. 조향은 그대로 둔다.
+                    speed = 0.0 if self._traffic_stop else self.speed_units
         else:
             with self._lock:
                 self._stale = True

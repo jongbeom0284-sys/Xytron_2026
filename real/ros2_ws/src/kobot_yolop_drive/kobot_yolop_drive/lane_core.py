@@ -42,6 +42,18 @@ class LaneConfig:
     crosswalk_row_width: float = 32.0   # 행별 가로폭 중앙값이 이보다 크고
     crosswalk_aspect: float = 0.30      # 세로/가로가 이보다 작으면 횡단보도
     yellow_b: int = 20               # b* 중립 대비 초과량
+    # --- 직진 모드: 노랑을 세로로만 전파 ---
+    # 삼거리에서 좌회전 도로의 노란 중앙선이 직진 도로의 좌측 흰선과 마스크상
+    # 붙어 있다. 덩이 전체에 노랑을 퍼뜨리면 흰선까지 물든다. 그 오염 덕분에
+    # 트리거가 없을 때는 차가 좌측으로 따라간다. 그래서 기본값은 꺼짐이다.
+    # 초록불(직진)일 때만 켜서, 노랑이 세로로만 번지게 한다.
+    straight_only: bool = False       # 노드가 신호등 상태에 따라 매 프레임 넣는다
+    grow_height: int = 21             # 세로 커널 높이. 한 번에 10px 전진
+    grow_width: int = 3               # 가로 커널 폭. 한 번에 1px 옆으로
+    grow_iters: int = 40              # 최대 반복. 더 안 자라면 일찍 끝난다
+    # 세로 전파 뒤 흰선을 한 번 더 퍼뜨려 오염된 노랑을 되덮는다.
+    # 실제 노란 화소(씨앗)에서 막히므로 진짜 중앙선은 안 지워진다.
+    white_reclaim: bool = True
     white_dl: int = 10               # 노면 대비 밝기차
     white_tophat: int = 12
     chroma_max: int = 18
@@ -87,6 +99,57 @@ def cut_horizontal_bridges(lane_roi: np.ndarray,
     long_runs = cv2.morphologyEx(lane_roi.astype(np.uint8),
                                  cv2.MORPH_OPEN, kernel)
     return lane_roi & ~(long_runs > 0)
+
+
+def grow_vertical(blob: np.ndarray, seed: np.ndarray,
+                  config: LaneConfig) -> np.ndarray:
+    """씨앗에서 세로 방향으로만 노랑을 넓힌다. 덩이 밖으로는 안 나간다.
+
+    커널이 세로로 길고 가로로 좁다. 한 번에 세로 (h-1)/2, 가로 (w-1)/2 만큼
+    번지므로 그 비가 허용 기울기다. 기본 21x3 이면 세로 10px 당 가로 1px,
+    수직에서 약 6도까지만 따라간다.
+
+    노란 중앙선은 세로로 이어져 있어 위아래로 끝까지 번지고, 옆으로 가로
+    연결된 좌측 흰선으로는 넘어가지 않는다.
+    """
+    kh = max(3, config.grow_height) | 1
+    kw = max(1, config.grow_width) | 1
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kw, kh))
+    field = blob.astype(np.uint8)
+    marker = (seed & blob).astype(np.uint8)
+    for _ in range(max(1, config.grow_iters)):
+        grown = cv2.dilate(marker, kernel) & field
+        if np.array_equal(grown, marker):
+            break
+        marker = grown
+    return marker.astype(bool)
+
+
+def reclaim_white(blob: np.ndarray, yellow: np.ndarray,
+                  seed: np.ndarray) -> np.ndarray:
+    """흰선에서 한 번 더 퍼뜨려 노랑을 되덮는다.
+
+    씨앗을 뺀 영역에서 연결요소를 나눈다. 흰선 화소가 하나라도 들어 있는
+    덩어리는 통째로 흰선으로 본다. 씨앗을 지나야만 닿는 곳은 못 넘어오므로
+    진짜 노란 중앙선은 그대로 남는다.
+
+    좌회전 도로 노란선과 직진 도로 좌측 흰선이 붙어 있을 때, 세로 전파가
+    미처 못 자른 접합부 근처가 이 단계에서 흰선으로 돌아온다.
+    """
+    field = (blob & ~seed)
+    if not field.any():
+        return yellow
+    count, labels = cv2.connectedComponents(field.astype(np.uint8), 8)
+    if count <= 1:
+        return yellow
+    white_now = field & ~yellow
+    if not white_now.any():
+        return yellow
+    reachable = np.unique(labels[white_now])
+    reachable = reachable[reachable > 0]
+    if reachable.size == 0:
+        return yellow
+    return yellow & ~np.isin(labels, reachable)
 
 
 def looks_like_crosswalk(blob: np.ndarray, config: LaneConfig) -> bool:
@@ -229,8 +292,23 @@ class LaneTracker:
                 n_crosswalk += 1
                 continue
             box = (slice(y0 + y, y0 + y + h), slice(x, x + w))
-            if int((blob & seed[y:y + h, x:x + w]).sum()) >= cfg.min_yellow_px:
-                yellow_mask[box] |= blob
+            blob_seed = blob & seed[y:y + h, x:x + w]
+            if int(blob_seed.sum()) >= cfg.min_yellow_px:
+                if cfg.straight_only:
+                    # 직진일 때만. 씨앗에서 세로로만 번지고, 옆에 붙어 있던
+                    # 흰선 부분은 노랑이 되지 않고 흰선으로 남는다.
+                    grown = grow_vertical(blob, blob_seed, cfg)
+                    if cfg.white_reclaim:
+                        # 흰선에서 한 번 더 퍼뜨려 남은 오염을 되덮는다.
+                        grown = reclaim_white(blob, grown, blob_seed)
+                    yellow_mask[box] |= grown
+                    rest = blob & ~grown
+                    if rest.any():
+                        white_mask[box] |= rest
+                        n_white += 1
+                else:
+                    # 기존 동작. 덩이 전체를 노랑으로 본다.
+                    yellow_mask[box] |= blob
                 n_yellow += 1
             else:
                 white_mask[box] |= blob

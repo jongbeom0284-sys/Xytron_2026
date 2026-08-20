@@ -42,5 +42,6 @@ setup(
         'lane_follow = kobot_vehicle.Lane_follow:main',
         'lidar_avoidance = kobot_vehicle.Lidar_Avoidance:main',
         'traffic_perception = kobot_vehicle.Traffic_Perception:main',
+        'yolop_drive = kobot_vehicle.yolop_drive_node:main',
     ]},
 )

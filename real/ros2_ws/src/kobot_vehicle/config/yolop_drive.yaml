@@ -1,0 +1,83 @@
+# YOLOPv2 차선 주행 및 장애물 회피 설정
+#
+# 안전: armed 는 기본 false 다. true 로 바꾸면 모터 토픽에 실제로 발행한다.
+#       armed 여도 /kobot_yolop/enabled 가 true 여야 nonzero 명령이 나간다.
+
+yolop_drive:
+  ros__parameters:
+    model_path: /home/xytron/yolotl_offline_eval/models/yolopv2.pt
+    camera_topic: /image_raw
+    motor_topic: /xycar_motor
+
+    # ---- 안전 ----
+    armed: false          # 모터 토픽 발행 여부. 실차 승인 후에만 true
+    speed_units: 5.0      # legacy 단위. 1단위 = 0.08 m/s -> 5단위 = 0.40 m/s
+    max_speed_mps: 0.0    # 0 보다 크면 이 m/s 가 speed_units 를 대체한다
+    mps_per_unit: 0.08    # 차량 motor_adapter 의 speed_scale 과 같아야 한다
+    max_steer: 40.0       # legacy 단위 상한 (차량 물리 한계 약 42)
+    # 실측 프레임 간격 최대 0.37초까지 나온다. 여유를 둔다.
+    camera_timeout_sec: 0.60
+
+    publish_rate_hz: 20.0
+    debug_hz: 7.0
+    use_fp16: true
+    record_root: /home/xytron/yolop_records
+
+    # ---- 차선 검출 ----
+    # ROI 상단 절단. 멀리서 흰선과 노란선이 한 덩이로 붙는 것을 막는다.
+    roi_top_ratio: 0.58
+    yellow_b: 20          # 노면 기준 화이트밸런스 보정 후 b* 초과량
+    white_dl: 10          # 노면 대비 밝기차
+    min_blob_area: 150
+    min_yellow_px: 25     # 덩이 안에 이만큼 노란 픽셀이 있으면 노란 중앙선
+
+    # 횡단보도가 좌우 흰선을 잇는 가로 다리를 끊는다.
+    # TensorRT 엔진으로 추론한다.
+    use_tensorrt: true
+    engine_path: /home/xytron/yolotl_offline_eval/models/yolopv2_lane_fp16.engine
+
+    max_row_run: 80
+
+    # 횡단보도 배제
+    crosswalk_row_width: 32.0   # 행별 가로폭 중앙값이 이보다 크고
+    crosswalk_aspect: 0.30      # 세로/가로가 이보다 작으면 횡단보도
+
+    # ---- 조향 ----
+    y_far_ratio: 0.64     # 주 입력이 되는 행
+    y_near_ratio: 0.88    # 정상상태 오차 보정용
+    # 구간별 이득
+    kp_far: 26.0          # 선형 폴백용
+    kp_far_lo: 30.0       # 직선 구간 기울기
+    kp_far_hi: 70.0       # 코너 구간 기울기
+    knee_norm: 0.20       # 이 오차를 넘으면 코너로 본다
+    kp_near: 6.0
+    kd: 8.0
+    deadband_norm: 0.035  # 이 안쪽은 조향하지 않는다
+    max_rate: 280.0       # 초당 legacy 단위 변화 상한
+    filter_alpha: 0.70    # 낮을수록 부드럽고 느리다
+    # /xycar_motor 는 양수가 오른쪽이다.
+    steering_sign: 1.0
+    hold_seconds: 0.8     # 목표 상실 시 직전 조향 유지 시간
+
+    # ---- 장애물 감지 & 회피 (YOLOv8n + LiDAR) ----
+    enable_obstacle: true
+    yolo_model_path: ''           # 비어 있으면 kobot_vehicle/yolov8n.pt 자동 사용
+    yolo_infer_interval: 3        # N프레임마다 1회 추론 (부하 제어)
+    yolo_conf_thres: 0.20         # 객체 탐지 신뢰도 임계값
+    obstacle_class_ids: [2]       # 회피 대상 COCO class ID 목록 (기본 2: Car)
+
+    # LiDAR 매칭
+    camera_h_fov_deg: 68.0
+    lidar_angle_offset_rad: -2.1217
+    lidar_valid_min_dist: 0.15
+    lidar_valid_max_dist: 4.0
+    lidar_max_age_sec: 0.5
+
+    # 회피 임계값
+    obstacle_avoid_dist: 1.30     # 회피 진입 거리 (m 이내 → AVOID 상태 진입)
+    avoid_hold_frames: 25         # 장애물 소실(추월/벗어남) 후 AVOID 유지 프레임 수
+    avoid_speed_ratio: 0.75       # 회피 주행 중 기본 속도 대비 비율
+    white_lane_offset_px: 100.0   # 흰선에서 안쪽 목표 오프셋 (px)
+
+    # 보행자 비상 정지
+    person_stop_dist: 2.0         # 이 거리 이내 보행자(Class 0) 감지 시 비상 정지 (이탈 시 자동 재출발)

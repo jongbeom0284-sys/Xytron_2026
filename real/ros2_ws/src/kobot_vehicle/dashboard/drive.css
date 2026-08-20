@@ -277,3 +277,105 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* ── 신호등 인식 결과 ─────────────────────────────────────── */
+.signal-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.signal-box {
+  position: absolute;
+  border: 3px solid #22d3ee;
+  border-radius: 5px;
+  box-shadow: 0 0 0 2px rgba(8, 15, 30, .55), 0 0 16px rgba(34, 211, 238, .85);
+}
+
+.signal-box.c-red    { border-color: #ff4d4f; box-shadow: 0 0 0 2px rgba(8,15,30,.55), 0 0 16px rgba(255,77,79,.9); }
+.signal-box.c-amber  { border-color: #ffc53d; box-shadow: 0 0 0 2px rgba(8,15,30,.55), 0 0 16px rgba(255,197,61,.9); }
+.signal-box.c-cyan   { border-color: #36d399; box-shadow: 0 0 0 2px rgba(8,15,30,.55), 0 0 16px rgba(54,211,153,.9); }
+
+.signal-card {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  margin-top: 12px;
+  padding: 14px 18px;
+  border: 2px solid #cbd5e1;
+  border-radius: 14px;
+  background: #f1f5f9;
+  transition: background .12s, border-color .12s;
+}
+
+.signal-lamps {
+  display: flex;
+  flex: none;
+  gap: 9px;
+  padding: 9px 12px;
+  border-radius: 11px;
+  background: #0f172a;
+}
+
+.signal-lamps .lamp {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 50%;
+  background: #1e293b;
+  box-shadow: inset 0 0 0 2px #0b1220;
+  color: transparent;
+  font-size: 17px;
+  font-weight: 900;
+  line-height: 1;
+  transition: background .1s, box-shadow .1s, color .1s;
+}
+
+.signal-lamps .lamp[data-lamp=left] { color: #334155; }
+
+.lamp[data-lamp=red].on    { background: #ff4d4f; box-shadow: 0 0 18px 4px rgba(255,77,79,.85); }
+.lamp[data-lamp=yellow].on { background: #ffc53d; box-shadow: 0 0 18px 4px rgba(255,197,61,.85); }
+.lamp[data-lamp=green].on  { background: #36d399; box-shadow: 0 0 18px 4px rgba(54,211,153,.85); }
+.lamp[data-lamp=left].on   { background: #36d399; box-shadow: 0 0 18px 4px rgba(54,211,153,.85); color: #05261a; }
+
+.signal-text { min-width: 0; }
+
+.signal-name {
+  display: block;
+  font-size: 30px;
+  font-weight: 900;
+  line-height: 1.1;
+  letter-spacing: -.02em;
+  color: #475569;
+}
+
+.signal-sub {
+  display: block;
+  margin-top: 3px;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.signal-card[data-signal=red]    { border-color: #ff4d4f; background: #fff1f1; }
+.signal-card[data-signal=yellow] { border-color: #f0a800; background: #fffbeb; }
+.signal-card[data-signal=green]  { border-color: #10b981; background: #ecfdf5; }
+.signal-card[data-signal=left]   { border-color: #10b981; background: #ecfdf5; }
+
+.signal-card[data-signal=red]    .signal-name { color: #d81f22; }
+.signal-card[data-signal=yellow] .signal-name { color: #b47600; }
+.signal-card[data-signal=green]  .signal-name { color: #047857; }
+.signal-card[data-signal=left]   .signal-name { color: #047857; }
+.signal-card[data-signal=red]    .signal-sub  { color: #b3282b; }
+.signal-card[data-signal=green]  .signal-sub,
+.signal-card[data-signal=left]   .signal-sub  { color: #05795a; }
+
+.signal-card[data-signal=left] .signal-name::after {
+  content:  ←;
+  font-size: 34px;
+}
+
+.grid-3 .signal-card { gap: 12px; padding: 10px 13px; }
+.grid-3 .signal-lamps .lamp { width: 22px; height: 22px; font-size: 13px; }
+.grid-3 .signal-name { font-size: 21px; }
