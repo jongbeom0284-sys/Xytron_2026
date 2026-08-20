@@ -4,13 +4,15 @@
 차량 명령으로 바꾸는 곳은 여기 하나뿐이고, `test_motor_free.py` 가 다른 파일에
 모터 publisher 가 생기는 것을 막는다.
 
-네 개의 잠금이 걸려 있다.
+다섯 개의 잠금이 걸려 있다.
 
   1. `armed:=true` 가 없으면 __init__ 에서 예외를 던져 프로세스가 아예 안 뜬다.
   2. 대시보드가 `record_drive/enabled` 를 참으로 보내야 움직인다 (웹 일시정지).
   3. 상태 JSON 의 mode 가 정상이고 `motor_output` 이 거짓이어야 한다
      — 인식 노드가 모터를 직접 발행하고 있으면 브리지는 손을 뗀다.
   4. preview 나 status 가 0.30초 이상 끊기면 0 을 보낸다 (watchdog).
+  5. opt-in enable heartbeat lease가 켜진 시험에서는 true heartbeat가 만료되면
+     즉시 0 을 보내고, 새 true가 오기 전에는 다시 움직이지 않는다.
 
 정지는 "명령을 멈추는" 방식이 아니라 "0 을 계속 보내는" 방식이다. 발행을 멈추면
 motor_adapter 의 watchdog 이 물릴 때까지 마지막 속도로 굴러간다.
@@ -23,11 +25,13 @@ import math
 import time
 
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Bool, Float32MultiArray, String
 
-from .drive_command import make_legacy_command
+from .drive_command import limit_forward_speed, make_legacy_command
+from .enable_lease import EnableHeartbeatLease
 
 
 class TwinMixingCenterDriveBridgeNode(Node):
@@ -46,7 +50,11 @@ class TwinMixingCenterDriveBridgeNode(Node):
         self._preview_at = 0.0
         self._status_ready = False
         self._status_at = 0.0
-        self._run_enabled = False
+        self._enable_lease = EnableHeartbeatLease(
+            timeout_sec=float(
+                self.get_parameter("enable_heartbeat_timeout_sec").value
+            )
+        )
         self._publisher = self.create_publisher(Float32MultiArray, "/xycar_motor", 10)
         self.create_subscription(
             Float32MultiArray,
@@ -85,8 +93,11 @@ class TwinMixingCenterDriveBridgeNode(Node):
         self.declare_parameter(
             "enable_topic", "/kobot_lane_drive/record_drive/enabled"
         )
+        # 0은 기존 dashboard 호환 모드(명시 false 전까지 true 유지)다. 실차
+        # 자동시험만 launch override로 양수 lease를 명시한다.
+        self.declare_parameter("enable_heartbeat_timeout_sec", 0.0)
         self.declare_parameter("command_timeout_sec", 0.30)
-        self.declare_parameter("max_speed_mps", 0.50)
+        self.declare_parameter("max_speed_mps", 1.50)
         self.declare_parameter("max_steering_rad", 0.476)
         self.declare_parameter("angle_scale", 0.0068)
         self.declare_parameter("speed_scale", 0.08)
@@ -106,7 +117,7 @@ class TwinMixingCenterDriveBridgeNode(Node):
         selected_speed = float(self.get_parameter("max_speed_mps").value)
         self._preview = (
             max(-maximum_steering, min(maximum_steering, steering)),
-            min(max(0.0, preview_speed), max(0.0, selected_speed)),
+            limit_forward_speed(preview_speed, selected_speed),
         )
         self._preview_at = time.monotonic()
 
@@ -122,14 +133,21 @@ class TwinMixingCenterDriveBridgeNode(Node):
         self._status_at = time.monotonic()
 
     def _on_enabled(self, message: Bool) -> None:
-        self._run_enabled = bool(message.data)
+        self._enable_lease.update(bool(message.data), time.monotonic())
 
     def _publish(self) -> None:
         # 20 Hz 고정 주기. preview 가 늦게 와도 발행 주기는 흔들리지 않는다.
         now = time.monotonic()
         timeout = float(self.get_parameter("command_timeout_sec").value)
+        run_enabled = self._enable_lease.active(now)
+        if self._enable_lease.expired:
+            self.get_logger().error(
+                "ENABLE HEARTBEAT LEASE EXPIRED: publishing motor zero; "
+                "a fresh true heartbeat is required"
+            )
+            self._enable_lease.expired = False
         fresh = (
-            self._run_enabled
+            run_enabled
             and self._preview is not None
             and now - self._preview_at <= timeout
             and now - self._status_at <= timeout
@@ -140,7 +158,7 @@ class TwinMixingCenterDriveBridgeNode(Node):
             speed,
             float(self.get_parameter("angle_scale").value),
             float(self.get_parameter("speed_scale").value),
-            self._status_ready and self._run_enabled,
+            self._status_ready and run_enabled,
             fresh,
         )
         self._publisher.publish(Float32MultiArray(data=command))
@@ -148,7 +166,7 @@ class TwinMixingCenterDriveBridgeNode(Node):
     def destroy_node(self):
         # 종료 경로에서 반드시 0 을 한 번 보낸다. 노드가 사라지는 것만으로는
         # 차가 서지 않는다 (motor_adapter watchdog 이 물릴 때까지 굴러간다).
-        if hasattr(self, "_publisher"):
+        if hasattr(self, "_publisher") and rclpy.ok():
             self._publisher.publish(Float32MultiArray(data=[0.0, 0.0]))
         return super().destroy_node()
 
@@ -158,7 +176,7 @@ def main(args=None) -> None:
     node = TwinMixingCenterDriveBridgeNode()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         node.destroy_node()

@@ -20,8 +20,10 @@ def generate_launch_description():
             'speed_limit_mps', default_value='4.87',
             description='Hard motor-adapter speed cap in metres per second.'),
         DeclareLaunchArgument(
-            'acceleration_limit_mps2', default_value='2.5',
-            description='Motor-adapter acceleration slew limit in metres per second squared.'),
+            'acceleration_limit_mps2', default_value='4.0',
+            description=(
+                'Motor-adapter acceleration slew limit in metres per second squared. '
+                'Race test value 4.0; rollback value 2.5.')),
         Node(package='vesc_driver', executable='vesc_driver_node', name='vesc_driver_node',
              parameters=[config], condition=IfCondition(armed), output='screen'),
         Node(package='vesc_ackermann', executable='ackermann_to_vesc_node',

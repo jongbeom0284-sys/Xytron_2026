@@ -24,6 +24,8 @@ let latestPower='대기 중';
 let latestLane={state:'WAITING',mode:'WAITING',confidence:0,center_offset_px:0};
 let latestTraffic={state:'none',stable:'none',ko:'없음',boxes:[],lamps:0,ms:0,w:640,h:480};
 let latestTrafficAt=0;
+let latestVehicle={car:{dir:'NONE',dist:null},boxes:[],n:0,ms:0,w:640,h:480};
+let latestVehicleAt=0;
 let recordingState={active:false,frames:0,last_path:''};
 let motorState={usb:false,stack_running:false,stack_state:'unknown',active:false,missing_processes:[],result:'잠김',error:null};
 let recordDriveState={state:'idle',result:'대기 중',can_start:true,can_pause:false,can_resume:false,can_finish:false,recording:{frames:0}};
@@ -96,13 +98,25 @@ function laneStreamTopic(){
 
 function laneCard(){
   return `<div class="card-heading"><div><p class="eyebrow">YOLOPv2 CUDA · 신호등 색도판정 · MOTOR OFF</p><h3>차선 + 신호등 인식</h3></div><span class="live-badge">LIVE</span></div>
-    <div class="camera-frame lane-frame"><img class="lane-stream" data-topic="${laneStreamTopic()}" data-stream-topic="${laneStreamTopic()}" src="${streamUrl(laneStreamTopic())}" alt="차선 인식 결과 영상"><div class="signal-overlay"></div></div>
+    <div class="camera-frame lane-frame"><img class="lane-stream" data-topic="${laneStreamTopic()}" data-stream-topic="${laneStreamTopic()}" src="${streamUrl(laneStreamTopic())}" alt="차선 인식 결과 영상"><div class="signal-overlay"></div><div class="vehicle-overlay"></div></div>
     ${signalCardHtml()}
+    ${vehicleCardHtml()}
     <div class="lane-stats">${laneStatsHtml()}</div>
-    <p class="helper">노랑: 중앙선 · 주황: 왼쪽 차선 · 보라: 오른쪽 차선 · 하늘색: 예정 경로 · 빨간 십자: 목표점 · 청록 테두리: 인식된 신호등 램프</p>`;
+    <p class="helper">노랑: 중앙선 · 주황: 왼쪽 차선 · 보라: 오른쪽 차선 · 하늘색: 예정 경로 · 빨간 십자: 목표점 · 청록 테두리: 인식된 신호등 램프 · 주황 테두리: 인식된 앞차</p>`;
 }
 
 const SIGNAL_LABEL={red:'빨간불',yellow:'노란불',green:'초록불',left:'좌회전',none:'신호 없음'};
+const CAR_SIDE={LEFT:'왼쪽',RIGHT:'오른쪽',NONE:'없음'};
+
+function vehicleCardHtml(){
+  return `<div class="vehicle-card" data-side="none">
+    <div class="vcar"><span class="vicon">▣</span></div>
+    <div class="vtext">
+      <strong class="vname">앞차 없음</strong>
+      <span class="vsub">차량 노드 대기 중</span>
+    </div>
+  </div>`;
+}
 
 function signalCardHtml(){
   return `<div class="signal-card" data-signal="none">
@@ -224,6 +238,51 @@ function renderGrid(){
   refreshDynamicValues();
 }
 
+function vehicleStale(){
+  return !latestVehicleAt || (performance.now()-latestVehicleAt)>1500;
+}
+
+function renderVehicleCards(){
+  const stale=vehicleStale();
+  const car=(latestVehicle.car)||{dir:'NONE',dist:null};
+  const side=stale?'NONE':(car.dir||'NONE');
+  const dist=car.dist;
+  const has=(!stale && side!=='NONE');
+  const name=has
+    ? `앞차 ${CAR_SIDE[side]||side}${dist!=null?' · '+Number(dist).toFixed(2)+'m':''}`
+    : '앞차 없음';
+  const go=has?(side==='LEFT'?'우측 흰선으로 회피':'좌측 흰선으로 회피'):'';
+  const sub=stale
+    ? '차량 노드 신호 없음 · vehicle_perception 실행 필요'
+    : (has ? go : `검출 ${latestVehicle.n||0}개 · ${Number(latestVehicle.ms||0).toFixed(0)}ms`);
+  document.querySelectorAll('.vehicle-card').forEach(card=>{
+    card.dataset.side=has?side.toLowerCase():'none';
+    const n=card.querySelector('.vname'); if(n)n.textContent=name;
+    const t=card.querySelector('.vsub'); if(t)t.textContent=sub;
+  });
+  document.querySelectorAll('.vehicle-overlay').forEach(drawVehicleOverlay);
+}
+
+function drawVehicleOverlay(layer){
+  const frame=layer.parentElement, image=frame&&frame.querySelector('img');
+  if(!image){layer.innerHTML='';return;}
+  const boxes=vehicleStale()?[]:(latestVehicle.boxes||[]);
+  if(!boxes.length){layer.innerHTML='';return;}
+  const cw=frame.clientWidth, ch=frame.clientHeight;
+  const nw=latestVehicle.w||image.naturalWidth||640;
+  const nh=latestVehicle.h||image.naturalHeight||480;
+  if(cw<2||ch<2||nw<2||nh<2){layer.innerHTML='';return;}
+  const scale=Math.min(cw/nw,ch/nh), dw=nw*scale, dh=nh*scale;
+  const ox=(cw-dw)/2, oy=(ch-dh)/2;
+  layer.innerHTML=boxes.map(b=>{
+    const left=ox+b.x*dw, top=oy+b.y*dh;
+    const width=b.w*dw, height=b.h*dh;
+    const tag=`${b.ko||'차량'} ${CAR_SIDE[b.dir]||b.dir}`
+      + (b.dist!=null?` ${Number(b.dist).toFixed(2)}m`:'');
+    return `<i class="vbox s-${(b.dir||'none').toLowerCase()}" style="left:${left.toFixed(1)}px;top:${top.toFixed(1)}px;width:${width.toFixed(1)}px;height:${height.toFixed(1)}px"><b>${tag}</b></i>`;
+  }).join('');
+}
+
 function signalStale(){
   return !latestTrafficAt || (performance.now()-latestTrafficAt)>1500;
 }
@@ -272,6 +331,7 @@ function drawSignalOverlay(layer){
 
 function refreshDynamicValues(){
   renderSignalCards();
+  renderVehicleCards();
   document.querySelectorAll('.imu-value').forEach(el=>el.textContent=latestImu);
   document.querySelectorAll('.system-motor').forEach(el=>el.textContent=latestMotor);
   document.querySelectorAll('.system-host').forEach(el=>el.textContent=latestHost);
@@ -581,6 +641,13 @@ new ROSLIB.Topic({ros,name:'/traffic_light/state',messageType:'std_msgs/String'}
 });
 setInterval(renderSignalCards,400);
 addEventListener('resize',renderSignalCards);
+
+new ROSLIB.Topic({ros,name:'/vehicle/state',messageType:'std_msgs/String'}).subscribe(message=>{
+  try{latestVehicle=JSON.parse(message.data);latestVehicleAt=performance.now();}catch(error){return}
+  renderVehicleCards();
+});
+setInterval(renderVehicleCards,400);
+addEventListener('resize',renderVehicleCards);
 
 let latestCone = null;
 let latestConeAt = 0;

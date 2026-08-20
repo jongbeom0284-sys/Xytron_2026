@@ -1,0 +1,110 @@
+from launch import LaunchDescription
+from launch.actions import (
+    DeclareLaunchArgument,
+    ExecuteProcess,
+    SetEnvironmentVariable,
+    TimerAction,
+)
+from launch.conditions import IfCondition
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
+from ament_index_python.packages import get_package_share_directory
+import os
+
+import yaml
+
+
+def camera_control_command(config_dir):
+    """usb_cam 이 장치에 쓰지 못하는 v4l2 제어를 직접 건다.
+
+    usb_cam 은 camera.yaml 의 brightness/autoexposure/exposure 를 ROS 파라미터로는
+    읽지만 실제 장치에는 쓰지 않는다. 2026-08-19 재부팅 후 확인: 파라미터는
+    autoexposure=False, exposure=40 인데 장치는 auto_exposure=3(자동),
+    exposure_time_absolute=157 이었다. 그래서 노드가 뜬 뒤 같은 값을 한 번 더 건다.
+
+    값의 출처는 camera.yaml 하나로 유지한다. 여기에 숫자를 새로 박지 않는다.
+    """
+    with open(os.path.join(config_dir, 'camera.yaml'), encoding='utf-8') as handle:
+        params = yaml.safe_load(handle)['/**']['ros__parameters']
+    device = params.get('video_device', '/dev/videoCAM')
+
+    ctrl_list = [
+        'brightness=%d' % int(params.get('brightness', 0)),
+        'auto_exposure=%s' % ('3' if params.get('autoexposure', False) else '1'),
+        'exposure_time_absolute=%d' % int(params.get('exposure', 40)),
+        'exposure_dynamic_framerate=0',  # 노출 출렁거림 방지를 위해 동적 프레임레이트 비활성화
+    ]
+
+    auto_wb = params.get('auto_white_balance', True)
+    if auto_wb:
+        ctrl_list.append('white_balance_automatic=1')
+    else:
+        ctrl_list.append('white_balance_automatic=0')
+        ctrl_list.append('white_balance_temperature=%d' % int(params.get('white_balance', 2800)))
+
+    controls = ','.join(ctrl_list)
+    return ['v4l2-ctl', '-d', device, '--set-ctrl', controls]
+
+
+def generate_launch_description():
+    share = get_package_share_directory('kobot_vehicle')
+    dashboard = os.path.join(share, 'dashboard')
+    config = os.path.join(share, 'config')
+    camera = LaunchConfiguration('camera')
+    ultrasonic = LaunchConfiguration('ultrasonic')
+    imu = LaunchConfiguration('imu')
+    lidar = LaunchConfiguration('lidar')
+    # ultralytics(차량 YOLO)는 clrernet venv 에만 있다. torch 경로와 함께 넣는다.
+    ultra_site = '/home/xytron/clrernet_eval/venv/lib/python3.10/site-packages'
+    torch_site = os.environ.get(
+        'KOBOT_TORCH_SITE',
+        '/home/xytron/.venvs/twinmixing/lib/python3.10/site-packages',
+    )
+    inherited_pythonpath = os.environ.get('PYTHONPATH', '')
+    pythonpath = os.pathsep.join(
+        [p for p in (torch_site, ultra_site, inherited_pythonpath) if p])
+    return LaunchDescription([
+        SetEnvironmentVariable('PYTHONPATH', pythonpath),
+        DeclareLaunchArgument('camera', default_value='true'),
+        DeclareLaunchArgument('ultrasonic', default_value='true'),
+        DeclareLaunchArgument('imu', default_value='true'),
+        DeclareLaunchArgument('lidar', default_value='true'),
+        Node(package='usb_cam', executable='usb_cam_node_exe', name='camera',
+             parameters=[os.path.join(config, 'camera.yaml')], condition=IfCondition(camera)),
+        # 차선 인식 + YOLOv8n 장애물 회피 (kobot_vehicle)
+        Node(package='kobot_vehicle', executable='yolop_drive',
+             name='yolop_drive',
+             parameters=[os.path.join(
+                 get_package_share_directory('kobot_vehicle'),
+                 'config', 'yolop_drive.yaml')],
+             condition=IfCondition(camera), output='screen'),
+        # 신호등 인식: 정규화 색도 + 원형성.
+        # torch 도 TensorRT 도 YOLO 도 쓰지 않는다. numpy + OpenCV 만으로 약 25ms.
+        Node(package='kobot_vehicle', executable='traffic_perception',
+             name='traffic_perception_node',
+             parameters=[{'debug_image': True, 'max_hz': 20.0}],
+             condition=IfCondition(camera), output='screen'),
+        # 차량 인식: YOLOv8n COCO(car) + 라이다 퓨전. 좌/우와 거리만 낸다.
+        # ultralytics 가 clrernet venv 에만 있어 PYTHONPATH 로 넣어준다.
+        Node(package='kobot_vehicle', executable='vehicle_perception',
+             name='vehicle_perception_node',
+             parameters=[{'debug_image': True, 'infer_interval': 3}],
+             condition=IfCondition(camera), output='screen'),
+        Node(package='kobot_vehicle', executable='ultrasonic_node',
+             parameters=[os.path.join(config, 'ultrasonic.yaml')], condition=IfCondition(ultrasonic)),
+        Node(package='kobot_vehicle', executable='imu_node',
+             parameters=[os.path.join(config, 'imu.yaml')], condition=IfCondition(imu)),
+        Node(package='xycar_lidar', executable='xycar_lidar_node', name='xycar_lidar_node',
+             parameters=[os.path.join(config, 'lidar.yaml')], condition=IfCondition(lidar)),
+        Node(package='kobot_vehicle', executable='status_node'),
+        Node(package='web_video_server', executable='web_video_server',
+             parameters=[{'port': 8080}]),
+        Node(package='rosbridge_server', executable='rosbridge_websocket',
+             parameters=[{'port': 9090}]),
+        Node(package='kobot_vehicle', executable='dashboard_server', output='screen'),
+        TimerAction(
+            period=8.0,
+            actions=[ExecuteProcess(cmd=camera_control_command(config), output='screen')],
+            condition=IfCondition(camera),
+        ),
+    ])

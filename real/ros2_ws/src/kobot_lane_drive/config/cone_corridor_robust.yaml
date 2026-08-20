@@ -1,0 +1,114 @@
+# 라바콘 통로 전용 재현 가능 프로필.
+#
+# 공용 twinmixing_center.yaml에는 차선/회피/라바콘 값이 함께 있어 팀원의 차선
+# 튜닝이나 다른 AI의 bulk edit가 라바콘 실차 시험까지 바꿀 수 있다. 이 파일은
+# cone_corridor_drive.launch.py의 기본 프로필이며, 직선/코너/단측 속도 비율은
+# 1.50/1.00/1.00으로 고정한다. 저속 시험은 YAML을 고치지 말고 launch에
+# max_speed_mps:=0.55를 주어 planner와 bridge에 같은 hard cap을 적용한다.
+
+cone_corridor_drive:
+  ros__parameters:
+    auto_enable: false
+    enable_topic: /kobot_lane_drive/record_drive/enabled
+    lidar_topic: /scan
+    drive_preview_topic: /kobot_lane_drive/cone_corridor/drive_preview
+    status_topic: /kobot_lane_drive/cone_corridor/status
+
+    cone_corridor_width_m: 0.80
+    cone_single_wall_fallback_margin_m: 0.40
+    cone_corridor_width_min_m: 0.60
+    cone_corridor_width_max_m: 1.05
+    cone_forward_min_m: 0.10
+    cone_forward_max_m: 2.00
+    cone_lateral_max_m: 1.00
+    cone_cluster_distance_tolerance_m: 0.12
+    cone_min_cluster_points: 2
+    cone_max_cluster_points: 25
+    cone_min_cluster_span_m: 0.03
+    cone_max_cluster_span_m: 0.25
+    cone_max_link_distance_m: 0.35
+    cone_far_max_link_distance_m: 0.58
+    cone_link_distance_far_start_m: 0.30
+    cone_link_distance_far_full_m: 0.60
+    cone_pair_max_longitudinal_offset_m: 0.38
+    cone_pair_root_max_center_offset_m: 0.25
+    cone_pair_root_min_side_x_m: 0.05
+    cone_pair_root_width_tolerance_m: 0.15
+    cone_boundary_root_lateral_tolerance_m: 0.25
+    cone_boundary_max_heading_change_rad: 1.05
+    cone_min_boundary_cones: 2
+    cone_min_paired_boundary_pairs: 2
+    cone_root_max_y_m: 0.75
+    cone_boundary_extrapolation_m: 0.25
+    cone_slice_step_m: 0.10
+
+    cone_target_lookahead_m: 0.90
+    cone_corner_lookahead_m: 0.62
+    cone_target_local_window_m: 0.15
+    cone_lookahead_bend_start_m: 0.08
+    cone_lookahead_bend_full_m: 0.28
+    cone_lookahead_near_min_m: 0.30
+    cone_lookahead_near_max_m: 0.60
+    cone_lookahead_far_min_m: 1.05
+    cone_lookahead_far_max_m: 1.45
+    cone_lookahead_curvature_start_1pm: 0.15
+    cone_lookahead_curvature_full_1pm: 0.90
+    cone_lookahead_rate_mps: 0.40
+    cone_polynomial_fit_min_y_m: 0.25
+    cone_polynomial_fit_max_y_m: 1.60
+    cone_polynomial_fit_min_points: 5
+    cone_polynomial_fit_outlier_tolerance_m: 0.15
+    cone_polynomial_fit_maximum_rmse_m: 0.08
+    # 실측 전 초기값: 라이다 중심에서 뒷바퀴 축 중심까지의 종방향 거리.
+    cone_lidar_to_rear_axle_m: 0.42
+    cone_curve_outward_bias_max_m: 0.10
+    cone_curve_outward_bias_left_max_m: 0.20
+    cone_curve_outward_bias_right_max_m: 0.15
+    cone_curve_outward_bias_start_ratio: 0.25
+    cone_curve_outward_bias_full_ratio: 0.80
+    cone_vehicle_width_m: 0.35
+    cone_minimum_boundary_clearance_m: 0.00
+
+    cone_steering_gain: 1.90
+    cone_heading_gain: 0.18
+    cone_drive_speed_mps: 1.50
+    cone_corner_speed_mps: 1.00
+    cone_fallback_speed_mps: 1.00  # rollback: 0.50
+    max_speed_mps: 1.50
+    cone_detection_min_slices: 2
+    cone_detection_min_total_points: 3
+    cone_steering_filter_alpha: 0.75
+    cone_max_steering_rate_rad_s: 5.00
+
+    cone_path_max_target_jump_m: 0.18
+    cone_path_max_steering_jump_rad: 0.20
+    cone_path_hold_sec: 0.35
+    cone_path_hold_speed_mps: 1.00 # rollback: 0.50
+    cone_path_sharp_hold_steering_rad: 0.349
+    cone_path_sharp_hold_sec: 0.00
+    cone_path_sharp_hold_speed_mps: 1.00 # rollback: 0.50
+    cone_path_stop_on_lost: false
+    cone_path_transition_target_rate_mps: 0.80
+    cone_path_transition_steering_rate_rad_s: 2.00
+    cone_path_pending_target_step_m: 0.05
+    cone_path_pending_steering_step_rad: 0.10
+    cone_path_candidate_confirmation_frames: 2
+    cone_path_candidate_match_target_m: 0.08
+    cone_path_candidate_match_steering_rad: 0.10
+    cone_path_profile_min_overlap_slices: 3
+    cone_path_profile_median_tolerance_m: 0.12
+    cone_path_profile_max_tolerance_m: 0.20
+    lidar_angle_offset_rad: -2.1217
+
+cone_corridor_drive_bridge:
+  ros__parameters:
+    armed: false
+    drive_preview_topic: /kobot_lane_drive/cone_corridor/drive_preview
+    status_topic: /kobot_lane_drive/cone_corridor/status
+    enable_topic: /kobot_lane_drive/record_drive/enabled
+    enable_heartbeat_timeout_sec: 0.0
+    command_timeout_sec: 0.30
+    max_speed_mps: 1.50
+    max_steering_rad: 0.476
+    angle_scale: 0.0068
+    speed_scale: 0.08

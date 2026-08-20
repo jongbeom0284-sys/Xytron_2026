@@ -54,6 +54,11 @@ class LaneConfig:
     # 세로 전파 뒤 흰선을 한 번 더 퍼뜨려 오염된 노랑을 되덮는다.
     # 실제 노란 화소(씨앗)에서 막히므로 진짜 중앙선은 안 지워진다.
     white_reclaim: bool = True
+    # --- 차량 회피: 한쪽 흰선에 붙어 달린다 ---
+    # 0 이면 평소대로 (좌우 흰선 한가운데 또는 노란선 추종).
+    # 양수면 우측 흰선에서 왼쪽으로 그만큼, 음수면 좌측 흰선에서 오른쪽으로 그만큼.
+    # 노드가 회피 상태에 따라 매 프레임 넣는다.
+    avoid_offset_px: float = 0.0
     white_dl: int = 10               # 노면 대비 밝기차
     white_tophat: int = 12
     chroma_max: int = 18
@@ -123,6 +128,55 @@ def grow_vertical(blob: np.ndarray, seed: np.ndarray,
             break
         marker = grown
     return marker.astype(bool)
+
+
+def divider_x(result, y: int) -> float | None:
+    """그 행에서 우리 차선을 가르는 기준선의 x 를 돌려준다.
+
+    노란 중앙선이 있으면 그것을 쓴다. 장면과 함께 움직이므로 카메라 장착
+    위치나 차가 치우친 정도에 영향받지 않는다.
+    없으면 좌우 흰선의 중간을 쓰고, 그것도 없으면 None 이다.
+    """
+    if result is None:
+        return None
+    height = None
+    for mask in (result.yellow_mask, result.white_mask):
+        if mask is not None:
+            height = mask.shape[0]
+            break
+    if height is None:
+        return None
+    y = int(max(0, min(height - 1, y)))
+
+    yellow = result.yellow_mask
+    if yellow is not None:
+        runs = LaneTracker._row_runs(yellow, y, min_run=2)
+        if runs:
+            return float(max(runs, key=len).mean())
+
+        # 그 행에 노란선이 없을 수 있다. 점선이거나 차 아래에서 끊긴 경우다.
+        # 실측 프레임 118: 차 아래가 y=264 인데 노란선은 y=270 에서 끝난다.
+        # 보이는 구간으로 직선을 맞춰 그 행의 위치를 계산한다.
+        rows, xs = [], []
+        for probe in range(0, yellow.shape[0], 4):
+            got = LaneTracker._row_runs(yellow, probe, min_run=2)
+            if got:
+                rows.append(float(probe))
+                xs.append(float(max(got, key=len).mean()))
+        if len(rows) >= 3:
+            slope, base = np.polyfit(np.array(rows), np.array(xs), 1)
+            span = max(rows) - min(rows)
+            # 보이는 길이의 1.5배 밖까지는 연장하지 않는다. 그 이상은 믿을 수 없다.
+            if (abs(y - min(rows)) <= span * 1.5
+                    and abs(y - max(rows)) <= span * 1.5):
+                return float(slope * y + base)
+
+    white = result.white_mask
+    if white is not None:
+        runs = LaneTracker._row_runs(white, y)
+        if len(runs) >= 2:
+            return float((runs[0].mean() + runs[-1].mean()) / 2.0)
+    return None
 
 
 def reclaim_white(blob: np.ndarray, yellow: np.ndarray,
@@ -327,9 +381,27 @@ class LaneTracker:
         return [p for p in parts if p.size >= min_run]
 
     def _target_points(self, yellow_mask, white_mask, y0, height):
-        """행마다 목표 x 를 구한다. 노란선 우선, 없으면 흰선 중앙."""
+        """행마다 목표 x 를 구한다. 노란선 우선, 없으면 흰선 중앙.
+
+        회피 중(avoid_offset_px != 0)에는 노란선을 보지 않고 지정한 쪽
+        흰선에 붙는다. 앞차가 왼쪽이면 우측 흰선 안쪽으로 붙어 지나간다.
+        """
         rows = list(range(y0, height - 2, 4))
         points, basis = [], 'none'
+
+        offset = float(self.config.avoid_offset_px)
+        if offset != 0.0:
+            hug = []
+            for y in rows:
+                runs = self._row_runs(white_mask, y)
+                if not runs:
+                    continue
+                edge = runs[-1] if offset > 0 else runs[0]
+                hug.append((y, float(edge.mean()) - offset))
+            if len(hug) >= self.config.min_fit_rows:
+                return hug, ('avoid_right' if offset > 0 else 'avoid_left')
+            # 흰선이 부족하면 아래 평소 경로로 떨어진다
+
         yellow_rows = []
         for y in rows:
             runs = self._row_runs(yellow_mask, y, min_run=2)

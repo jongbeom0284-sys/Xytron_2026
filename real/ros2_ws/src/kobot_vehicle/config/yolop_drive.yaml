@@ -61,7 +61,7 @@ yolop_drive:
 
     # ---- 장애물 감지 & 회피 (YOLOv8n + LiDAR) ----
     enable_obstacle: true
-    yolo_model_path: ''           # 비어 있으면 kobot_vehicle/yolov8n.pt 자동 사용
+    yolo_model_path: /home/xytron/2026_Xytron/real/ros2_ws/src/kobot_vehicle/kobot_vehicle/yolov8n.pt
     yolo_infer_interval: 3        # N프레임마다 1회 추론 (부하 제어)
     yolo_conf_thres: 0.20         # 객체 탐지 신뢰도 임계값
     obstacle_class_ids: [2]       # 회피 대상 COCO class ID 목록 (기본 2: Car)

@@ -67,7 +67,9 @@ def generate_launch_description():
                 config,
                 {
                     "armed": True,
-                    "max_speed_mps": ParameterValue(max_speed_mps, value_type=float),
+                    "max_speed_mps": ParameterValue(
+                        max_speed_mps, value_type=float
+                    ),
                 },
             ],
             condition=IfCondition(armed),
