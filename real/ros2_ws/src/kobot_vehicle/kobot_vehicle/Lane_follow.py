@@ -6,7 +6,8 @@ ROS2 압축 이미지 및 2D LiDAR 기반 통합 자율주행 Node
 - 최우선: 노란색 차선(단일/점선 모노레일) 추종
 - 차선 소실 시: 흰색 차선(좌/우/양쪽) Fallback 추종
 - YOLOv8n + 2D LiDAR 센서 퓨전 장애물 감지 및 좌/우 분류
-- 정적 장애물 회피 상태 머신 (좌측 장애물 -> 우측 흰색 차선 우회 / 우측 장애물 -> 좌측 흰색 차선 우회)
+- 정적 장애물 회피 상태 머신 (좌측 차량 -> 우측 흰색 차선 우회 / 우측 차량 -> 좌측 흰색 차선 우회)
+- 보행자(사람, Person ID:0) 감지 시 비상 정지(Emergency Stop)
 - 장애물 통과 후 노란색 중앙선 자동 복귀
 - 적응형 피팅(1차/2차) 및 궤적 외삽(Extrapolation), 속도/조향 필터링
 """
@@ -95,20 +96,35 @@ class Config:
     WHITE_LANE_HALF_WIDTH = 180 # 한쪽 흰색 차선만 보일 때 중앙 추정 반폭 (픽셀)
     
     # ==========================================================================
-    # [YOLOv8 + LiDAR 센서 퓨전 및 장애물 회피 파라미터]
+    # [YOLOv8 + LiDAR 센서 퓨전 및 장애물 회피/정지 파라미터]
     # ==========================================================================
     ENABLE_YOLO = True
     MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'yolov8n.pt')
     YOLO_INFER_INTERVAL = 3     # N프레임당 1회 추론 (제어 루프 실시간 30FPS 보장)
-    YOLO_CONF_THRES = 0.50      # 객체 탐지 신뢰도 임계값
-    IGNORE_CLASSES = [72, 62, 28] # 무시할 COCO 클래스 (신호등, 표지판 등)
-    CLASS_PERSON = 0            # COCO 'person'
+    YOLO_CONF_THRES = 0.20      # 객체 탐지 신뢰도 임계값 (0.20으로 민감도 향상)
+    
+    # 타겟 COCO 클래스 지정
+    CLASS_PERSON = 0            # COCO 'person' (보행자 감지 시 비상 정지)
+    CLASS_CAR = 2               # COCO 'car' (정적 차량 감지 시 회피)
+    TARGET_CLASSES = [CLASS_PERSON, CLASS_CAR]
+    
+    PERSON_STOP_DIST = 2.0      # 보행자 비상 정지 거리 (m 이내일 때 정지)
+
+    # bbox 하단(y2)이 이 y 픽셀보다 위면 머리 위 구조물로 보고 장애물에서 제외
+    OVERHEAD_REJECT_Y = int(IMAGE_HEIGHT * ROI_TOP_RATIO)
     
     CAMERA_H_FOV_DEG = 68.0     # 카메라 수평 화각 (도)
     LIDAR_VALID_MIN_DIST = 0.15 # LiDAR 유효 최소 거리 (m)
     LIDAR_VALID_MAX_DIST = 4.0  # LiDAR 유효 최대 거리 (m)
+
+    # 라이다 장착각 보정 (-121.6도)
+    LIDAR_ANGLE_OFFSET_RAD = -2.1217
+
+    # 센서 데이터 신선도 타임아웃
+    LIDAR_MAX_AGE_SEC = 0.5
+    IMAGE_MAX_AGE_SEC = 0.3
     
-    # 장애물 회피 상태 머신 거리 임계값
+    # 장애물 회피 상태 머신 거리 임계값 (차량 기준)
     OBSTACLE_AVOID_DIST = 1.30  # 회피 시작 거리 (m 이내일 때 회피 모드 진입)
     OBSTACLE_CLEAR_DIST = 1.80  # 장애물이 완전히 멀어졌다고 판단하는 거리 (m)
     AVOID_HOLD_FRAMES = 25      # 장애물 소실 후 차선 유지 프레임 수 (약 0.8초)
@@ -138,6 +154,7 @@ class TrackDriveNode(Node):
         
         # LiDAR 구독자 (qos_profile_sensor_data 적용)
         self.latest_scan = None
+        self.latest_scan_at = 0.0
         self.lidar_sub = self.create_subscription(
             LaserScan,
             "/scan",
@@ -180,7 +197,7 @@ class TrackDriveNode(Node):
                 cv2.namedWindow("Trackbars", cv2.WINDOW_NORMAL)
                 cv2.resizeWindow("Trackbars", 500, 500)
                 
-                # 노란색 차선 HSV 트랙바 (실측 튜닝값 적용)
+                # 노란색 차선 HSV 트랙바
                 cv2.createTrackbar("Y_H_MIN", "Trackbars", 39, 180, nothing)
                 cv2.createTrackbar("Y_H_MAX", "Trackbars", 93, 180, nothing)
                 cv2.createTrackbar("Y_S_MIN", "Trackbars", 0, 255, nothing)
@@ -188,7 +205,7 @@ class TrackDriveNode(Node):
                 cv2.createTrackbar("Y_V_MIN", "Trackbars", 34, 255, nothing)
                 cv2.createTrackbar("Y_V_MAX", "Trackbars", 255, 255, nothing)
                 
-                # 흰색 차선 HSV 트랙바 (실측 튜닝값 적용)
+                # 흰색 차선 HSV 트랙바
                 cv2.createTrackbar("W_H_MIN", "Trackbars", 85, 180, nothing)
                 cv2.createTrackbar("W_H_MAX", "Trackbars", 180, 180, nothing)
                 cv2.createTrackbar("W_S_MIN", "Trackbars", 115, 255, nothing)
@@ -204,6 +221,8 @@ class TrackDriveNode(Node):
         self.prev_error = 0.0
         self.integral_error = 0.0
         self.last_time = time.time()
+        self.last_frame_at = 0.0
+        self._stale_warned = False
         self.error_buffer = []  # error 이동평균 버퍼
         
         self.prev_ema_angle = 0.0
@@ -216,8 +235,8 @@ class TrackDriveNode(Node):
         # ======================================================================
         # [회피 주행 상태 머신 변수]
         # STATE_NORMAL: 노란색 차선 정상 주행
-        # STATE_AVOID_LEFT: 좌측 장애물 감지 -> 우측 흰색 차선 우회
-        # STATE_AVOID_RIGHT: 우측 장애물 감지 -> 좌측 흰색 차선 우회
+        # STATE_AVOID_LEFT: 좌측 차량 감지 -> 우측 흰색 차선 우회
+        # STATE_AVOID_RIGHT: 우측 차량 감지 -> 좌측 흰색 차선 우회
         # STATE_RETURNING: 장애물 통과 후 노란색 차선 복귀 중
         # ======================================================================
         self.avoid_state = "STATE_NORMAL"
@@ -225,6 +244,8 @@ class TrackDriveNode(Node):
         self.last_obstacle_dir = None
         self.last_obstacle_dist = float('inf')
         self.detected_boxes = [] # 디버그 렌더링용 최근 바운딩 박스 목록
+        self.person_detected = False
+        self.person_dist = float('inf')
         
         # YOLOv8 모델 로드
         self.yolo_model = None
@@ -248,10 +269,14 @@ class TrackDriveNode(Node):
     def scan_callback(self, msg: LaserScan):
         """ LiDAR 스캔 데이터 지속적 버퍼링 """
         self.latest_scan = msg
+        self.latest_scan_at = time.time()
 
     def extract_distance_from_bbox(self, x1, x2, img_width):
         """ Bounding Box의 픽셀 좌표를 LiDAR 각도로 매핑하여 최단 거리(m) 추출 """
         if self.latest_scan is None:
+            return float('inf')
+
+        if (time.time() - self.latest_scan_at) > Config.LIDAR_MAX_AGE_SEC:
             return float('inf')
 
         scan = self.latest_scan
@@ -260,20 +285,22 @@ class TrackDriveNode(Node):
         ranges[np.isinf(ranges)] = 10.0
         
         fov_rad = math.radians(Config.CAMERA_H_FOV_DEG)
-        angle_start = fov_rad * (0.5 - float(x2) / img_width)
-        angle_end = fov_rad * (0.5 - float(x1) / img_width)
+        angle_start = fov_rad * (0.5 - float(x2) / img_width) - Config.LIDAR_ANGLE_OFFSET_RAD
+        angle_end = fov_rad * (0.5 - float(x1) / img_width) - Config.LIDAR_ANGLE_OFFSET_RAD
+        angle_start = math.atan2(math.sin(angle_start), math.cos(angle_start))
+        angle_end = math.atan2(math.sin(angle_end), math.cos(angle_end))
 
         idx_start = int((angle_start - scan.angle_min) / scan.angle_increment)
         idx_end = int((angle_end - scan.angle_min) / scan.angle_increment)
-        
-        max_idx = len(ranges) - 1
-        idx_start = max(0, min(max_idx, idx_start))
-        idx_end = max(0, min(max_idx, idx_end))
-        
-        if idx_start > idx_end:
-            idx_start, idx_end = idx_end, idx_start
 
-        roi_ranges = ranges[idx_start:idx_end+1]
+        n = len(ranges)
+        idx_start %= n
+        idx_end %= n
+
+        if idx_start > idx_end:
+            roi_ranges = np.concatenate((ranges[idx_start:], ranges[:idx_end + 1]))
+        else:
+            roi_ranges = ranges[idx_start:idx_end + 1]
         valid_ranges = roi_ranges[(roi_ranges >= Config.LIDAR_VALID_MIN_DIST) & (roi_ranges <= Config.LIDAR_VALID_MAX_DIST)]
         
         if len(valid_ranges) == 0:
@@ -283,6 +310,14 @@ class TrackDriveNode(Node):
         return float(np.percentile(valid_ranges, 10))
 
     def timer_callback(self):
+        # 카메라 프레임 타임아웃 검사
+        if self.last_frame_at > 0.0 and (time.time() - self.last_frame_at) > Config.IMAGE_MAX_AGE_SEC:
+            if not self._stale_warned:
+                self.get_logger().error(f"카메라 프레임 {Config.IMAGE_MAX_AGE_SEC}s 이상 끊김 — 모터 정지")
+                self._stale_warned = True
+            self.current_speed = 0.0
+            self.current_angle = 0.0
+
         motor_msg = Float32MultiArray()
         motor_msg.data = [float(self.current_angle), float(self.current_speed)]
         self.motor_pub.publish(motor_msg)
@@ -299,15 +334,17 @@ class TrackDriveNode(Node):
         cv_img = cv2.resize(cv_img, (Config.IMAGE_WIDTH, Config.IMAGE_HEIGHT))
         
         # ======================================================================
-        # [1. YOLOv8 + LiDAR 센서 퓨전 장애물 감지 (N프레임 주기)]
+        # [1. YOLOv8 + LiDAR 센서 퓨전 (Car=2 회피, Person=0 비상정지)]
         # ======================================================================
         min_obstacle_dist = float('inf')
         closest_obstacle_dir = None
+        person_detected = False
+        min_person_dist = float('inf')
         
         if self.yolo_model is not None and (self.frame_count % Config.YOLO_INFER_INTERVAL == 0):
             self.detected_boxes = []
             try:
-                # 320x320 경량 고속 추론
+                # 320x320 경량 고속 추론 (conf=0.20 적용)
                 results = self.yolo_model(cv_img, imgsz=320, conf=Config.YOLO_CONF_THRES, device='cuda:0', verbose=False)
                 if len(results) > 0 and results[0].boxes is not None:
                     boxes = results[0].boxes
@@ -315,25 +352,42 @@ class TrackDriveNode(Node):
                         cls_id = int(box.cls[0].item())
                         conf = float(box.conf[0].item())
                         
-                        if cls_id in Config.IGNORE_CLASSES:
+                        # [필터링] Car(2)와 Person(0)만 처리, 그 외 클래스는 모두 무시
+                        if cls_id not in Config.TARGET_CLASSES:
                             continue
                             
                         x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+
+                        # bbox 하단이 roi_top보다 위면 머리 위 구조물로 보고 제외
+                        if y2 <= Config.OVERHEAD_REJECT_Y:
+                            continue
+
                         dist = self.extract_distance_from_bbox(x1, x2, Config.IMAGE_WIDTH)
-                        
                         cx = (x1 + x2) / 2.0
                         obj_dir = 'LEFT' if cx < (Config.IMAGE_WIDTH / 2.0) else 'RIGHT'
                         
                         self.detected_boxes.append((x1, y1, x2, y2, dist, obj_dir, cls_id, conf))
                         
-                        if dist < min_obstacle_dist:
-                            min_obstacle_dist = dist
-                            closest_obstacle_dir = obj_dir
+                        # 1) 보행자 (Person, ID: 0) 감지 시 비상 정지 판정
+                        if cls_id == Config.CLASS_PERSON:
+                            if dist <= Config.PERSON_STOP_DIST:
+                                person_detected = True
+                                if dist < min_person_dist:
+                                    min_person_dist = dist
+                                    
+                        # 2) 차량 (Car, ID: 2) 감지 시 회피 장애물 거리/방향 갱신
+                        elif cls_id == Config.CLASS_CAR:
+                            if dist < min_obstacle_dist:
+                                min_obstacle_dist = dist
+                                closest_obstacle_dir = obj_dir
+                                
             except Exception as e:
                 self.get_logger().error(f"YOLO Inference Error: {e}")
                 
             self.last_obstacle_dist = min_obstacle_dist
             self.last_obstacle_dir = closest_obstacle_dir
+            self.person_detected = person_detected
+            self.person_dist = min_person_dist
             
             # 토픽 발행
             if min_obstacle_dist != float('inf'):
@@ -344,6 +398,8 @@ class TrackDriveNode(Node):
         else:
             min_obstacle_dist = self.last_obstacle_dist
             closest_obstacle_dir = self.last_obstacle_dir
+            person_detected = self.person_detected
+            min_person_dist = self.person_dist
 
         # ======================================================================
         # [2. 차선 인식 전처리 (ROI 및 HSV)]
@@ -524,14 +580,14 @@ class TrackDriveNode(Node):
             white_right_x = int(r_fit[0] * lookahead_y + r_fit[1])
 
         # ======================================================================
-        # [3. 정적 장애물 회피 상태 머신 (Avoidance State Machine)]
+        # [3. 정적 차량 회피 상태 머신 (Avoidance State Machine)]
         # ======================================================================
         if min_obstacle_dist <= Config.OBSTACLE_AVOID_DIST:
             if closest_obstacle_dir == 'LEFT':
-                self.avoid_state = "STATE_AVOID_LEFT"   # 좌측 장애물 -> 우측 흰색 차선 우회
+                self.avoid_state = "STATE_AVOID_LEFT"   # 좌측 차량 -> 우측 흰색 차선 우회
                 self.avoid_hold_counter = Config.AVOID_HOLD_FRAMES
             elif closest_obstacle_dir == 'RIGHT':
-                self.avoid_state = "STATE_AVOID_RIGHT"  # 우측 장애물 -> 좌측 흰색 차선 우회
+                self.avoid_state = "STATE_AVOID_RIGHT"  # 우측 차량 -> 좌측 흰색 차선 우회
                 self.avoid_hold_counter = Config.AVOID_HOLD_FRAMES
         elif self.avoid_state in ["STATE_AVOID_LEFT", "STATE_AVOID_RIGHT"]:
             if self.avoid_hold_counter > 0:
@@ -608,7 +664,7 @@ class TrackDriveNode(Node):
                 status_txt = "LANE LOST"
             
         # ======================================================================
-        # [5. PID 제어 및 속도 계산]
+        # [5. PID 제어 및 속도/정지 계산]
         # ======================================================================
         if target_x is not None:
             raw_error = target_x - (Config.IMAGE_WIDTH // 2)
@@ -638,15 +694,24 @@ class TrackDriveNode(Node):
         base_speed = Config.AVOID_SPEED if "AVOID" in self.avoid_state else Config.BASE_SPEED
         target_speed = float(max(Config.MIN_SPEED, min(base_speed, base_speed - abs(angle_clamped) * Config.SPEED_DECAY)))
         
+        # 차선 소실 시 정지
         if status_txt == "LANE LOST": 
             target_speed = 0.0 
             angle_clamped = 0.0
+            
+        # [보행자 감지 시 비상 정지 (Emergency Stop)]
+        if person_detected:
+            target_speed = 0.0
+            angle_clamped = 0.0
+            status_txt = f"EMERGENCY STOP (PERSON {min_person_dist:.1f}m)"
             
         filtered_speed = (Config.EMA_ALPHA_SPEED * target_speed) + ((1.0 - Config.EMA_ALPHA_SPEED) * self.prev_ema_speed)
         self.prev_ema_speed = filtered_speed
         
         self.current_angle = angle_clamped
         self.current_speed = filtered_speed
+
+        self.last_frame_at = time.time()
 
         self.get_logger().info(f"State: {status_txt}, StateMachine: {self.avoid_state}, Steer: {angle_clamped:.1f}, Speed: {filtered_speed:.1f}", throttle_duration_sec=0.5)
         
@@ -664,15 +729,28 @@ class TrackDriveNode(Node):
         
         cv2.line(out_img, (Config.IMAGE_WIDTH // 2, 0), (Config.IMAGE_WIDTH // 2, Config.IMAGE_HEIGHT), (100, 100, 100), 1)
         
-        # 탐지된 장애물 바운딩 박스 및 LiDAR 거리 표시
+        # 탐지된 객체 바운딩 박스 렌더링 (Person: 빨간색, Car: 노랑/빨강)
         for (bx1, by1, bx2, by2, bdist, bdir, bcls, bconf) in self.detected_boxes:
-            bcolor = (0, 0, 255) if bdist <= Config.OBSTACLE_AVOID_DIST else (0, 255, 255)
+            if bcls == Config.CLASS_PERSON:
+                bcolor = (0, 0, 255) # 빨간색
+                label_txt = f"PERSON {bdist:.2f}m ({bconf:.2f})" if bdist != float('inf') else f"PERSON ({bconf:.2f})"
+            else: # Car (2)
+                bcolor = (0, 0, 255) if bdist <= Config.OBSTACLE_AVOID_DIST else (0, 255, 255)
+                label_txt = f"CAR {bdir} {bdist:.2f}m ({bconf:.2f})" if bdist != float('inf') else f"CAR {bdir} ({bconf:.2f})"
+                
             cv2.rectangle(out_img, (bx1, by1), (bx2, by2), bcolor, 2)
-            label_txt = f"{bdir} {bdist:.2f}m (ID:{bcls})" if bdist != float('inf') else f"{bdir} (No LiDAR)"
             cv2.putText(out_img, label_txt, (bx1, max(20, by1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, bcolor, 2)
         
         # 상태 표시
-        state_color = (0, 0, 255) if "AVOID" in self.avoid_state else ((0, 255, 255) if "YELLOW" in status_txt else (255, 200, 0))
+        if person_detected:
+            state_color = (0, 0, 255) # 빨강
+        elif "AVOID" in self.avoid_state:
+            state_color = (0, 0, 255)
+        elif "YELLOW" in status_txt:
+            state_color = (0, 255, 255)
+        else:
+            state_color = (255, 200, 0)
+            
         cv2.putText(out_img, f"Mode: {status_txt}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.65, state_color, 2)
         cv2.putText(out_img, f"Avoid State: {self.avoid_state}", (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
         cv2.putText(out_img, f"Angle: {angle_clamped:.1f} | Speed: {filtered_speed:.1f}", (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)

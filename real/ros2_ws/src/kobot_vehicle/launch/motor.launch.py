@@ -17,7 +17,7 @@ def generate_launch_description():
             'armed', default_value='false',
             description='Must be explicitly true. Open VESC and allow vehicle commands.'),
         DeclareLaunchArgument(
-            'speed_limit_mps', default_value='2.16',
+            'speed_limit_mps', default_value='4.87',
             description='Hard motor-adapter speed cap in metres per second.'),
         DeclareLaunchArgument(
             'acceleration_limit_mps2', default_value='2.5',

@@ -7,8 +7,11 @@ import pytest
 from kobot_lane_drive.cone_corridor import (
     ConeCorridorConfig,
     analyze_cone_corridor,
+    chain_cone_boundary,
     compute_steering_pure_pursuit,
     extract_corridor_slices,
+    select_boundary_roots,
+    split_cone_walls,
 )
 from kobot_lane_drive.obstacle_lidar import LidarSectorConfig
 
@@ -174,3 +177,121 @@ def test_pure_pursuit_calculation():
     # 극단적인 오차 시 max_steering_rad 로 클램프
     clamped = compute_steering_pure_pursuit(0.5, 0.2, 0.33, 0.45)
     assert clamped == 0.45
+
+
+# ---------------------------------------------------------------------------
+# 좌/우 벽면 상호 배제 (90도 코너에서 외벽이 x=0 을 넘어올 때)
+# ---------------------------------------------------------------------------
+
+# 좌회전 헤어핀 실측 배치. 우측 외벽이 (0.30, 0.95) 에서 x=0 을 넘어 좌측으로 넘어오고,
+# 진짜 안쪽(좌) 벽은 그보다 멀리 (0.75, 1.30) 에 하나만 남아 있다.
+HAIRPIN_CONES = [
+    (-0.40, 0.20),
+    (-0.30, 0.60),
+    (-0.05, 0.85),
+    (0.30, 0.95),   # 우측 외벽이지만 x > 0.05 — 좌벽 시드 후보로도 잡힌다
+    (0.75, 1.30),   # 진짜 좌측(안쪽) 벽
+]
+HAIRPIN_LINK_M = 0.55
+
+
+def test_chain_root_must_belong_to_pool():
+    """풀에 없는(이미 반대편 벽에 배정된) 콘은 체인의 시작점이 될 수 없다."""
+    claimed = (0.30, 0.95)
+    pool = [(0.75, 1.30)]
+
+    chain = chain_cone_boundary([claimed], pool, HAIRPIN_LINK_M)
+
+    assert claimed not in chain
+    assert chain == []
+
+
+def test_boundary_roots_prefer_near_and_default_to_no_far_fallback():
+    """근거리 후보를 우선한다. 원거리 폴백은 기본 꺼짐이라 먼 콘은 시드가 되지 않는다."""
+    near = (0.40, 0.60)
+    far = (0.50, 1.80)
+
+    # 근거리 후보가 있으면 그것만 쓴다 (폴백 설정과 무관)
+    assert select_boundary_roots([near, far], left_side=True) == [near]
+
+    # 기본값(폴백 꺼짐)에서는 근거리 창 밖 콘을 시드로 쓰지 않는다.
+    # 원거리 잡음 클러스터 하나가 통로 벽으로 승격되는 것을 막는다.
+    assert select_boundary_roots([far], left_side=True) == []
+
+    # 명시적으로 켰을 때만 되돌린다
+    assert select_boundary_roots([far], left_side=True, allow_far_fallback=True) == [far]
+
+    # 반대편 콘은 절대 섞이지 않는다
+    assert select_boundary_roots([(-0.40, 0.60)], left_side=True) == []
+
+
+def test_hairpin_outer_wall_cone_is_not_shared_by_both_walls():
+    """90도 코너에서 외벽 콘이 좌·우 양쪽 벽에 중복 배정되면 안 된다.
+
+    수정 전에는 우벽 체인이 (0.30, 0.95) 를 삼킨 뒤에도 배제 전 목록으로 좌벽 시드를 골라
+    같은 콘이 좌벽의 머리가 되었다. 그 결과 유령 좌벽이 생기고 중심선이 안쪽으로 밀렸다.
+    """
+    left_cones, right_cones = split_cone_walls(HAIRPIN_CONES, HAIRPIN_LINK_M)
+
+    shared = set(left_cones) & set(right_cones)
+    assert not shared, f"한 콘이 양쪽 벽에 중복 배정됨: {shared}"
+
+
+def test_hairpin_keeps_genuine_inner_cone_when_fallback_enabled():
+    """폴백을 켜면 상호 배제가 멀쩡한 안쪽 벽까지 지워버리지 않는다.
+
+    이 폴백은 기본 꺼짐이다 — 원거리 잡음을 벽으로 승격시키는 대가가 실측으로 확인됐다
+    (8/10 bag: found +37%). 코너에서 안쪽 벽 소실이 실제로 관측되면 그때 켠다.
+    """
+    left_cones, right_cones = split_cone_walls(
+        HAIRPIN_CONES, HAIRPIN_LINK_M, allow_far_fallback=True
+    )
+
+    # 외벽은 x=0 을 넘어온 콘까지 자기 체인으로 갖는다
+    assert (0.30, 0.95) in right_cones
+    # 진짜 안쪽 콘은 버려지지 않고 좌벽으로 살아남는다
+    assert (0.75, 1.30) in left_cones
+    # 어떤 콘도 유실되지 않는다
+    assert set(left_cones) | set(right_cones) == set(HAIRPIN_CONES)
+
+
+def test_wall_split_is_exclusive_for_straight_corridor():
+    """직선 통로에서는 좌/우가 부호대로 깔끔히 갈린다 (정상 경로 회귀 방지)."""
+    cones = []
+    for i in range(6):
+        y = 0.25 + i * 0.30
+        cones.append((0.40, y))
+        cones.append((-0.40, y))
+
+    left_cones, right_cones = split_cone_walls(cones, HAIRPIN_LINK_M)
+
+    assert not (set(left_cones) & set(right_cones))
+    assert all(c[0] > 0 for c in left_cones)
+    assert all(c[0] < 0 for c in right_cones)
+    assert len(left_cones) == 6 and len(right_cones) == 6
+
+
+def test_root_fallback_switch_off_restores_strict_near_window():
+    """폴백을 끄면 근거리 창 밖 콘은 시드가 되지 않는다 (수정 전 벽 배정과 동일)."""
+    far = (0.50, 1.80)   # ROOT_NEAR_Y_M(1.20) 밖
+
+    assert select_boundary_roots([far], left_side=True, allow_far_fallback=True) == [far]
+    assert select_boundary_roots([far], left_side=True, allow_far_fallback=False) == []
+
+
+def test_root_fallback_switch_does_not_reopen_the_shared_cone_bug():
+    """폴백을 꺼도 시드 검사는 살아 있어 중복 배정은 여전히 막힌다."""
+    for flag in (True, False):
+        left_cones, right_cones = split_cone_walls(
+            HAIRPIN_CONES, HAIRPIN_LINK_M, allow_far_fallback=flag
+        )
+        assert not (set(left_cones) & set(right_cones)), f"allow_far_fallback={flag} 에서 중복 배정"
+
+
+def test_hairpin_default_drops_inner_cone_but_never_shares_it():
+    """기본값(폴백 꺼짐)에서도 중복 배정은 없다 — 안쪽 콘이 버려질 뿐 양쪽 벽에 걸치지 않는다."""
+    left_cones, right_cones = split_cone_walls(HAIRPIN_CONES, HAIRPIN_LINK_M)
+
+    assert not (set(left_cones) & set(right_cones))
+    assert (0.30, 0.95) in right_cones          # 외벽은 그대로
+    assert (0.30, 0.95) not in left_cones       # 수정 전에는 여기 있었다 (버그)

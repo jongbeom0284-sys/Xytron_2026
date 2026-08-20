@@ -7,8 +7,8 @@
     current_max: 15.0
     brake_min: 0.0
     brake_max: 0.0
-    speed_min: -10000.0
-    speed_max: 10000.0
+    speed_min: -22500.0
+    speed_max: 22500.0
     position_min: 0.0
     position_max: 0.0
     servo_min: 0.15

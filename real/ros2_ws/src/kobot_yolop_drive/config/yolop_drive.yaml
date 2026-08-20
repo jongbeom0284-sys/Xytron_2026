@@ -1,0 +1,79 @@
+# YOLOPv2 차선 주행 설정
+#
+# 안전: armed 는 기본 false 다. true 로 바꾸면 모터 토픽에 실제로 발행한다.
+#       armed 여도 /kobot_yolop/enabled 가 true 여야 nonzero 명령이 나간다.
+
+yolop_drive:
+  ros__parameters:
+    model_path: /home/xytron/yolotl_offline_eval/models/yolopv2.pt
+    camera_topic: /image_raw
+    motor_topic: /xycar_motor
+
+    # ---- 안전 ----
+    armed: false          # 모터 토픽 발행 여부. 실차 승인 후에만 true
+    speed_units: 5.0      # legacy 단위. 1단위 = 0.08 m/s -> 5단위 = 0.40 m/s
+    max_speed_mps: 0.0    # 0 보다 크면 이 m/s 가 speed_units 를 대체한다
+    mps_per_unit: 0.08    # 차량 motor_adapter 의 speed_scale 과 같아야 한다
+    max_steer: 40.0       # legacy 단위 상한 (차량 물리 한계 약 42)
+    # 실측 프레임 간격 최대 0.37초까지 나온다. 여유를 둔다.
+    camera_timeout_sec: 0.60
+
+    publish_rate_hz: 20.0
+    debug_hz: 7.0
+    use_fp16: true
+    record_root: /home/xytron/yolop_records
+
+    # ---- 차선 검출 ----
+    # ROI 상단 절단. 멀리서 흰선과 노란선이 한 덩이로 붙는 것을 막는다.
+    # 실측: 54~56 에서는 curve1/2/6 이 흰선까지 노랑으로 물든다.
+    roi_top_ratio: 0.58
+    yellow_b: 20          # 노면 기준 화이트밸런스 보정 후 b* 초과량
+    white_dl: 10          # 노면 대비 밝기차
+    min_blob_area: 150
+    min_yellow_px: 25     # 덩이 안에 이만큼 노란 픽셀이 있으면 노란 중앙선
+
+    # 횡단보도가 좌우 흰선을 잇는 가로 다리를 끊는다.
+    # 가로로 이만큼 긴 연속구간은 차선이 아니라 횡단보도 가로선으로 본다.
+    # 실측: 정상 차선 최대 런 25~82 / 횡단보도 다리 350 이상
+    #       컷 80 에서 곡선 회수율 100%, 414번 프레임 노랑 최대폭 565 -> 13
+    # 0 으로 두면 절단하지 않는다.
+    # TensorRT 엔진으로 추론한다. 검출 헤드를 뺀 그래프라
+    # 노드가 어차피 버리던 계산이 사라진다.
+    # 엔진 파일이 없거나 적재에 실패하면 자동으로 TorchScript 로 돌아간다.
+    use_tensorrt: true
+    engine_path: /home/xytron/yolotl_offline_eval/models/yolopv2_lane_fp16.engine
+
+    max_row_run: 80
+
+    # 횡단보도 배제. 두 조건을 모두 만족하는 덩이는 차선이 아닌 것으로 버린다.
+    # 실측: 정상 차선 23개 행폭 6~30 / 횡단보도 큰덩이 33~58
+    #       가장 아슬아슬한 정상 표본은 fast1 삼거리(행폭 30, aspect 0.28)
+    # 0 으로 두면 검사를 끈다.
+    crosswalk_row_width: 32.0   # 행별 가로폭 중앙값이 이보다 크고
+    crosswalk_aspect: 0.30      # 세로/가로가 이보다 작으면 횡단보도
+
+    # ---- 조향 ----
+    # 먼 점 위주로 본다. 가까운 오차만 보면 중앙에 도달할 때도 꺾여 있어
+    # 지나치고 되꺾는 진동이 난다. 먼 점을 보면 도착 전에 조향이 풀린다.
+    y_far_ratio: 0.64     # 주 입력이 되는 행
+    y_near_ratio: 0.88    # 정상상태 오차 보정용
+    # 구간별 이득. 실주행 10회 재현으로 정한 값.
+    #   단순 상향 kp=55 : 코너 34.0 / 직선 std 4.73 / 큰반전 4.2
+    #   구간별 12/90    : 코너 37.3 / 직선 std 2.48 / 큰반전 1.08
+    # kp_far_hi 를 0 으로 두면 kp_far 를 쓰는 선형 동작으로 되돌아간다.
+    kp_far: 26.0          # 선형 폴백용
+    kp_far_lo: 30.0       # 직선 구간 기울기
+    kp_far_hi: 70.0       # 코너 구간 기울기 (1단계 보수값. 부족하면 90 까지)
+    knee_norm: 0.20       # 이 오차를 넘으면 코너로 본다
+    kp_near: 6.0
+    kd: 8.0
+    deadband_norm: 0.035  # 이 안쪽은 조향하지 않는다
+    # 90 -> 140: 코너에서 제한에 걸리는 프레임 27.5% -> 8.4%,
+    # 반응 지연 0.23초 -> 0.14초. 직선 표준편차도 같이 개선됐다.
+    max_rate: 280.0       # 초당 legacy 단위 변화 상한
+    filter_alpha: 0.70    # 낮을수록 부드럽고 느리다
+    # /xycar_motor 는 양수가 오른쪽이다. 근거: kobot_lane_drive/drive_command.py:28
+    #   "제어는 왼쪽을 양수로 쓰고 차량 입력은 오른쪽을 양수로 쓴다"
+    # 이 노드의 error_far 는 목표가 오른쪽일 때 양수이므로 +1.0 이 맞다.
+    steering_sign: 1.0
+    hold_seconds: 0.8     # 목표 상실 시 직전 조향 유지 시간

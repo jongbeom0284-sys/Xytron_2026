@@ -27,13 +27,22 @@ def camera_control_command(config_dir):
     with open(os.path.join(config_dir, 'camera.yaml'), encoding='utf-8') as handle:
         params = yaml.safe_load(handle)['/**']['ros__parameters']
     device = params.get('video_device', '/dev/videoCAM')
-    controls = ','.join([
+
+    ctrl_list = [
         'brightness=%d' % int(params.get('brightness', 0)),
-        'auto_exposure=%s' % ('3' if params.get('autoexposure', True) else '1'),
-        'exposure_time_absolute=%d' % int(params.get('exposure', 157)),
-        'white_balance_automatic=%d' % (1 if params.get('auto_white_balance', True) else 0),
-        'white_balance_temperature=%d' % int(params.get('white_balance', 4600)),
-    ])
+        'auto_exposure=%s' % ('3' if params.get('autoexposure', False) else '1'),
+        'exposure_time_absolute=%d' % int(params.get('exposure', 40)),
+        'exposure_dynamic_framerate=0',  # 노출 출렁거림 방지를 위해 동적 프레임레이트 비활성화
+    ]
+
+    auto_wb = params.get('auto_white_balance', True)
+    if auto_wb:
+        ctrl_list.append('white_balance_automatic=1')
+    else:
+        ctrl_list.append('white_balance_automatic=0')
+        ctrl_list.append('white_balance_temperature=%d' % int(params.get('white_balance', 2800)))
+
+    controls = ','.join(ctrl_list)
     return ['v4l2-ctl', '-d', device, '--set-ctrl', controls]
 
 
@@ -59,11 +68,15 @@ def generate_launch_description():
         DeclareLaunchArgument('lidar', default_value='true'),
         Node(package='usb_cam', executable='usb_cam_node_exe', name='camera',
              parameters=[os.path.join(config, 'camera.yaml')], condition=IfCondition(camera)),
-        Node(package='kobot_lane_drive', executable='twinmixing_center_drive',
-             name='twinmixing_center_drive',
+        # 차선 인식: YOLOPv2 세그멘테이션 + 노랑/흰선 색 분류 + ROI 절단.
+        # armed 는 false 로 시작한다. 기록주행이 파라미터로 arm 한다.
+        # 이전 twinmixing 으로 되돌리려면 아래 Node 를 지우고
+        # /home/xytron/backups/sensors_launch_*.py 의 원본 Node 를 살린다.
+        Node(package='kobot_yolop_drive', executable='yolop_drive',
+             name='yolop_drive',
              parameters=[os.path.join(
-                 get_package_share_directory('kobot_lane_drive'),
-                 'config', 'twinmixing_center.yaml')],
+                 get_package_share_directory('kobot_yolop_drive'),
+                 'config', 'yolop_drive.yaml')],
              condition=IfCondition(camera), output='screen'),
         Node(package='kobot_vehicle', executable='ultrasonic_node',
              parameters=[os.path.join(config, 'ultrasonic.yaml')], condition=IfCondition(ultrasonic)),

@@ -89,7 +89,7 @@ function cameraCard(){
 }
 
 function laneStreamTopic(){
-  return '/kobot_lane_drive/twinmixing_center/debug_image';
+  return '/kobot_yolop/debug_image';
 }
 
 function laneCard(){
@@ -102,7 +102,7 @@ function laneCard(){
 function lidarCard(){
   return `<div class="card-heading"><div><p class="eyebrow">2D POINT VIEW</p><h3>LiDAR 실시간 점 화면</h3></div><strong class="lidar-min">-</strong></div>
     <div class="lidar-frame"><canvas class="lidar-canvas" data-lidar aria-label="LiDAR 포인트 화면"></canvas><span class="front-label">차량 앞</span></div>
-    <p class="helper">중심이 차량이며 바깥 원은 8m입니다.</p>`;
+    <p class="helper">바깥 원 2m · 주황: 원시 후보 · 파랑/빨강: 후보 경계 · 노랑: 채택 · 청록: 유지 · 자홍 X: 거부</p>`;
 }
 
 function ultrasonicCard(){
@@ -146,9 +146,9 @@ function driveCard(){
   const detail=motorState.stack_state==='partial'&&missing?`누락: ${missing}`:'VESC 드라이버와 명령 변환 노드를 함께 관리합니다.';
   return `<div class="card-heading"><div><p class="eyebrow">MOTOR CONTROL</p><h3>주행 테스트</h3></div><span class="motor-badge ${badgeClass}">${motorStackLabel()}</span></div>
     <div class="drive-stack"><div><span>모터 스택</span><strong class="drive-stack-state">${motorStackLabel()}</strong></div><p class="drive-stack-detail">${detail}</p><button class="restart-motor" data-drive-action="restart">모터 스택 다시 실행</button></div>
-    <p class="drive-range">실제 입력 범위 · 최소 <strong>0.20 m/s</strong> / 최대 <strong>2.16 m/s</strong></p>
+    <p class="drive-range">실제 입력 범위 · 최소 <strong>0.20 m/s</strong> / 최대 <strong>4.87 m/s</strong></p>
     <div class="drive-config">
-      <label>속도 (m/s)<input class="drive-speed" type="number" min="0.20" max="2.16" step="0.10" value="${driveSettings.speed.toFixed(2)}" inputmode="decimal"></label>
+      <label>속도 (m/s)<input class="drive-speed" type="number" min="0.20" max="4.87" step="0.10" value="${driveSettings.speed.toFixed(2)}" inputmode="decimal"></label>
       <label>실행 시간 (초)<input class="drive-duration" type="number" min="0.5" max="300" step="0.5" value="${driveSettings.duration}" inputmode="decimal"></label>
       <label>조향 방식<select class="drive-steering"><option value="center" ${driveSettings.steering==='center'?'selected':''}>중앙 고정</option><option value="left" ${driveSettings.steering==='left'?'selected':''}>왼쪽 고정</option><option value="right" ${driveSettings.steering==='right'?'selected':''}>오른쪽 고정</option><option value="sweep" ${driveSettings.steering==='sweep'?'selected':''}>좌우 반복</option></select></label>
     </div>
@@ -157,7 +157,7 @@ function driveCard(){
       <div><span>기록 주행 · 노란 중앙선 추종</span><strong class="record-drive-badge">${recordDriveLabel()}</strong></div>
       <label class="record-drive-speed-field">기록 주행 속도
         <select class="record-drive-speed" aria-label="기록 주행 속도">
-          ${[0.2,0.3,0.4,0.5].map(speed=>`<option value="${speed}" ${recordDriveSettings.speed===speed?'selected':''}>${speed.toFixed(2)} m/s</option>`).join('')}
+          ${[0.2,0.3,0.4,0.5,0.7,0.9,1.1,1.3,1.6,1.9,2.16,2.5,3.0,3.5,4.0,4.5,4.87].map(speed=>`<option value="${speed.toFixed(2)}" ${recordDriveSettings.speed===speed?'selected':''}>${speed.toFixed(2)} m/s</option>`).join('')}
         </select>
       </label>
       <label class="record-drive-maneuvers-field"><input class="record-drive-maneuvers" type="checkbox" ${recordDriveSettings.maneuvers?'checked':''}> 장애물 회피 허용 (차선 이동)</label>
@@ -233,30 +233,24 @@ function laneNumber(value,digits,unit){
 }
 
 function laneStatsHtml(){
-  const sources={YELLOW_LINE:'노란 중앙선',YELLOW_LINE_GHOST:'직전 노란선 유지',CENTER_GAP:'센터 갭',REGION_CENTER:'영역 중앙',NONE:'없음'};
-  const modes={TRACKING:'추적',HOLD:'유지',HOLD_LAST:'마지막값 유지',WAITING:'대기',ERROR:'오류'};
-  const lines={CENTER:'중앙',SHIFT_LEFT:'좌 회피',SHIFT_RIGHT:'우 회피',RETURNING:'복귀'};
-  const blocked={left:'왼쪽',right:'오른쪽'};
-  const ghost=Number(latestLane.ghost_frames||0),ghostSec=Number(latestLane.ghost_seconds||0);
-  const cells=[
-    ['목표선',sources[latestLane.path_source]||latestLane.path_source||'-'],
-    ['상태',modes[latestLane.mode]||latestLane.mode||'-'],
-    ['신뢰도',laneNumber(latestLane.confidence,2)],
-    ['주행 라인',(lines[latestLane.drive_line]||latestLane.drive_line||'-')+(latestLane.maneuvers_enabled===false?' (회피 꺼짐)':'')],
-    ['중앙 오차',laneNumber(latestLane.center_offset_px,0,' px')],
-    ['헤딩',laneNumber(latestLane.heading_deg,1,'°')],
-    ['조향',laneNumber(latestLane.steering_rad,3,' rad')],
-    ['속도',laneNumber(latestLane.speed_mps,2,' m/s')],
-    ['차선폭 좌',laneNumber(latestLane.left_lane_width_px,0,' px')],
-    ['차선폭 우',laneNumber(latestLane.right_lane_width_px,0,' px')],
-    ['막힘',blocked[latestLane.blocked_side]||(latestLane.narrow_side?blocked[latestLane.narrow_side]+'(의심)':'없음')],
-    ['노란선 유지',ghost?ghostSec.toFixed(2)+'초 / '+ghost+'프레임':'-'],
-    ['라이다 좌',laneNumber(latestLane.lidar_left_m,2,' m')],
-    ['라이다 앞',laneNumber(latestLane.lidar_front_m,2,' m')],
-    ['라이다 우',laneNumber(latestLane.lidar_right_m,2,' m')],
-    ['추론',laneNumber(latestLane.inference_fps,1,' fps')],
-  ];
-  return cells.map(([label,value])=>`<div><span>${label}</span><strong>${value}</strong></div>`).join('');
+  const lane=latestLane||{};
+  const basis={yellow:'노란 중앙선',white_center:'흰선 중앙',hold:'유지',
+               none:'목표 없음'}[lane.basis]||(lane.basis||'—');
+  const mode=lane.mode||'—';
+  return [
+    ['상태',mode],
+    ['판정 근거',basis],
+    ['조향',laneNumber(lane.steer,1,' 단위')],
+    ['속도',laneNumber(lane.speed_mps,2,' m/s')],
+    ['중앙 오차',laneNumber(lane.center_offset_px,0,' px')],
+    ['먼 오차',laneNumber(lane.error_far,3)],
+    ['가까운 오차',laneNumber(lane.error_near,3)],
+    ['피팅 행',laneNumber(lane.fit_rows,0)],
+    ['노랑/흰 덩이',`${lane.yellow_blobs??'—'} / ${lane.white_blobs??'—'}`],
+    ['추론 지연',laneNumber(lane.latency_ms,0,' ms')],
+    ['ROI 상단',laneNumber(lane.roi_top,2)],
+    ['모터',lane.armed?'ARMED':'SAFE'],
+  ].map(([label,value])=>`<div><span>${label}</span><strong>${value}</strong></div>`).join('');
 }
 
 function laneDriveLineText(){
@@ -515,8 +509,9 @@ new ROSLIB.Topic({ros,name:'/imu',messageType:'sensor_msgs/Imu'}).subscribe(mess
 new ROSLIB.Topic({ros,name:'/scan',messageType:'sensor_msgs/LaserScan'}).subscribe(message=>{latestScan=message;refreshDynamicValues()});
 
 let latestCone = null;
+let latestConeAt = 0;
 new ROSLIB.Topic({ros,name:'/kobot_lane_drive/cone_corridor/status',messageType:'std_msgs/String'}).subscribe(message=>{
-  try{latestCone=JSON.parse(message.data);refreshDynamicValues()}catch(error){}
+  try{latestCone=JSON.parse(message.data);latestConeAt=performance.now();refreshDynamicValues()}catch(error){}
 });
 
 function drawOneLidar(canvas){
@@ -540,8 +535,8 @@ function drawOneLidar(canvas){
   ctx.moveTo(cx-limit*scale,cy);ctx.lineTo(cx+limit*scale,cy);
   ctx.stroke();
 
-  // 1. 라바콘 탐색 ROI 영역 박스 (전방 0.20m~1.60m, 횡방향 ±0.70m)
-  const roiFwdMin = 0.20, roiFwdMax = 1.60, roiLatMax = 0.70;
+  // 1. 라바콘 탐색 ROI 영역 박스 (전방 0.10m~1.60m, 횡방향 ±1.00m)
+  const roiFwdMin = 0.10, roiFwdMax = 1.60, roiLatMax = 1.00;
   const roiXLeft = cx - roiLatMax * scale;
   const roiXRight = cx + roiLatMax * scale;
   const roiYFar = cy - roiFwdMax * scale;
@@ -557,7 +552,7 @@ function drawOneLidar(canvas){
   
   ctx.fillStyle='rgba(16, 185, 129, 0.85)';
   ctx.font=`bold ${9*dpr}px -apple-system, system-ui, sans-serif`;
-  ctx.fillText('라바콘 탐색 ROI (±0.7m × 1.6m)', roiXLeft + 4*dpr, roiYFar + 12*dpr);
+  ctx.fillText('라바콘 탐색 ROI (±1.0m × 1.6m)', roiXLeft + 4*dpr, roiYFar + 12*dpr);
 
   const LIDAR_OFFSET_RAD = -2.1217;
   const roiPoints = [];
@@ -617,7 +612,7 @@ function drawOneLidar(canvas){
     const spanX = Math.max(...xs) - Math.min(...xs);
     const spanY = Math.max(...ys) - Math.min(...ys);
     const span = Math.hypot(spanX, spanY);
-    const isCone = (c.length >= 3 && c.length <= 25 && span >= 0.03 && span <= 0.25);
+    const isCone = (c.length >= 3 && c.length <= 25 && span >= 0.05 && span <= 0.25);
     const meanX = xs.reduce((a,b)=>a+b,0) / c.length;
     const meanY = ys.reduce((a,b)=>a+b,0) / c.length;
     clusters.push({ points: c, isCone, span, meanX, meanY, px: cx - meanX*scale, py: cy - meanY*scale });
@@ -656,53 +651,96 @@ function drawOneLidar(canvas){
     }
   }
 
-  // 6. 가상 폴리라인 경계선 (체이닝 방식: 최대 연결 거리 0.50m 제한)
-  const MAX_LINK_DIST = 0.50;
+  // 6. 가상 폴리라인 경계선 (체이닝 방식: 최대 연결 거리 0.45m 제한)
+  const MAX_LINK_DIST = 0.45;   // twinmixing_center.yaml 의 cone_max_link_distance_m 과 동일해야 한다
+  const MIN_BOUNDARY_CONES = 2; // twinmixing_center.yaml 의 cone_min_boundary_cones
+  const ROOT_NEAR_Y = 0.75;     // twinmixing_center.yaml 의 cone_root_max_y_m
 
   function chainCones(rootCandidates, pool){
     if(!rootCandidates || rootCandidates.length === 0) return [];
-    const roots = [...rootCandidates];
-    roots.sort((a,b) => Math.hypot(a.meanX, a.meanY) - Math.hypot(b.meanX, b.meanY));
-    const root = roots[0];
-    const chain = [root];
-    let curr = root;
-    const remaining = pool.filter(c => c !== root);
+    // 이미 반대편 벽에 배정되어 풀에서 빠진 콘은 시작점이 될 수 없다 (상호 배제 시드 누수 방지)
+    const roots = rootCandidates.filter(c => pool.includes(c));
+    if(roots.length === 0) return [];
 
-    while(remaining.length > 0){
-      const validNext = [];
-      for(const c of remaining){
-        const dist = Math.hypot(c.meanX - curr.meanX, c.meanY - curr.meanY);
-        if(dist <= MAX_LINK_DIST && c.meanY >= curr.meanY - 0.10){
-          validNext.push({ dist, cone: c });
+    function growFrom(root){
+      const chain = [root];
+      let curr = root;
+      const remaining = pool.filter(c => c !== root);
+      while(remaining.length > 0){
+        const validNext = [];
+        for(const c of remaining){
+          const dist = Math.hypot(c.meanX - curr.meanX, c.meanY - curr.meanY);
+          if(dist <= MAX_LINK_DIST && c.meanY >= curr.meanY - 0.10){
+            validNext.push({ dist, cone: c });
+          }
         }
+        if(validNext.length === 0) break;
+        validNext.sort((a,b) =>
+          a.dist - b.dist ||
+          b.cone.meanY - a.cone.meanY ||
+          a.cone.meanX - b.cone.meanX ||
+          a.cone.meanY - b.cone.meanY
+        );
+        const nextCone = validNext[0].cone;
+        chain.push(nextCone);
+        const idx = remaining.indexOf(nextCone);
+        if(idx >= 0) remaining.splice(idx, 1);
+        curr = nextCone;
       }
-      if(validNext.length === 0) break;
-      validNext.sort((a,b) => a.dist - b.dist);
-      const nextCone = validNext[0].cone;
-      chain.push(nextCone);
-      const idx = remaining.indexOf(nextCone);
-      if(idx >= 0) remaining.splice(idx, 1);
-      curr = nextCone;
+      return chain;
     }
-    return chain;
+
+    function rank(chain){
+      const ys = chain.map(c => c.meanY);
+      return [
+        chain.length,
+        Math.max(...ys) - Math.min(...ys),
+        Math.max(...ys),
+        -Math.hypot(chain[0].meanX, chain[0].meanY),
+      ];
+    }
+
+    function better(left, right){
+      const a=rank(left),b=rank(right);
+      for(let i=0;i<a.length;i++){
+        if(a[i]!==b[i]) return a[i]>b[i];
+      }
+      return false;
+    }
+
+    let best=[];
+    for(const root of roots){
+      const candidate=growFrom(root);
+      if(best.length===0 || better(candidate,best)) best=candidate;
+    }
+    return best;
   }
 
-  const leftRoots = allCones.filter(c => c.meanX > 0.05 && c.meanY <= 1.20);
-  const rightRoots = allCones.filter(c => c.meanX < -0.05 && c.meanY <= 1.20);
+  // 차량 가까이서 시작하는 경계만 허용한다 (cone_corridor.py와 동일).
+  function selectRoots(cones, leftSide){
+    const side = cones.filter(c => leftSide ? c.meanX > 0.05 : c.meanX < -0.05);
+    return side.filter(c => c.meanY <= ROOT_NEAR_Y);
+  }
+
+  const leftRoots = selectRoots(allCones, true);
+  const rightRoots = selectRoots(allCones, false);
 
   const rightDist = rightRoots.length ? Math.min(...rightRoots.map(c => Math.hypot(c.meanX, c.meanY))) : Infinity;
   const leftDist = leftRoots.length ? Math.min(...leftRoots.map(c => Math.hypot(c.meanX, c.meanY))) : Infinity;
 
+  // 나중에 체이닝하는 벽은 시작 후보도 남은 콘에서 다시 고른다 (배제 전 목록으로 고르면 중복 배정)
   let leftChain = [], rightChain = [];
   if(rightDist <= leftDist){
     rightChain = chainCones(rightRoots, allCones);
     const remForLeft = allCones.filter(c => !rightChain.includes(c));
-    leftChain = chainCones(leftRoots, remForLeft);
+    leftChain = chainCones(selectRoots(remForLeft, true), remForLeft);
   } else {
     leftChain = chainCones(leftRoots, allCones);
     const remForRight = allCones.filter(c => !leftChain.includes(c));
-    rightChain = chainCones(rightRoots, remForRight);
+    rightChain = chainCones(selectRoots(remForRight, false), remForRight);
   }
+  if(leftChain.length < MIN_BOUNDARY_CONES) leftChain=[];
+  if(rightChain.length < MIN_BOUNDARY_CONES) rightChain=[];
 
   if(leftChain.length > 1){
     ctx.strokeStyle='#2563eb';
@@ -722,28 +760,74 @@ function drawOneLidar(canvas){
   }
 
   // 7. 실시간 라바콘 추종 목표점 및 조향선 (최신 status 토픽 반영)
-  if(latestCone && latestCone.found){
-    const targetPx = cx - latestCone.target_x_m * scale;
-    const targetPy = cy - latestCone.target_y_m * scale;
+  const coneStatusFresh = latestCone && (performance.now() - latestConeAt) <= 750;
+  const coneStatus = coneStatusFresh ? latestCone : null;
+  const pathState = coneStatus?.path_state || (coneStatus?.found ? 'TRACKING' : 'STOPPED');
+  const isHoldingPath = pathState === 'HOLD_LOST' || pathState === 'HOLD_REJECTED';
+  const hasAcceptedTarget = Boolean(
+    coneStatus?.found &&
+    Number.isFinite(coneStatus.target_x_m) &&
+    Number.isFinite(coneStatus.target_y_m)
+  );
+  const hasRawTarget = Boolean(
+    coneStatus?.raw_found &&
+    Number.isFinite(coneStatus.raw_target_x_m) &&
+    Number.isFinite(coneStatus.raw_target_y_m)
+  );
 
-    // 조향 유도 궤적 곡선
-    ctx.strokeStyle='rgba(234, 179, 8, 0.85)';
+  // 거부된 원시 후보는 자홍색 점선과 X로 표시한다. 정상 추적 때는 채택점과
+  // 완전히 겹치므로 중복 표시하지 않는다.
+  if(hasRawTarget && (pathState === 'HOLD_REJECTED' || !hasAcceptedTarget)){
+    const rawPx = cx - coneStatus.raw_target_x_m * scale;
+    const rawPy = cy - coneStatus.raw_target_y_m * scale;
+    ctx.save();
+    ctx.strokeStyle='rgba(217, 70, 239, 0.9)';
+    ctx.lineWidth=1.8*dpr;
+    ctx.setLineDash([4*dpr, 3*dpr]);
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.quadraticCurveTo(cx, rawPy, rawPx, rawPy);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(rawPx, rawPy, 8*dpr, 0, Math.PI*2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(rawPx-4*dpr, rawPy-4*dpr);
+    ctx.lineTo(rawPx+4*dpr, rawPy+4*dpr);
+    ctx.moveTo(rawPx+4*dpr, rawPy-4*dpr);
+    ctx.lineTo(rawPx-4*dpr, rawPy+4*dpr);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  if(hasAcceptedTarget){
+    const targetPx = cx - coneStatus.target_x_m * scale;
+    const targetPy = cy - coneStatus.target_y_m * scale;
+    const pathColor = isHoldingPath ? '#06b6d4' : '#eab308';
+    const ringColor = isHoldingPath ? '#0891b2' : '#ca8a04';
+
+    // 정상 채택은 노란 실선, 직전 경로 hold는 청록 점선이다.
+    ctx.save();
+    ctx.strokeStyle=pathColor;
     ctx.lineWidth=2.5*dpr;
+    if(isHoldingPath) ctx.setLineDash([6*dpr, 4*dpr]);
     ctx.beginPath();
     ctx.moveTo(cx, cy);
     ctx.quadraticCurveTo(cx, targetPy, targetPx, targetPy);
     ctx.stroke();
+    ctx.setLineDash([]);
 
-    // 목표점 타겟 마커 (황금색 과녁)
-    ctx.fillStyle='#eab308';
+    ctx.fillStyle=pathColor;
     ctx.beginPath();
     ctx.arc(targetPx, targetPy, 4.5*dpr, 0, Math.PI*2);
     ctx.fill();
-    ctx.strokeStyle='#ca8a04';
+    ctx.strokeStyle=ringColor;
     ctx.lineWidth=1.5*dpr;
     ctx.beginPath();
     ctx.arc(targetPx, targetPy, 8*dpr, 0, Math.PI*2);
     ctx.stroke();
+    ctx.restore();
   }
 
   // 8. 차량 중심 아이콘 (삼각형)
@@ -760,16 +844,43 @@ function drawOneLidar(canvas){
   ctx.fillRect(8*dpr, 8*dpr, w - 16*dpr, 24*dpr);
   ctx.fillStyle='#f8fafc';
   ctx.font=`bold ${10*dpr}px -apple-system, system-ui, sans-serif`;
-  if(latestCone && latestCone.found){
-    const steerDeg = latestCone.steering_deg || 0;
+  if(coneStatus && coneStatus.found){
+    const steerDeg = coneStatus.steering_deg || 0;
     const steerStr = `${steerDeg >= 0 ? '+' : ''}${steerDeg.toFixed(1)}°`;
-    const speedStr = `${(latestCone.speed_mps || 0).toFixed(2)}m/s`;
-    const coneCountStr = `L:${latestCone.left_points || 0} R:${latestCone.right_points || 0}`;
-    const hudText = `라바콘 주행 [TRACKING]  |  조향: ${steerStr}  |  속도: ${speedStr}  |  콘: ${coneCountStr}`;
+    const speedStr = `${(coneStatus.speed_mps || 0).toFixed(2)}m/s`;
+    const hasConeCounts = Number.isFinite(coneStatus.left_cones) && Number.isFinite(coneStatus.right_cones);
+    const leftCount = hasConeCounts ? coneStatus.left_cones : (coneStatus.left_points || 0);
+    const rightCount = hasConeCounts ? coneStatus.right_cones : (coneStatus.right_points || 0);
+    const countLabel = hasConeCounts ? '후보 경계콘' : '반사점';
+    const stateLabels = {
+      TRACKING: '추적',
+      HOLD_LOST: '유지·미검출',
+      HOLD_REJECTED: '유지·후보거부',
+    };
+    const stateLabel = stateLabels[pathState] || pathState;
+    let guardDetail = '';
+    if(pathState === 'HOLD_REJECTED' && Number.isFinite(coneStatus.target_jump_m)){
+      guardDetail = `  |  Δx ${coneStatus.target_jump_m.toFixed(2)}m`;
+    }else if(pathState === 'HOLD_LOST' && Number.isFinite(coneStatus.hold_age_sec)){
+      guardDetail = `  |  유지 ${coneStatus.hold_age_sec.toFixed(2)}s`;
+    }
+    const hudText = `라바콘 [${stateLabel}]  |  조향: ${steerStr}  |  속도: ${speedStr}  |  ${countLabel} L:${leftCount} R:${rightCount}${guardDetail}`;
     ctx.fillText(hudText, 14*dpr, 24*dpr);
   } else {
-    ctx.fillStyle='#94a3b8';
-    ctx.fillText('라바콘 주행 대기 중 (통로 감지 대기)', 14*dpr, 24*dpr);
+    const reason = coneStatus?.rejection_reason;
+    if(latestCone && !coneStatusFresh){
+      ctx.fillStyle='#fca5a5';
+      ctx.fillText('라바콘 [상태 끊김] · status 수신 대기', 14*dpr, 24*dpr);
+      return;
+    }
+    ctx.fillStyle=pathState === 'STOPPED' ? '#fca5a5' : '#94a3b8';
+    ctx.fillText(
+      pathState === 'STOPPED'
+        ? `라바콘 [정지] · ${reason === 'TARGET_JUMP' ? '목표점 급변' : '통로 미검출'}`
+        : '라바콘 주행 대기 중 (통로 감지 대기)',
+      14*dpr,
+      24*dpr,
+    );
   }
 }
 
@@ -780,8 +891,8 @@ async function refreshRecording(){
   catch(error){document.querySelectorAll('.record-status').forEach(el=>el.textContent=`저장 상태 오류: ${error.message}`)}
 }
 
-function validSpeed(){return driveSettings.speed>=.2&&driveSettings.speed<=2.16}
-function validRecordDriveSpeed(){return recordDriveSettings.speed>=.2&&recordDriveSettings.speed<=.5}
+function validSpeed(){return driveSettings.speed>=.2&&driveSettings.speed<=4.87}
+function validRecordDriveSpeed(){return recordDriveSettings.speed>=.2&&recordDriveSettings.speed<=4.87}
 function validDuration(){return driveSettings.duration>=.5&&driveSettings.duration<=300}
 function setDriveState(message){driveStateText=message;document.querySelectorAll('.drive-state').forEach(el=>el.textContent=message)}
 function refreshDriveUi(){
@@ -805,7 +916,7 @@ function refreshDriveUi(){
   const recordBusy=['starting','running','paused','ending'].includes(recordDriveState.state);
   document.querySelectorAll('.record-drive-speed').forEach(el=>{
     if(recordBusy&&Number.isFinite(recordDriveState.selected_speed_mps))recordDriveSettings.speed=Number(recordDriveState.selected_speed_mps);
-    el.value=recordDriveSettings.speed.toFixed(1);
+    el.value=recordDriveSettings.speed.toFixed(2);
     el.disabled=recordBusy;
   });
   const laneTopic=laneStreamTopic();

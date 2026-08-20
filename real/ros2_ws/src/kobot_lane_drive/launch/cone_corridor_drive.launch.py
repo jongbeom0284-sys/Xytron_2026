@@ -17,6 +17,7 @@ def generate_launch_description():
     )
     armed = LaunchConfiguration("armed")
     max_speed_mps = LaunchConfiguration("max_speed_mps")
+    auto_enable = LaunchConfiguration("auto_enable")
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -29,6 +30,15 @@ def generate_launch_description():
             default_value="0.25",
             description="Speed cap for cone corridor drive.",
         ),
+        DeclareLaunchArgument(
+            "auto_enable",
+            default_value="false",
+            description=(
+                "Let the perception node latch record_drive/enabled by itself. "
+                "Keep false: true means the car starts as soon as this launch comes up, "
+                "with no human step in between."
+            ),
+        ),
         Node(
             package="kobot_lane_drive",
             executable="cone_corridor_drive",
@@ -39,6 +49,8 @@ def generate_launch_description():
                     "cone_drive_speed_mps": ParameterValue(
                         max_speed_mps, value_type=float
                     ),
+                    # 사람이 켜는 단계를 남겨 둔다. true 로 올리면 런치와 동시에 출발한다.
+                    "auto_enable": ParameterValue(auto_enable, value_type=bool),
                 },
             ],
             output="screen",

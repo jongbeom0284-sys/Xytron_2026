@@ -33,8 +33,9 @@ class DeviceController:
     }
     SOFTWARE_INFO = {
         'lane': (
-            'twinmixing_center_drive',
-            ['ros2', 'run', 'kobot_lane_drive', 'twinmixing_center_drive'],
+            'yolop_drive',
+            ['ros2', 'run', 'kobot_yolop_drive', 'yolop_drive',
+             '--ros-args', '--params-file', '/home/xytron/2026_Xytron/real/ros2_ws/install/kobot_yolop_drive/share/kobot_yolop_drive/config/yolop_drive.yaml'],
         ),
         'video': (
             'web_video_server',
@@ -101,12 +102,6 @@ class DeviceController:
             ]
         if name in self.SOFTWARE_INFO:
             command = list(self.SOFTWARE_INFO[name][1])
-            if name == 'lane':
-                lane_config = (
-                    Path(get_package_share_directory('kobot_lane_drive'))
-                    / 'config' / 'twinmixing_center.yaml'
-                )
-                command.extend(['--ros-args', '--params-file', str(lane_config)])
             return command
         raise KeyError(name)
 
@@ -199,7 +194,7 @@ class DeviceController:
 class MotorController:
     SPEED_MIN_MPS = 0.20
     # FW 6.5 motor limit is 10000 ERPM and speed_to_erpm_gain is 4614.
-    SPEED_MAX_MPS = 2.16
+    SPEED_MAX_MPS = 4.87
     DURATION_MIN_SEC = 0.5
     DURATION_MAX_SEC = 300.0
     SPEED_SCALE = 0.08
@@ -499,7 +494,9 @@ class RecordDriveController:
     HEARTBEAT_TIMEOUT_SEC = 1.2
     START_TIMEOUT_SEC = 8.0
     MIN_SPEED_MPS = 0.20
-    MAX_SPEED_MPS = 0.50
+    # 테스트 주행 카드와 같은 상한(4.87 m/s = 61 단위)을 쓴다.
+    # 기본값은 안전하게 0.50 으로 둔다.
+    MAX_SPEED_MPS = 4.87
     DEFAULT_SPEED_MPS = 0.50
 
     def __init__(self, node):
@@ -590,12 +587,8 @@ class RecordDriveController:
             try:
                 self.process = subprocess.Popen(
                     [
-                        'ros2', 'launch', 'kobot_lane_drive',
-                        'twinmixing_center_record_drive.launch.py',
-                        'armed:=true',
-                        'start_perception:=false',
-                        f'max_speed_mps:={self.speed_mps:.2f}',
-                        f"maneuvers_enabled:={'true' if self.maneuvers_enabled else 'false'}",
+                        '/home/xytron/yolop_arm.sh',
+                        f'{self.speed_mps:.2f}',
                     ],
                     stdout=self.log_handle,
                     stderr=subprocess.STDOUT,
@@ -647,6 +640,18 @@ class RecordDriveController:
             self.state = 'running'
             self.result = '기록 주행 중'
             return self.status_unlocked()
+
+    def force_disable(self):
+        """상태와 무관하게 주행 인에이블을 내린다.
+
+        emergency_pause() 는 state 가 running/starting 일 때만 인에이블을 내린다.
+        라바콘 스택처럼 터미널에서 직접 띄운 주행은 이 컨트롤러의 state 가 계속 idle 이라
+        '즉시 정지'를 눌러도 래치가 안 내려가고, 남는 것은 publish_zero 경쟁뿐이라
+        1초 덜컹거리다 원속으로 복귀한다. 브리지는 enabled=False 를 받는 즉시 [0,0] 으로
+        고정되므로, 경쟁 발행으로 이기려 하지 말고 래치를 내리는 것이 정답이다.
+        """
+        with self.lock:
+            self._publish_enabled(False)
 
     def emergency_pause(self, reason='즉시 정지로 일시정지'):
         with self.lock:
@@ -791,7 +796,7 @@ class DashboardNode(Node):
         self.create_subscription(Image, '/image_raw', self.on_image, qos_profile_sensor_data)
         self.create_subscription(
             String,
-            '/kobot_lane_drive/twinmixing_center/status',
+            '/kobot_yolop/status',
             self.on_twinmixing_center_status,
             10,
         )
@@ -1118,6 +1123,9 @@ class DashboardRequestHandler(SimpleHTTPRequestHandler):
                     body.get('speed_mps'), body.get('duration_sec'), body.get('steering', 'center'))
                 return self._json(200, result)
             if path == '/api/motor/stop':
+                # 래치를 먼저, 무조건 내린다. emergency_pause 는 state 가 idle 이면
+                # 아무것도 하지 않으므로 여기에만 기대면 라바콘 주행이 안 멈춘다.
+                self.server.dashboard_node.record_drive.force_disable()
                 self.server.dashboard_node.record_drive.emergency_pause()
                 return self._json(200, self.server.dashboard_node.motor.stop())
             if path.startswith('/api/record-drive/'):

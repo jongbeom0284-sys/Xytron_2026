@@ -80,7 +80,11 @@ class ConeCorridorDriveNode(Node):
         )
 
     def _declare_parameters(self) -> None:
-        self.declare_parameter("auto_enable", True)
+        # 기본 False. True 로 두면 이 노드가 기동 즉시 record_drive/enabled 를
+        # transient-local 로 래치해, 사람이 켜는 단계 없이 런치와 동시에 차가 출발한다.
+        # 브리지의 인터록 2번(enabled)이 상류 노드 자신에 의해 무력화되는 셈이다.
+        # 자동 무장이 필요하면 런치 인자로 명시적으로만 켠다.
+        self.declare_parameter("auto_enable", False)
         self.declare_parameter(
             "enable_topic", "/kobot_lane_drive/record_drive/enabled"
         )
@@ -106,6 +110,7 @@ class ConeCorridorDriveNode(Node):
         self.declare_parameter("cone_min_cluster_span_m", 0.03)
         self.declare_parameter("cone_max_cluster_span_m", 0.25)
         self.declare_parameter("cone_max_link_distance_m", 0.50)
+        self.declare_parameter("cone_root_near_fallback", True)
         self.declare_parameter("cone_slice_step_m", 0.15)
         self.declare_parameter("cone_target_lookahead_m", 0.48)
         self.declare_parameter("cone_drive_speed_mps", 0.25)
@@ -152,6 +157,9 @@ class ConeCorridorDriveNode(Node):
             ),
             max_cone_link_distance_m=float(
                 self.get_parameter("cone_max_link_distance_m").value
+            ),
+            root_near_fallback=bool(
+                self.get_parameter("cone_root_near_fallback").value
             ),
             slice_step_m=float(self.get_parameter("cone_slice_step_m").value),
             target_lookahead_m=float(

@@ -44,6 +44,14 @@ class ConeCorridorConfig:
     # 라바콘 간 최대 연결 거리 (대각선 오연결 방지)
     max_cone_link_distance_m: float = 0.50
 
+    # 상호 배제로 근거리 시작 콘이 모두 반대편 벽에 넘어갔을 때, 같은 쪽에 남은 먼 콘으로
+    # 시드를 되돌릴지 여부. 기본 꺼짐 — 8/10 bag 재생에서 43% 프레임에 발동해 found 를 37%
+    # 늘렸고(콘 아닌 구조물을 벽으로 승격), 조향 p99 가 18.9도 벌어졌다. 중복 배정 버그는
+    # chain_cone_boundary 의 시드 검사만으로 완전히 막히며 그쪽은 출력이 한 톨도 안 바뀐다
+    # (bag 재생 실측: 조향 최대 차이 0.00도). 코너에서 안쪽 벽이 사라지는 게 실측으로
+    # 확인되면 그때 켠다.
+    root_near_fallback: bool = False
+
     # 슬라이스 분할 설정
     slice_step_m: float = 0.10
     min_points_per_side: int = 1
@@ -167,6 +175,34 @@ def filter_cone_points(
     return points_x[valid_arr], points_y[valid_arr], cone_centers
 
 
+# 벽면 체인의 시작 콘을 "근거리"로 인정하는 전방 거리 (m).
+# 고속 주행에서도 루트가 차 바로 앞에서 잡히도록 하는 창.
+ROOT_NEAR_Y_M = 1.20
+
+
+def select_boundary_roots(
+    cones: list[tuple[float, float]],
+    left_side: bool,
+    near_y_m: float = ROOT_NEAR_Y_M,
+    allow_far_fallback: bool = False,
+) -> list[tuple[float, float]]:
+    """한쪽 벽의 체인 시작 후보를 고른다.
+
+    근거리(near_y_m 이내) 콘을 우선한다. allow_far_fallback 이면 근거리 후보가 하나도
+    없을 때 같은 쪽에 남은 콘 전체를 후보로 되돌린다 — 상호 배제가 근거리 콘을 반대편
+    벽으로 가져간 뒤에도 멀쩡한 벽이 통째로 사라지지 않게 하려는 것이다.
+
+    폴백은 공짜가 아니다. 8/10 실주행 bag 재생에서 폴백이 43% 프레임에서 발동했고
+    found 가 37% 늘었다 (콘이 아닌 구조물을 벽으로 승격). 시드 검사(체인 루트가 풀에
+    있어야 한다)만으로도 중복 배정 버그는 완전히 막히며 그쪽은 출력이 한 톨도 안 바뀐다.
+    """
+    side = [c for c in cones if (c[0] > 0.05 if left_side else c[0] < -0.05)]
+    near = [c for c in side if c[1] <= near_y_m]
+    if near or not allow_far_fallback:
+        return near
+    return side
+
+
 def chain_cone_boundary(
     root_candidates: list[tuple[float, float]],
     all_cones: list[tuple[float, float]],
@@ -179,8 +215,15 @@ def chain_cone_boundary(
     if not root_candidates:
         return []
 
+    # 이미 반대편 벽에 배정되어 풀에서 빠진 콘은 시작점이 될 수 없다.
+    # 이 검사가 없으면 배제된 콘이 그대로 이쪽 체인의 머리로 재사용되어,
+    # 한 콘이 좌·우 양쪽 벽에 동시에 속하게 된다 (상호 배제가 시드에서 새는 구멍).
+    seeds = [c for c in root_candidates if c in all_cones]
+    if not seeds:
+        return []
+
     # 차량 원점 (0, 0)에서 가장 가까운 콘을 체인의 시작점으로 선정
-    root = min(root_candidates, key=lambda c: math.hypot(c[0], c[1]))
+    root = min(seeds, key=lambda c: math.hypot(c[0], c[1]))
     chain = [root]
     curr = root
     remaining = [c for c in all_cones if c != root]
@@ -239,6 +282,45 @@ def interpolate_polyline_x_at_y(
     return None
 
 
+def split_cone_walls(
+    cone_centers: list[tuple[float, float]],
+    max_link_distance_m: float,
+    allow_far_fallback: bool = False,
+) -> tuple[list[tuple[float, float]], list[tuple[float, float]]]:
+    """라바콘 중심점들을 좌/우 두 벽면 체인으로 상호 배타적으로 가른다.
+
+    차에 더 가까운 쪽 벽을 먼저 체이닝해 확정하고, 그 벽이 가져간 콘은 풀에서 뺀 뒤
+    나머지로 반대편 벽을 체이닝한다. 나중 벽의 **시작 후보도 남은 콘에서 다시 고른다** —
+    배제 전 목록으로 시드를 고르면 이미 반대편으로 넘어간 콘이 이쪽 체인의 머리로 되살아나
+    한 콘이 양쪽 벽에 동시에 걸친다 (90도 코너에서 외벽이 x=0 을 넘어올 때 실제로 발생).
+
+    Returns:
+        (좌벽 체인, 우벽 체인) — 두 리스트는 공통 원소를 갖지 않는다.
+    """
+    left_roots = select_boundary_roots(cone_centers, left_side=True, allow_far_fallback=allow_far_fallback)
+    right_roots = select_boundary_roots(cone_centers, left_side=False, allow_far_fallback=allow_far_fallback)
+
+    right_dist = min([math.hypot(c[0], c[1]) for c in right_roots], default=float("inf"))
+    left_dist = min([math.hypot(c[0], c[1]) for c in left_roots], default=float("inf"))
+
+    if right_dist <= left_dist:
+        right_cones = chain_cone_boundary(right_roots, cone_centers, max_link_distance_m)
+        remaining = [c for c in cone_centers if c not in right_cones]
+        left_cones = chain_cone_boundary(
+            select_boundary_roots(remaining, left_side=True, allow_far_fallback=allow_far_fallback),
+            remaining, max_link_distance_m
+        )
+    else:
+        left_cones = chain_cone_boundary(left_roots, cone_centers, max_link_distance_m)
+        remaining = [c for c in cone_centers if c not in left_cones]
+        right_cones = chain_cone_boundary(
+            select_boundary_roots(remaining, left_side=False, allow_far_fallback=allow_far_fallback),
+            remaining, max_link_distance_m
+        )
+
+    return left_cones, right_cones
+
+
 def build_polyline_corridor_slices(
     left_cones: list[tuple[float, float]],
     right_cones: list[tuple[float, float]],
@@ -275,12 +357,20 @@ def build_polyline_corridor_slices(
                 else:
                     center_x = right_x + config.single_wall_fallback_margin_m
                 is_interpolated = True
-        elif left_x is not None:
-            center_x = left_x - config.single_wall_fallback_margin_m
-            is_interpolated = True
-        elif right_x is not None:
-            center_x = right_x + config.single_wall_fallback_margin_m
-            is_interpolated = True
+        else:
+            # 단측 벽 폴백. 양측 검출 경로(위)는 corridor_width_min/max 로 폭을 검사하는데
+            # 이쪽은 검사가 전혀 없어서, ROI 안(cone_lateral_max_m 1.20) 어디에 있는 반사
+            # 하나가 통로 벽으로 승격되고 곧바로 조향 포화를 만든다.
+            # 8/10 bag 재생: found 프레임의 22.1% 가 콘 후보 1개, 그 |x| 중앙값 0.91m,
+            # 그 중 83.5% 가 아래 상한 밖, 그 중 69.6% 가 풀락.
+            # 새 임계가 아니라 이미 있는 corridor_width_max_m 을 단측 경로에도 적용하는 것이다.
+            max_wall_offset = config.corridor_width_max_m * 0.5
+            if left_x is not None and left_x <= max_wall_offset:
+                center_x = left_x - config.single_wall_fallback_margin_m
+                is_interpolated = True
+            elif right_x is not None and -right_x <= max_wall_offset:
+                center_x = right_x + config.single_wall_fallback_margin_m
+                is_interpolated = True
 
         slices.append(
             CorridorSlice(
@@ -416,23 +506,9 @@ def analyze_cone_corridor(
     if total_count < config.detection_min_total_points or not cone_centers:
         return EMPTY_CORRIDOR_RESULT
 
-    # 좌/우 시작 후보 콘 (차량 전방 1.20m 이내 — 고속 주행 시에도 루트 안정 확보)
-    left_roots = [c for c in cone_centers if c[0] > 0.05 and c[1] <= 1.20]
-    right_roots = [c for c in cone_centers if c[0] < -0.05 and c[1] <= 1.20]
-
-    # 우측/좌측 벽면 독립 체이닝 및 상호 배제
-    # (코너 선회 시 반대편으로 휘어지는 외벽 콘들이 양쪽 벽에 중복 할당되는 현상 원천 방지)
-    right_dist = min([math.hypot(c[0], c[1]) for c in right_roots], default=float('inf'))
-    left_dist = min([math.hypot(c[0], c[1]) for c in left_roots], default=float('inf'))
-
-    if right_dist <= left_dist:
-        right_cones = chain_cone_boundary(right_roots, cone_centers, config.max_cone_link_distance_m) if right_roots else []
-        remaining = [c for c in cone_centers if c not in right_cones]
-        left_cones = chain_cone_boundary(left_roots, remaining, config.max_cone_link_distance_m) if left_roots else []
-    else:
-        left_cones = chain_cone_boundary(left_roots, cone_centers, config.max_cone_link_distance_m) if left_roots else []
-        remaining = [c for c in cone_centers if c not in left_cones]
-        right_cones = chain_cone_boundary(right_roots, remaining, config.max_cone_link_distance_m) if right_roots else []
+    left_cones, right_cones = split_cone_walls(
+        cone_centers, config.max_cone_link_distance_m, config.root_near_fallback
+    )
 
     # 라바콘을 연결한 가상 폴리라인 벽으로 슬라이스 생성
     slices = build_polyline_corridor_slices(left_cones, right_cones, config)

@@ -41,5 +41,6 @@ setup(
         'motor_adapter = kobot_vehicle.motor_adapter:main',
         'lane_follow = kobot_vehicle.Lane_follow:main',
         'lidar_avoidance = kobot_vehicle.Lidar_Avoidance:main',
+        'traffic_perception = kobot_vehicle.Traffic_Perception:main',
     ]},
 )

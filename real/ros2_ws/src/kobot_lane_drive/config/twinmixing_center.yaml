@@ -275,6 +275,9 @@ cone_corridor_drive:
     cone_min_cluster_span_m: 0.03           # 라바콘 최소 외경
     cone_max_cluster_span_m: 0.25           # 라바콘 최대 외경 (25cm 초과 긴 벽 완전 차단)
     cone_max_link_distance_m: 0.55          # 라바콘 간 최대 연결 거리 (고속 주행 55cm 연속 체이닝)
+    cone_root_near_fallback: false          # 배제로 근거리 시드가 비면 같은 쪽 먼 콘으로 되돌릴지.
+                                            # false = 벽 배정이 수정 전과 완전히 동일(중복배정 버그만 수정).
+                                            # true 로 켜면 8/10 bag 재생 기준 found +37%, 조향 p99 +18.9deg
     cone_slice_step_m: 0.10                 # 전방 거리 슬라이스 분할 간격 (10cm 촘촘하게 25단계 다중 피팅)
     cone_target_lookahead_m: 0.85           # 목표점 Lookahead 거리 (다중 2차 곡선 피팅 기준: 0.85m)
     cone_steering_gain: 1.9                 # 조향 추종 게인 (초고속 언더스티어 원천 차단)
