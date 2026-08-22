@@ -29,7 +29,7 @@ let latestVehicleAt=0;
 let recordingState={active:false,frames:0,last_path:''};
 let motorState={usb:false,stack_running:false,stack_state:'unknown',active:false,missing_processes:[],result:'잠김',error:null};
 let recordDriveState={state:'idle',result:'대기 중',can_start:true,can_pause:false,can_resume:false,can_finish:false,recording:{frames:0}};
-let recordDriveSettings={speed:0.5,maneuvers:false};
+let recordDriveSettings={speed:0.5};
 let recoveryState={busy:false,result:'복구 대기 중',error:null,components:{}};
 let driveSettings={speed:0.5,duration:10,steering:'center'};
 let driveStateText='잠김';
@@ -194,7 +194,6 @@ function driveCard(){
           ${[0.2,0.3,0.4,0.5,0.7,0.9,1.1,1.3,1.6,1.9,2.16,2.5,3.0,3.5,4.0,4.5,4.87].map(speed=>`<option value="${speed.toFixed(2)}" ${recordDriveSettings.speed===speed?'selected':''}>${speed.toFixed(2)} m/s</option>`).join('')}
         </select>
       </label>
-      <label class="record-drive-maneuvers-field"><input class="record-drive-maneuvers" type="checkbox" ${recordDriveSettings.maneuvers?'checked':''}> 장애물 회피 허용 (차선 이동)</label>
       <p class="record-drive-help">시작 전 선택 · Space 일시정지/재개 · 종료 시 별도 폴더 저장</p>
       <p class="record-drive-help">회피를 끄면 중앙선만 따라갑니다. 먼저 중앙선 추종부터 확인하세요.</p>
       <div class="record-drive-actions"><button class="primary" data-drive-action="record-start">기록 주행 시작</button><button data-drive-action="record-toggle">일시정지</button><button class="danger" data-drive-action="record-finish">기록 주행 종료</button></div>
@@ -383,7 +382,6 @@ function laneStatsHtml(){
 function laneDriveLineText(){
   const lines={CENTER:'중앙선 · 2차선 중앙',SHIFT_LEFT:'왼쪽 차선으로 회피 중',SHIFT_RIGHT:'오른쪽 차선으로 회피 중',RETURNING:'중앙 복귀 중'};
   const line=lines[latestLane.drive_line]||latestLane.drive_line||'-';
-  if(latestLane.maneuvers_enabled===false)return `${line} · 회피 꺼짐`;
   const blocked=latestLane.blocked_side==='left'?'왼쪽 막힘':latestLane.blocked_side==='right'?'오른쪽 막힘':null;
   const lidar=[['왼',latestLane.lidar_left_m],['앞',latestLane.lidar_front_m],['오',latestLane.lidar_right_m]]
     .map(([name,value])=>`${name} ${Number.isFinite(value)?Number(value).toFixed(2)+'m':'-'}`).join(' · ');
@@ -420,8 +418,6 @@ grid.addEventListener('change',event=>{
   if(steering)driveSettings.steering=steering.value;
   const recordSpeed=event.target.closest('.record-drive-speed');
   if(recordSpeed){recordDriveSettings.speed=Number(recordSpeed.value);refreshDriveButtons()}
-  const recordManeuvers=event.target.closest('.record-drive-maneuvers');
-  if(recordManeuvers){recordDriveSettings.maneuvers=recordManeuvers.checked;refreshDriveButtons()}
 });
 
 grid.addEventListener('input',event=>{
@@ -1094,7 +1090,7 @@ async function handleDriveAction(action){
   if(action==='record-start'){
     motorBusy=true;setDriveState('기록 주행 준비 중');refreshDriveButtons();
     try{
-      recordDriveState=await api('/api/record-drive/start',{method:'POST',body:JSON.stringify({speed_mps:recordDriveSettings.speed,maneuvers_enabled:recordDriveSettings.maneuvers})});
+      recordDriveState=await api('/api/record-drive/start',{method:'POST',body:JSON.stringify({speed_mps:recordDriveSettings.speed})});
       setDriveState('차선 인식 준비 중');toast('기록 주행 준비를 시작했습니다');
     }catch(error){setDriveState(`기록 주행 오류 · ${error.message}`);toast(`기록 주행 오류: ${error.message}`)}
     finally{motorBusy=false;refreshDriveUi()}
