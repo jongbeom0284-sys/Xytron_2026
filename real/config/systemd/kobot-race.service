@@ -1,0 +1,18 @@
+[Unit]
+Description=Kobot race_last stack (perception + console + dashboard, no motor)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=xytron
+Group=xytron
+SupplementaryGroups=dialout video
+Environment=HOME=/home/xytron
+WorkingDirectory=/home/xytron/2026_Xytron/real/ros2_ws
+ExecStart=/bin/bash -lc '. /home/xytron/kobot_env.sh && exec ros2 launch race_last race.launch.py dashboard:=true'
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

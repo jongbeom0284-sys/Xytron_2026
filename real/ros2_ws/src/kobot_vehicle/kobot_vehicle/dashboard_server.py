@@ -34,8 +34,10 @@ class DeviceController:
     SOFTWARE_INFO = {
         'lane': (
             'yolop_drive',
-            ['ros2', 'run', 'kobot_yolop_drive', 'yolop_drive',
-             '--ros-args', '--params-file', '/home/xytron/2026_Xytron/real/ros2_ws/install/kobot_yolop_drive/share/kobot_yolop_drive/config/yolop_drive.yaml'],
+            # 2026-08-22: race_last(라바콘 포함) 로 교체. 구 kobot_yolop_drive
+            # 를 띄우면 콘 없는 구버전이 모터를 잡는다.
+            ['ros2', 'run', 'race_last', 'yolop_drive',
+             '--ros-args', '--params-file', '/home/xytron/2026_Xytron/real/ros2_ws/install/race_last/share/race_last/config/yolop_drive.yaml'],
         ),
         'video': (
             'web_video_server',
