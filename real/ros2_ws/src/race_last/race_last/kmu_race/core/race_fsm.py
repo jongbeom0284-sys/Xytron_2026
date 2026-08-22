@@ -105,7 +105,7 @@ class FSMConfig:
     start_dark_min_s: float = 3.0
 
     # ── 라바콘 ──
-    cone_enter_frames: int = 5      # 0823: 3 -> 5 (진입 신중하게)
+    cone_enter_frames: int = 3
     cone_exit_frames: int = 14          # 콘이 사라졌다고 확신할 때까지
     cone_min_orange_px: int = 900
     # ★ 라바콘 구간을 **나가려면** 라이다 콘도 이보다 적어야 한다 (0821 밤).
@@ -115,7 +115,7 @@ class FSMConfig:
     cone_exit_min_lidar: int = 3
     # 라이다 콘이 이만큼 보이고 게이트가 서면 **카메라 없이도** 진입한다.
     # 4개면 좌우 두 줄이 두 쌍은 보인다는 뜻이라 벽 무더기와 구분된다.
-    cone_enter_min_lidar: int = 6   # 0823: 4 -> 6 (실내 다리 오인 방지)
+    cone_enter_min_lidar: int = 4
     # 진입의 **최소 조건**: 라이다에 콘이 이만큼은 보여야 한다.
     # (카메라가 먼저 보는 경우를 죽이지 않도록 낮게 둔다)
     cone_enter_require_lidar: int = 2
