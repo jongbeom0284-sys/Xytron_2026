@@ -36,7 +36,7 @@ from rclpy.qos import (
     qos_profile_sensor_data,
 )
 from rclpy.signals import SignalHandlerOptions
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import CompressedImage, Image
 from std_msgs.msg import Bool, Float32MultiArray, String
 
 import json
@@ -149,7 +149,13 @@ class YolopDriveNode(Node):
         self._apply_armed(self.armed, announce=True)
         self.add_on_set_parameters_callback(self._on_parameters)
 
-        self.create_subscription(Image, self.camera_topic, self._on_image,
+        # 압축 스트림 구독 (원본은 900KB 라 대역폭 병목, 2026-08-22)
+        if self.camera_topic.endswith('/compressed'):
+            self.create_subscription(
+                CompressedImage, self.camera_topic,
+                self._on_image_compressed, qos_profile_sensor_data)
+        else:
+            self.create_subscription(Image, self.camera_topic, self._on_image,
                                  qos_profile_sensor_data)
         self.create_subscription(Bool, '/kobot_yolop/enabled',
                                  self._on_enable, 10)
@@ -395,6 +401,21 @@ class YolopDriveNode(Node):
         return lane, road
 
     # ------------------------------------------------------------ 콜백
+    def _on_image_compressed(self, message) -> None:
+        try:
+            bgr = cv2.imdecode(
+                np.frombuffer(message.data, np.uint8), cv2.IMREAD_COLOR)
+        except Exception as exc:  # noqa: BLE001
+            self._raise_fault(f'압축 영상 디코드 실패: {exc}')
+            return
+        if bgr is None:
+            return
+        with self._frame_ready:
+            self._frame_seq += 1
+            self._frame = np.ascontiguousarray(bgr)
+            self._frame_time = time.monotonic()
+            self._frame_ready.notify()
+
     def _on_image(self, message: Image) -> None:
         try:
             bgr = self.bridge.imgmsg_to_cv2(message, desired_encoding='bgr8')

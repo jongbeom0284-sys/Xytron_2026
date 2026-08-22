@@ -234,8 +234,11 @@ class TrafficLightPerception(Node):
         self._skip_until = 0.0
         # 압축 스트림 구독 제거 (2026-08-22): 원본과 중복 디코딩으로
         # 초당 ~50회 디코드가 CPU 를 포화시켜 주행 판단이 4Hz 로 떨어졌다.
-        self.create_subscription(Image, TOPIC_IMAGE_RAW,
-                                 self.on_raw, qos_profile_sensor_data)
+        # 2026-08-22: 원본(900KB/장) 구독은 대역폭에 질식해 7.9Hz 까지
+        # 떨어졌다. 압축(79KB, 29.9Hz)만 구독하고 JPEG 디코드는 감수한다.
+        self.create_subscription(
+            CompressedImage, TOPIC_IMAGE_COMPRESSED,
+            self.on_compressed, qos_profile_sensor_data)
 
         self.last_run = 0.0
         self.history = []
