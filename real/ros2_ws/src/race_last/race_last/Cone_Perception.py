@@ -24,6 +24,7 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Bool, Float32MultiArray, String
 
+from . import cone_wall
 from .kmu_race.perception.lidar_cones import (
     LidarConeConfig,
     find_cone_gate,
@@ -47,6 +48,8 @@ class ConePerception(Node):
         self.offset = float(self.get_parameter('angle_offset_rad').value)
 
         self.config = LidarConeConfig()
+        # 벽 추종 — 통로 중앙에서 오른쪽으로 미는 거리. 0 이면 정중앙.
+        self.declare_parameter('wall_bias_cm', 0.0)
         self.green_at = None          # 직진 신호를 처음 본 시각
         self.open_until = 0.0         # 이 시각까지 콘 인식을 연다
         self.enabled = self.force
@@ -127,6 +130,11 @@ class ConePerception(Node):
             return
         self.enabled = True
 
+        # 벽 추종 조준값. 짝지은 게이트와 별개로 매 스캔 계산해 함께 싣는다.
+        wall = cone_wall.solve(
+            msg.ranges, msg.angle_min, msg.angle_increment, self.offset,
+            float(self.get_parameter('wall_bias_cm').value) / 100.0)
+
         gate = find_cone_gate(
             msg.ranges, msg.angle_min, msg.angle_increment,
             angle_offset=self.offset, config=self.config,
@@ -145,7 +153,11 @@ class ConePerception(Node):
         ]
         self.pub_gate.publish(out)
 
-        if gate.valid:
+        if wall is not None:
+            text = 'O 벽 좌%d/우%d 조준%+.0fcm (%s)' % (
+                len(wall['left']), len(wall['right']),
+                wall['aim_y'] * 100, wall['basis'])
+        elif gate.valid:
             text = 'O 깊이%.2f 폭%.2f 횡%+.2f' % (
                 gate.depth_m, gate.width_m, gate.lateral_m)
         else:
@@ -164,6 +176,11 @@ class ConePerception(Node):
             near_right=(9.9 if math.isinf(gate.near_right_m)
                         else round(float(gate.near_right_m), 3)),
             pts=[[round(x, 3), round(y, 3)] for x, y in gate.points],
+            # 벽 추종 결과 — ConeLink 가 조향 근거로 쓴다
+            wall_aim=(None if wall is None else round(wall['aim_y'], 3)),
+            wall_basis=('' if wall is None else wall['basis']),
+            wall_left=(0 if wall is None else len(wall['left'])),
+            wall_right=(0 if wall is None else len(wall['right'])),
         )
         self.pub_reading.publish(String(data=json.dumps(payload)))
 

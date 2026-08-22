@@ -205,9 +205,12 @@ class YolopDriveNode(Node):
                                  self._on_enable, dashboard_qos)
 
         self._cone_reading = None
-        self._cone_link = (ConeLink(self.get_logger(),
-                                    float(self._value('cone_approach_depth_m')))
-                           if self.cone_enabled else None)
+        self._cone_link = (ConeLink(
+            self.get_logger(),
+            float(self._value('cone_approach_depth_m')),
+            wall_steer=bool(self._value('cone_wall_steer')),
+            wall_gain=float(self._value('cone_wall_gain')))
+            if self.cone_enabled else None)
         self._worker = threading.Thread(target=self._infer_loop, daemon=True,
                                         name='yolop-infer')
         self._worker.start()
@@ -266,6 +269,10 @@ class YolopDriveNode(Node):
         # 2.16 m/s 로 통로 돌진 -> 진입 후 감속으로는 늦다)
         self.declare_parameter('cone_approach_speed_units', 9.0)
         self.declare_parameter('cone_approach_depth_m', 1.2)
+        # 콘 조향 근거. True 면 좌·우 벽의 중앙을 겨눈다 (0823 실주행 검증).
+        # False 면 예전 policy 조향(짝지은 게이트)으로 돌아간다.
+        self.declare_parameter('cone_wall_steer', True)
+        self.declare_parameter('cone_wall_gain', 1.5)
 
     def _value(self, name):
         return self.get_parameter(name).value

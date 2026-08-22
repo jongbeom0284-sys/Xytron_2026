@@ -16,6 +16,7 @@ policy 는 라이다 게이트를 1순위로 쓴다 (types.ConeReading 주석).
 """
 import math
 
+from . import cone_wall
 from .kmu_race.core.policy import DrivePolicy
 from .kmu_race.core.race_context import RaceContext
 from .kmu_race.core.race_fsm import FSMConfig, Mode, _Debouncer
@@ -26,8 +27,14 @@ READY = SafetyDecision(SafetyLevel.OK, "", True)
 
 
 class ConeLink:
-    def __init__(self, logger, approach_depth_m=1.2):
+    def __init__(self, logger, approach_depth_m=1.2,
+                 wall_steer=True, wall_gain=1.5):
         self.approach_depth_m = float(approach_depth_m)
+        # 조향 근거를 벽 추종으로 바꾼다 (0823). 끄면 예전 policy 조향.
+        self.wall_steer = bool(wall_steer)
+        self.wall_gain = float(wall_gain)
+        self._wall_prev = None      # 조향 변화율 제한용 직전 값
+        self.wall_basis = ''        # 상태 표시용
         self._log = logger
         self._policy = DrivePolicy()
         self._ctx = RaceContext()
@@ -125,10 +132,22 @@ class ConeLink:
         if gate_lost or self._out.update(gone, now):
             self._in.reset()
             self._active = False
+            self._wall_prev = None
             self._log.info(
                 '라바콘 구간 이탈 (%s) — 차선 주행 복귀'
                 % ('gate lost' if gate_lost else 'cones gone'))
             return None
 
         cmd = self._policy.update(Mode.CONE_DRIVE, obs, self._ctx, READY)
+
+        # 조향만 벽 추종으로 교체한다. 속도는 policy 가 낸 값을 그대로 쓴다 —
+        # 콘 구간 감속 로직이 거기 있고 실주행에서 문제가 없었다.
+        aim = d.get('wall_aim') if d else None
+        self.wall_basis = (d.get('wall_basis') or '') if d else ''
+        if self.wall_steer and aim is not None and age < 0.6:
+            steer = cone_wall.steer_for(float(aim), self.wall_gain,
+                                        self._wall_prev)
+            self._wall_prev = steer
+            return float(steer), float(cmd.speed)
+        self._wall_prev = float(cmd.steer)
         return float(cmd.steer), float(cmd.speed)
