@@ -99,8 +99,7 @@ function laneStreamTopic(){
 function laneCard(){
   return `<div class="card-heading"><div><p class="eyebrow">YOLOPv2 CUDA · 신호등 색도판정 · MOTOR OFF</p><h3>차선 + 신호등 인식</h3></div><span class="live-badge">LIVE</span></div>
     <div class="camera-frame lane-frame"><img class="lane-stream" data-topic="${laneStreamTopic()}" data-stream-topic="${laneStreamTopic()}" src="${streamUrl(laneStreamTopic())}" alt="차선 인식 결과 영상"><div class="signal-overlay"></div><div class="vehicle-overlay"></div></div>
-    ${signalCardHtml()}
-    ${vehicleCardHtml()}
+    <div class="lane-row">${signalCardHtml()}${vehicleCardHtml()}</div>
     <div class="lane-stats">${laneStatsHtml()}</div>
     <p class="helper">노랑: 중앙선 · 주황: 왼쪽 차선 · 보라: 오른쪽 차선 · 하늘색: 예정 경로 · 빨간 십자: 목표점 · 청록 테두리: 인식된 신호등 램프 · 주황 테두리: 인식된 앞차</p>`;
 }
@@ -356,20 +355,13 @@ function laneStatsHtml(){
   const basis={yellow:'노란 중앙선',white_center:'흰선 중앙',hold:'유지',
                none:'목표 없음'}[lane.basis]||(lane.basis||'—');
   const mode=lane.mode||'—';
+  const steerDir=Number(lane.steer)<0?'steer-left':Number(lane.steer)>0?'steer-right':'';
   return [
     ['상태',mode],
     ['판정 근거',basis],
-    ['조향',laneNumber(lane.steer,1,' 단위')],
+    ['조향',laneNumber(lane.steer,1,' 단위'),steerDir],
     ['속도',laneNumber(lane.speed_mps,2,' m/s')],
-    ['중앙 오차',laneNumber(lane.center_offset_px,0,' px')],
-    ['먼 오차',laneNumber(lane.error_far,3)],
-    ['가까운 오차',laneNumber(lane.error_near,3)],
-    ['피팅 행',laneNumber(lane.fit_rows,0)],
-    ['노랑/흰 덩이',`${lane.yellow_blobs??'—'} / ${lane.white_blobs??'—'}`],
-    ['추론 지연',laneNumber(lane.latency_ms,0,' ms')],
-    ['ROI 상단',laneNumber(lane.roi_top,2)],
-    ['모터',lane.armed?'ARMED':'SAFE'],
-  ].map(([label,value])=>`<div><span>${label}</span><strong>${value}</strong></div>`).join('');
+  ].map(([label,value,cls])=>`<div><span>${label}</span><strong class="${cls||''}">${value}</strong></div>`).join('');
 }
 
 function laneDriveLineText(){

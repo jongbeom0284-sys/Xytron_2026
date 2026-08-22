@@ -467,3 +467,8 @@
 .grid-3 .vehicle-card { gap: 11px; padding: 8px 12px; }
 .grid-3 .vcar { width: 34px; height: 34px; font-size: 17px; }
 .grid-3 .vname { font-size: 17px; }
+
+.lane-row { display: flex; gap: 8px; }
+.lane-row .signal-card, .lane-row .vehicle-card { flex: 1; margin: 0; }
+.lane-stats strong.steer-left  { color: #f0997b; }
+.lane-stats strong.steer-right { color: #10b981; }
