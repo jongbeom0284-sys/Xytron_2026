@@ -25,6 +25,10 @@ from .kmu_race.core.types import ConeReading, Observation
 
 READY = SafetyDecision(SafetyLevel.OK, "", True)
 
+# 라이다 관측이 이보다 오래되면 콘 구간으로 보지 않는다. Cone_Perception 이
+# 꺼지면 /cone/reading 이 끊기는데, 마지막 값을 붙들고 진입하던 문제를 막는다.
+STALE_SEC = 0.6
+
 
 class ConeLink:
     def __init__(self, logger, approach_depth_m=1.2,
@@ -90,8 +94,20 @@ class ConeLink:
             and cone.lidar_gate_valid
             and cone.lidar_gate_depth_m <= self.approach_depth_m)
         obs = Observation(now=now, cone=cone, ego_speed_mps=max(0.0, ego_mps),
-                          camera_ok=camera_ok, lidar_ok=age < 0.6)
+                          camera_ok=camera_ok, lidar_ok=age < STALE_SEC)
         cfg = self._fsm
+
+        # 관측이 오래됐다 — 콘 인식이 꺼졌거나 라이다가 끊긴 것이다.
+        # 옛 관측으로 구간을 열면 출발선에서도 진입한다 (0823 실측).
+        if age >= STALE_SEC:
+            if self._active:
+                self._active = False
+                self._wall_prev = None
+                self._log.info('콘 관측 끊김 — 차선 주행 복귀')
+            self._in.reset()
+            self._out.reset()
+            self.approach = False
+            return None
 
         if not self._active:
             # ── LANE→CONE 진입 (race_fsm.py 블록 그대로) ──
