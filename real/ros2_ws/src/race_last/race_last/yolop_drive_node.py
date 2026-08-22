@@ -58,7 +58,7 @@ STOP_RELEASE_SEC = 1.0   # red 를 이 시간 넘게 못 보면 정지를 푼다
 RED_CONFIRM = 3          # 빨간불 확정에 필요한 연속 장수 (약 0.2초)
 GO_CONFIRM = 7           # 초록·좌회전 확정에 필요한 연속 장수 (약 0.47초)
 GO_LOCK_GREEN_SEC = 30.0  # 직진 확정 뒤 신호 인식을 쉬는 시간 (빨간불 포함)
-GO_LOCK_LEFT_SEC = 10.0   # 좌회전 확정 뒤 잠금
+GO_LOCK_LEFT_SEC = 20.0   # 좌회전 확정 뒤 잠금 (0822 실험: 10에서 상향)
 STRAIGHT_HOLD_SEC = 3.0  # 직진 확정 직후 조향을 줄여 직진만 하는 시간
 STRAIGHT_HOLD_GAIN = 0.15  # 그동안 조향에 곱하는 값. 0 이면 완전 직진
 
