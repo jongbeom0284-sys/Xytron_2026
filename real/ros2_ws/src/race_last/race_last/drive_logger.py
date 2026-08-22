@@ -29,7 +29,7 @@ COLS = [
     'traffic_state', 'traffic_stop', 'vehicle_needed',
     'avoid_side', 'avoid_offset_px',
     'cone_active', 'cone_approach', 'cone_state',
-    'vehicle_state', 'cmd_steer', 'cmd_speed',
+    'vehicle_state', 'vehicle_boxes', 'cmd_steer', 'cmd_speed',
 ]
 
 
@@ -41,6 +41,7 @@ class DriveLogger(Node):
         self._rows = 0
         self._traffic = ''
         self._vehicle = ''
+        self._vehicle_n = 0
         self._cone = ''
         self._cmd = (0.0, 0.0)
         self.create_subscription(String, '/kobot_yolop/status',
@@ -65,11 +66,17 @@ class DriveLogger(Node):
             self._traffic = state
 
     def _on_vehicle(self, msg):
+        # 페이로드는 {"car": {"dir","dist"}, "boxes": [...], "n": N} 이다.
+        # 예전에는 최상위에서 dir/dist 를 찾아 항상 빈 값이 남았고, 그래서
+        # 로그만으로는 '언제 차가 보였나' 를 확인할 수 없었다 (0823).
         try:
             d = json.loads(msg.data)
-            self._vehicle = '%s/%s' % (d.get('dir', ''), d.get('dist', ''))
+            car = d.get('car') or {}
+            self._vehicle = '%s/%s' % (car.get('dir', ''), car.get('dist', ''))
+            self._vehicle_n = int(d.get('n', 0) or 0)
         except (ValueError, AttributeError, TypeError):
             self._vehicle = ''
+            self._vehicle_n = 0
 
     def _on_cone(self, msg):
         self._cone = (msg.data or '').replace(',', ' ')[:40]
@@ -97,6 +104,7 @@ class DriveLogger(Node):
         d['t'] = round(now - self._t0, 3)
         d['traffic_state'] = self._traffic
         d['vehicle_state'] = self._vehicle
+        d['vehicle_boxes'] = self._vehicle_n
         d['cone_state'] = self._cone
         d['cmd_steer'], d['cmd_speed'] = self._cmd
 

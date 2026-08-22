@@ -60,7 +60,11 @@ ROI_TOP_RATIO = 0.5
 MODEL_PATH = '/home/xytron/2026_Xytron/models/yolov8n.pt'  # 모델은 전부 models/ 로 통일 (2026-08-22)
 INFER_INTERVAL = 3        # N프레임당 1회 추론
 CONF_THRES = 0.15  # 경계선 검출을 살린다
-IMGSZ = 640        # 320 은 RC카가 47x40px 로 뭉개져 conf 0.14. 640 이면 0.34
+# 320 은 RC카가 47x40px 로 뭉개져 conf 0.14, 640 이면 0.34 였다 (0822).
+# 0823 실측에서 640 은 한계 거리에서 conf 0.157 로 임계를 겨우 넘어 58%
+# 프레임에서만 잡혔다. 960 이면 같은 프레임이 0.244 다. 추론 32→48ms 로
+# 늘지만 추론 주기가 102ms 라 여유가 있다.
+IMGSZ = 960
 
 CLASS_PERSON = 0          # COCO person
 CLASS_CAR = 2             # COCO car
