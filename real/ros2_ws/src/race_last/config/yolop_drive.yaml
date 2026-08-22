@@ -51,7 +51,9 @@ yolop_drive:
     kp_near: 6.0
     kd: 8.0
     deadband_norm: 0.035
-    max_rate: 280.0
+    # 280 -> 400 (2026-08-22): frame218 실측 e_far -0.782 인데 출력 -31.9 정체.
+    # 인식이 아니라 조향 도달 속도가 병목이라 상향.
+    max_rate: 400.0
     filter_alpha: 0.70
     steering_sign: 1.0
     hold_seconds: 0.8

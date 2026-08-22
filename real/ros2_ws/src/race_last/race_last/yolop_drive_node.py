@@ -83,7 +83,7 @@ class YolopDriveNode(Node):
         'kd': (0.0, 40.0),
         'deadband_norm': (0.0, 0.30),
         'filter_alpha': (0.05, 1.0),
-        'max_rate': (10.0, 300.0),
+        'max_rate': (10.0, 500.0),   # 0822: 조향 도달 속도 상향 여지 확보
         'max_steer': (1.0, 40.0),
         'roi_top_ratio': (0.30, 0.90),
         'y_far_ratio': (0.30, 0.95),
