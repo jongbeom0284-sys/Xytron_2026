@@ -41,6 +41,13 @@ class LidarConeConfig:
     #  조건에서 걸러진다 — 사람은 통로 양쪽에 대칭으로 서 있지 않다.)
     min_points: int = 2
     max_width_m: float = 0.30
+    # ── 의자·책상 다리 배제 (2026-08-23) ──────────────────────
+    # 실측(00:58 주행): 실내 의자·책상 다리가 콘으로 잡혀 폭 0.78~0.89m
+    # 게이트를 만들었고 차가 콘 구간으로 오인해 들어갔다. 좌표를 보면
+    # (0.26,+0.42) 와 (0.29,+0.40) 처럼 3cm 떨어진 점이 각각 콘이 됐다.
+    # 라바콘 밑면은 약 0.20m 라 그렇게 붙을 수 없다.
+    min_width_m: float = 0.06      # 이보다 얇으면 다리로 본다
+    merge_dist_m: float = 0.30     # 이 안에 붙은 후보끼리는 하나로 병합
     # ── 벽/모서리 배제 (0821 밤) ─────────────────────────────────
     # 콘은 **고립**돼 있다: 양옆 빔이 배경으로 뚝 떨어진다. 벽 조각은
     # 양옆으로 벽이 이어져 거리가 매끄럽다. 이 계단이 이만큼은 나야 콘으로
@@ -326,8 +333,19 @@ def _cone_clusters(
             if not (_side_free(raw, a0, -1, rm, beam, cfg)
                     and _side_free(raw, a1, +1, rm, beam, cfg)):
                 continue
+        if w < cfg.min_width_m:
+            continue                    # 너무 얇다 = 다리
         out.append((cx, cy, w, cnt))
-    return out
+
+    # 서로 merge_dist_m 안에 붙은 후보는 하나의 물체로 본다.
+    # 다리 여러 개가 각각 콘으로 세어지는 것을 막는다.
+    merged: List[Tuple[float, float, float, int]] = []
+    for c in sorted(out, key=lambda t: -t[3]):
+        if any(math.hypot(c[0] - m[0], c[1] - m[1]) < cfg.merge_dist_m
+               for m in merged):
+            continue
+        merged.append(c)
+    return merged
 
 
 def _side_free(
