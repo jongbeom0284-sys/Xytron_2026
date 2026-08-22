@@ -543,12 +543,12 @@ class YolopDriveNode(Node):
         # 그때 near=False·far=True 라 회피가 아예 안 걸리고 즉시 해제됐다.
         # 실측: YOLO 는 dir=LEFT conf 0.73 으로 차를 정확히 잡는데 거리만 없었다.
         # 거리를 몰라도 좌/우가 나오면 반대 차선으로 붙는다.
-        if dist is None:
-            near = bool(boxes)          # 차가 보이면 회피 대상으로 본다
-            far = not boxes             # 안 보이면 해제
-        else:
-            near = float(dist) <= AVOID_ENTER_M
-            far = float(dist) >= AVOID_CLEAR_M
+        # 2026-08-23: 거리 조건을 뺀다. 실측에서 dist=1.67m 라 AVOID_ENTER_M(1.3)
+        # 를 못 넘겨 _avoid_until 이 갱신되지 않았고, avoid_side 는 'right' 인데
+        # offset 이 0/90 을 깜빡이며 차가 중앙으로 돌아갔다.
+        # 좌/우가 보이면 회피, 안 보이면 해제. 거리는 로그용으로만 남긴다.
+        near = bool(boxes)
+        far = not boxes
 
         self._car_recent.append(side if near else 'NONE')
         if len(self._car_recent) > CAR_CONFIRM:
