@@ -215,10 +215,7 @@ class TrafficLightPerception(Node):
         self.declare_parameter('max_hz', MAX_HZ)
         # 탐색 띠(ROI)를 장소별로 즉시 조절할 수 있게 파라미터화 (2026-08-22).
         # 새 연습장에서 겐트리 높이가 달라 램프(y=0.35)가 띠(0.373~) 위로 벗어났다.
-        # 첫 직진 확정 후 하단 경계를 이 값으로 넓힌다 — 출발 대기 중에는
-        # 좁게(비상구 유도등 배제), 주행 시작 후에는 원거리 조기 인식 (2026-08-22)
-        self.declare_parameter('roi_bottom_run', 0.42)
-        self._roi_widened = False
+        # 띠는 주행 내내 고정이다 — 확장하면 비상구 유도등이 들어온다 (0823).
         self.declare_parameter('roi_top', ROI_TOP)
         self.declare_parameter('roi_bottom', ROI_BOTTOM)
         self.declare_parameter('roi_left', ROI_LEFT)
@@ -333,14 +330,8 @@ class TrafficLightPerception(Node):
             self.history.pop(0)
         if len(self.history) == CONFIRM and len(set(self.history)) == 1:
             self.stable = state
-            if state == 'green' and not self._roi_widened:
-                self._roi_widened = True
-                global ROI_BOTTOM
-                ROI_BOTTOM = float(self.get_parameter('roi_bottom_run').value)
-                _roi.clear()
-                self.get_logger().info(
-                    '첫 직진 확정 — 탐색 띠 하단 %.2f 로 확장 (원거리 모드)'
-                    % ROI_BOTTOM)
+            # 0823: 첫 직진 확정 뒤 띠를 넓히던 동작을 뺐다. 띠가 넓어지면
+            # 비상구 표시등·창문 반사가 들어와 오검출이 늘었다. 띠는 고정.
 
         height, width = image.shape[:2]
         boxes = []

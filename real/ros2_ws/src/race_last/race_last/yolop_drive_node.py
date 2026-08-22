@@ -62,6 +62,10 @@ GO_CONFIRM = 7           # 초록·좌회전 확정에 필요한 연속 장수 (
 GO_LOCK_GREEN_SEC = 30.0  # 직진 신호가 사라진 뒤 신호 인식을 쉬는 시간
 GO_LOCK_LEFT_SEC = 20.0   # 좌회전 신호가 사라진 뒤 잠금 (0822 실험: 10에서 상향)
 GONE_CONFIRM = 5          # 확정한 신호가 이만큼 연속으로 안 보이면 사라진 것
+# 사라짐을 기다리는 데에도 상한이 필요하다. 가짜 초록불(127px cyan)이 시야에
+# 눌러앉아 억제가 1024초 동안 안 풀린 적이 있다 (0823 실측). 신호가 안
+# 사라져도 확정 시점부터 이만큼 지나면 그냥 사라진 것으로 친다.
+WAIT_GONE_MAX_SEC = 6.0
 STRAIGHT_HOLD_SEC = 3.0  # 직진 신호가 사라진 뒤 조향을 줄여 직진만 하는 시간
 STRAIGHT_HOLD_GAIN = 0.15  # 그동안 조향에 곱하는 값. 0 이면 완전 직진
 
@@ -134,6 +138,7 @@ class YolopDriveNode(Node):
         self._recent = []             # 최근 신호. 연속 장수를 센다
         self._go_locked_until = 0.0   # 이 시각까지 신호등을 아예 안 읽는다
         self._lock_kind = None        # 확정했으나 아직 시야에 남아 있는 신호
+        self._lock_since = 0.0        # 그 신호를 확정한 시각
         self._gone = 0                # 그 신호를 연속으로 못 본 장수
         self._straight_hold_until = 0.0  # 이 시각까지 조향을 줄여 직진만 한다
 
@@ -476,6 +481,14 @@ class YolopDriveNode(Node):
         # 억제·잠금 시각을 계속 밀어 사라질 때까지 유지한다. 여기서도
         # 빨간불은 안 읽는다. 이미 확정한 판단을 흔들 것이 없다.
         if self._lock_kind is not None:
+            if now - self._lock_since > WAIT_GONE_MAX_SEC:
+                # 안 사라진다. 오검출이 눌러앉은 것으로 보고 여기서 끊는다.
+                self.get_logger().warning(
+                    '%s 신호가 %.0f초째 안 사라짐 — 오검출로 보고 지금부터 카운트'
+                    % (self._lock_kind, WAIT_GONE_MAX_SEC))
+                self._lock_kind = None
+                self._gone = 0
+                return
             if state == self._lock_kind:
                 self._gone = 0
                 self._go_locked_until = now + (
@@ -529,6 +542,7 @@ class YolopDriveNode(Node):
         self._go_locked_until = now + (
             GO_LOCK_GREEN_SEC if state == 'green' else GO_LOCK_LEFT_SEC)
         self._lock_kind = state   # 사라질 때까지 위에서 계속 밀어 준다
+        self._lock_since = now    # 다만 WAIT_GONE_MAX_SEC 를 넘기지는 않는다
         self._gone = 0
         self._recent.clear()
         if state == 'green':
