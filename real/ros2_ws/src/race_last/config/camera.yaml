@@ -1,0 +1,26 @@
+/**:
+  ros__parameters:
+    video_device: /dev/videoCAM
+    image_width: 640
+    image_height: 480
+    framerate: 30.0
+    pixel_format: yuyv2rgb
+    frame_id: default_cam
+    camera_name: kobot_camera
+    camera_info_url: file:///home/xytron/2026_Xytron/real/calibration/kobot_camera.yaml
+    # 실내 조명 반사 대응. 자동 노출은 흰 바닥에 물려 화면이 날아간다.
+    brightness: 0
+    autoexposure: false
+    exposure: 40
+    # 자동 화이트밸런스는 실내 누런 조명에 물려 장면 전체에 노란 캐스트를 씌운다.
+    # 그러면 흰 차선과 나무색이 노란선 쪽으로 끌려와 색으로 가를 수 없게 된다.
+    # 2026-08-20: YOLOPv2 주행으로 전환하면서 auto 로 바꿨다.
+    # 근거: 12위치 x 5개 WB 설정 비교에서 YOLOPv2 는 WB 를 거의 안 탄다
+    # (1등과 꼴찌 점수 차이 6%, 미검출 0회). 노랑/흰선 색 분류도 road
+    # 마스크를 무채색 기준으로 프레임마다 정규화하므로 WB 가 흔들려도 상쇄된다.
+    # 되돌리려면 false 로 바꾼다. white_balance 값은 그때 다시 쓰인다.
+    auto_white_balance: true
+    # 실측 훑기(WB 2800~6500 x 노출 6단계)에서 2800 이 가장 깨끗했다.
+    # 노란 마스크가 중앙선 위에만 얹히고, 4600 이상에서는 차체와 노면으로 번졌다.
+    # 이 방 조명 색온도가 낮아 4600 으로 잠그면 화면 전체가 초록으로 뜬다.
+    white_balance: 2800

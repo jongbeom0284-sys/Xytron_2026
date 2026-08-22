@@ -1,0 +1,55 @@
+# race_last 차선 주행 설정 — kobot_yolop_drive 기준판을 이어받았다 (2026-08-22).
+# 값은 실주행 튜닝 결과 그대로다. 근거 주석은 kobot_yolop_drive/config 원본에 있다.
+#
+# 안전: armed 는 기본 false 다. true 로 바꾸면 모터 토픽에 실제로 발행한다.
+#       armed 여도 /kobot_yolop/enabled 가 true 여야 nonzero 명령이 나간다.
+#
+# 모델: TensorRT 엔진 **전용**이다. TorchScript 폴백(yolopv2.pt)은 제거했다 —
+#       엔진 적재 실패는 기동 실패로 즉시 드러난다. 모델은 전부
+#       /home/xytron/2026_Xytron/models/ 로 통일한다.
+
+yolop_drive:
+  ros__parameters:
+    camera_topic: /image_raw
+    motor_topic: /xycar_motor
+
+    # ---- 안전 ----
+    armed: false
+    speed_units: 5.0
+    max_speed_mps: 0.0
+    mps_per_unit: 0.08
+    max_steer: 40.0
+    camera_timeout_sec: 0.60
+
+    publish_rate_hz: 20.0
+    debug_hz: 7.0
+    use_fp16: true
+    record_root: /home/xytron/yolop_records
+
+    # ---- 모델 ----
+    engine_path: /home/xytron/2026_Xytron/models/yolopv2_lane_fp16.engine
+
+    # ---- 차선 검출 ----
+    roi_top_ratio: 0.58
+    yellow_b: 20
+    white_dl: 10
+    min_blob_area: 150
+    min_yellow_px: 25
+    max_row_run: 80
+    crosswalk_row_width: 32.0
+    crosswalk_aspect: 0.30
+
+    # ---- 조향 ----
+    y_far_ratio: 0.64
+    y_near_ratio: 0.88
+    kp_far: 26.0
+    kp_far_lo: 30.0
+    kp_far_hi: 70.0
+    knee_norm: 0.20
+    kp_near: 6.0
+    kd: 8.0
+    deadband_norm: 0.035
+    max_rate: 280.0
+    filter_alpha: 0.70
+    steering_sign: 1.0
+    hold_seconds: 0.8
