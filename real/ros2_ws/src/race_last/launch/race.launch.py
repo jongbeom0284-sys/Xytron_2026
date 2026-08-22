@@ -23,7 +23,7 @@ from launch.actions import (
     SetEnvironmentVariable,
     TimerAction,
 )
-from launch.conditions import IfCondition
+from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
@@ -118,8 +118,10 @@ def generate_launch_description():
              name='motor_logger', output='log'),
 
         # ---- 콘솔 (이 터미널이 상황판이다) ----
+        # 대시보드를 쓰면 콘솔은 중복이라 띄우지 않는다 (CPU 절약)
         Node(package='race_last', executable='race_console',
-             name='race_console', output='screen', emulate_tty=True),
+             name='race_console', output='screen', emulate_tty=True,
+             condition=UnlessCondition(dashboard)),
 
         # ---- 대시보드 (dashboard:=true 일 때만) ----
         Node(package='web_video_server', executable='web_video_server',

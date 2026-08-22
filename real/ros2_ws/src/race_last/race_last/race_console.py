@@ -149,7 +149,13 @@ class RaceConsole(Node):
         self._flush(lines)
 
     def _flush(self, lines):
-        sys.stdout.write(CLEAR + '\n'.join(lines) + '\n')
+        # 내용이 바뀔 때만 다시 그린다 — 0.2초마다 전면 갱신하면 CPU 와
+        # systemd 로그를 낭비한다 (2026-08-22, 대시보드 병용 시 특히)
+        text = chr(10).join(lines)
+        if text == getattr(self, '_last_text', None):
+            return
+        self._last_text = text
+        sys.stdout.write(CLEAR + text + chr(10))
         sys.stdout.flush()
 
 
