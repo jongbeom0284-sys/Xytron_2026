@@ -205,10 +205,7 @@ class MotorController:
 
     def __init__(self, node):
         self.node = node
-        # 시간 주행을 실제로 쓸 때만 만든다 — 상시 열어두면 자율주행
-        # (yolop_drive) 의 /xycar_motor 배타 검사에 걸린다 (2026-08-22)
-        self.node = node
-        self.publisher = None
+        self.publisher = node.create_publisher(Float32MultiArray, '/xycar_motor', 10)
         self.log_dir = Path.home() / '.local' / 'state' / 'kobot'
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self.process = None
@@ -357,9 +354,6 @@ class MotorController:
     def publish(self, angle, speed_mps):
         message = Float32MultiArray()
         message.data = [float(angle), float(speed_mps) / self.SPEED_SCALE]
-        if self.publisher is None:
-            self.publisher = self.node.create_publisher(
-                Float32MultiArray, '/xycar_motor', 10)
         self.publisher.publish(message)
 
     def publish_zero(self, duration=0.6):
@@ -435,7 +429,6 @@ class MotorController:
                 self.speed_mps = 0.0
 
     def stop(self):
-        self.release_motor_publisher()
         self.stop_event.set()
         self.publish_zero(1.0)
         self.last_result = '즉시 정지'
@@ -835,15 +828,6 @@ class DashboardNode(Node):
             full_name = f'{namespace}/{endpoint.node_name}' if namespace else f'/{endpoint.node_name}'
             publishers.append(full_name)
         return sorted(set(publishers))
-
-    def release_motor_publisher(self):
-        """시간 주행 종료 후 /xycar_motor 를 자율주행에 돌려준다."""
-        if getattr(self, 'publisher', None) is not None:
-            try:
-                self.node.destroy_publisher(self.publisher)
-            except Exception:
-                pass
-            self.publisher = None
 
     def ensure_exclusive_motor_publisher(self):
         publishers = self.foreign_motor_publishers()
