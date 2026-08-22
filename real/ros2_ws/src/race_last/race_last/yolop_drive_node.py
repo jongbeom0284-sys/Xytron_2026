@@ -62,6 +62,9 @@ GO_CONFIRM = 7           # 초록·좌회전 확정에 필요한 연속 장수 (
 GO_LOCK_GREEN_SEC = 30.0  # 직진 신호가 사라진 뒤 신호 인식을 쉬는 시간
 GO_LOCK_LEFT_SEC = 20.0   # 좌회전 신호가 사라진 뒤 잠금 (0822 실험: 10에서 상향)
 GONE_CONFIRM = 5          # 확정한 신호가 이만큼 연속으로 안 보이면 사라진 것
+# 콘 구간을 빠져나온 뒤 신호를 더 무시하는 시간. 신호등은 이미 뒤에 있으므로
+# 다시 읽을 이유가 없고, 읽으면 오검출로 판단만 흔들린다 (0823 요구).
+CONE_EXIT_LOCK_SEC = 20.0
 # 사라짐을 기다리는 데에도 상한이 필요하다. 가짜 초록불(127px cyan)이 시야에
 # 눌러앉아 억제가 1024초 동안 안 풀린 적이 있다 (0823 실측). 신호가 안
 # 사라져도 확정 시점부터 이만큼 지나면 그냥 사라진 것으로 친다.
@@ -205,6 +208,8 @@ class YolopDriveNode(Node):
                                  self._on_enable, dashboard_qos)
 
         self._cone_reading = None
+        self._cone_was_active = False  # 콘 구간 이탈을 잡기 위한 직전 상태
+        self._cone_exited = False      # 한 번이라도 콘을 빠져나왔는가
         self._cone_link = (ConeLink(
             self.get_logger(),
             float(self._value('cone_approach_depth_m')),
@@ -841,17 +846,41 @@ class YolopDriveNode(Node):
                 '차선 위 주황 %d px 이 %d장 연속 — 콘 구간 진입'
                 % (self._cone_trig_px, CONE_TRIG_CONFIRM))
 
+    def _check_cone_exit(self, now: float) -> None:
+        """콘 구간을 빠져나온 순간을 잡는다.
+
+        빠져나오면 앞차 인식을 켜고(잠금과 무관), 신호는 오히려 더 무시한다.
+        신호등은 이미 뒤에 있으므로 다시 읽으면 판단만 흔들린다.
+        """
+        link = self._cone_link
+        if link is None:
+            return
+        if self._cone_was_active and not link.active:
+            self._cone_exited = True
+            self._go_locked_until = max(self._go_locked_until,
+                                        now + CONE_EXIT_LOCK_SEC)
+            self._lock_kind = None      # 사라짐 대기는 여기서 끝낸다
+            self.get_logger().warning(
+                '라바콘 구간 이탈 — 앞차 인식 켬, 신호는 %.0f초 더 무시'
+                % CONE_EXIT_LOCK_SEC)
+        self._cone_was_active = bool(link.active)
+
     def _vehicle_needed(self, now: float) -> bool:
         """차량 인식을 돌려야 하는가. Vehicle_Perception 이 이 값을 따른다."""
+        # 콘 구간(진입 또는 접근)에서는 콘을 차량으로 오인한다
+        link = self._cone_link
+        if link is not None and (link.active or link.approach):
+            return False
+        # 콘을 빠져나온 뒤에는 신호 잠금과 무관하게 앞차를 본다. 잠금 하나가
+        # 신호 무시와 앞차 정지를 함께 쥐고 있어, 초록불이 재확정될 때마다
+        # 30초가 갱신되며 앞차 인식이 내내 꺼져 있었다 (0823 실측 95%).
+        if self._cone_exited:
+            return True
         # 좌회전/직진 신호 잠금 중에는 차량이 없다
         if now < self._go_locked_until:
             # 다만 회피를 유지 중이면 계속 봐야 한다 (지나치는 중)
             if self._avoid_side and now <= self._avoid_until:
                 return True
-            return False
-        # 콘 구간(진입 또는 접근)에서는 콘을 차량으로 오인한다
-        link = self._cone_link
-        if link is not None and (link.active or link.approach):
             return False
         return True
 
@@ -931,6 +960,7 @@ class YolopDriveNode(Node):
             with self._lock:
                 cone_d = self._cone_reading
                 cam_ok = payload is not None and not self._stale
+            self._check_cone_exit(now)
             cone_cmd = self._cone_link.tick(
                 now, cone_d,
                 ego_mps=speed * self.mps_per_unit,
