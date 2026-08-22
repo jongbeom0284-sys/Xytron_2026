@@ -840,35 +840,32 @@ class DriveToolsController:
         return {'message': f'앞차 인식을 {sec:.0f}초간 강제로 켭니다'}
 
     def full_restart(self):
-        """스택 전체를 되살린다. 서비스가 Restart=on-failure 라 sudo 가 필요 없다.
+        """스택 전체를 정해진 순서로 되살린다 (~/clean_restart.sh).
 
-        대시보드 자신이 그 서비스 안에서 돌기 때문에, 응답을 먼저 보내고
-        배경에서 런치를 종료한다. systemd 가 3초 뒤 전부 다시 띄운다.
-        0823 하루 동안 손으로 반복하던 절차다 — 노드는 살아 있는데 토픽이
-        안 잡히거나, 죽은 노드가 그래프에 남거나, 모터 스택만 빠졌을 때.
+        정지 → DDS 공유메모리 정리 → 데몬 재시작 → 서비스 시작 → 모터 스택.
+        찌꺼기는 완전히 멈춘 뒤에만 지울 수 있어 순서가 중요하다. 돌아가는
+        중에 지우면 SHM 락 오류가 나고 복구가 더 어려워진다 (0823 실측).
+
+        0823: 찌꺼기 27개가 쌓여 새 프로세스가 기존 발행자를 못 찾았다.
+        영상도 CLI 도 전부 빈손이었고, 이 절차로만 풀렸다.
         """
+        script = '/home/xytron/clean_restart.sh'
+        if not os.path.isfile(script):
+            raise RuntimeError('복구 스크립트가 없습니다: %s' % script)
+
         def work():
             time.sleep(1.0)
             try:
-                self.release()          # 남은 시험 주행이 모터를 물고 있을 수 있다
-            except Exception:           # noqa: BLE001
-                pass
-            # 런치를 끊으면 systemd 가 되살린다. 되살아난 뒤 모터 스택과
-            # ROS 그래프는 다음 요청(또는 아래 지연 작업)에서 정리한다.
-            try:
-                out = subprocess.run(
-                    ['pgrep', '-f', 'race_last race.launch.py'],
-                    capture_output=True, text=True, timeout=5)
-                for pid in out.stdout.split():
-                    if pid.strip().isdigit():
-                        os.kill(int(pid), signal.SIGKILL)
-            except Exception:           # noqa: BLE001
+                subprocess.Popen(['/bin/bash', script],
+                                 stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL,
+                                 start_new_session=True)
+            except Exception:  # noqa: BLE001
                 pass
 
         threading.Thread(target=work, daemon=True).start()
-        return {'message': '전체 재시작을 시작했습니다 — 20초쯤 뒤 화면이 '
-                           '다시 붙습니다. 돌아오면 모터 스택 켜기를 한 번 '
-                           '누르세요'}
+        return {'message': '전체 재시작을 시작했습니다 — 정지·DDS 정리·재기동에 '
+                           '40초쯤 걸립니다. 끝나면 화면을 새로고침하세요'}
 
     def ros_clean(self):
         """죽은 노드가 목록에 남아 점유 검사를 잘못 통과·거부시키는 것을 막는다."""
