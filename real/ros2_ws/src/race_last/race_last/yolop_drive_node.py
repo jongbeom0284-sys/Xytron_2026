@@ -556,8 +556,19 @@ class YolopDriveNode(Node):
         steady = (len(self._car_recent) == CAR_CONFIRM
                   and len(set(self._car_recent)) == 1)
 
-        if steady and near and side in ('LEFT', 'RIGHT'):
-            want = 'right' if side == 'LEFT' else 'left'
+        # 2026-08-23: 5프레임 연속은 '진입' 조건으로만 쓴다. /vehicle/state 가
+        # 2Hz 라 5프레임이면 2.5초인데, 그 사이 NONE 이 한 번만 끼면 카운트가
+        # 초기화돼 회피가 걸렸다 풀렸다를 반복했다.
+        # 이미 회피 중이면 같은 쪽이 한 번만 보여도 유지 시간을 갱신한다.
+        want_now = 'right' if side == 'LEFT' else 'left'
+        holding = (self._avoid_side is not None
+                   and self._avoid_side == want_now
+                   and near and side in ('LEFT', 'RIGHT'))
+        if holding:
+            self._avoid_until = now + AVOID_HOLD_SEC
+
+        if (steady or holding) and near and side in ('LEFT', 'RIGHT'):
+            want = want_now
             if self._avoid_side != want:
                 self.get_logger().warning(
                     '앞차 %s %s — %s 흰선으로 회피'
