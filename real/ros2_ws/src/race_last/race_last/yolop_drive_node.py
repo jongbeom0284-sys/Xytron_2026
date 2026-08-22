@@ -403,12 +403,12 @@ class YolopDriveNode(Node):
     # ------------------------------------------------------------ 콜백
     def _on_image_compressed(self, message) -> None:
         try:
-            bgr = cv2.imdecode(
-                np.frombuffer(message.data, np.uint8), cv2.IMREAD_COLOR)
+            buf = np.frombuffer(bytes(message.data), dtype=np.uint8)
+            bgr = cv2.imdecode(buf, cv2.IMREAD_COLOR)
         except Exception as exc:  # noqa: BLE001
-            self._raise_fault(f'압축 영상 디코드 실패: {exc}')
+            self.get_logger().warning(f'압축 영상 디코드 실패: {exc}')
             return
-        if bgr is None:
+        if bgr is None or bgr.ndim != 3:
             return
         with self._frame_ready:
             self._frame_seq += 1
@@ -670,6 +670,11 @@ class YolopDriveNode(Node):
                 self._processed_seq = seq
             try:
                 started = time.perf_counter()
+                if bgr is None or bgr.ndim != 3 or bgr.shape[2] != 3:
+                    self.get_logger().warning(
+                        '프레임 형식 이상 — 건너뜀 %s'
+                        % (None if bgr is None else str(bgr.shape)))
+                    continue
                 lane, road = self._infer(bgr)
                 # 직진 트리거. 꺼져 있으면 기존 동작 그대로다.
                 self.tracker.config.straight_only = self._straight
@@ -684,7 +689,13 @@ class YolopDriveNode(Node):
                 continue
             with self._lock:
                 self._result = (result, stamp, bgr)
-            self._maybe_publish_debug(bgr, result)
+            # 오버레이 실패로 워커 스레드가 조용히 죽는 것을 막는다
+            # (2026-08-22: 이 줄이 try 밖이라 첫 예외에 스레드가 사망,
+            #  차선 영상이 안 나오고 camera_stale 이 영구 true 였다)
+            try:
+                self._maybe_publish_debug(bgr, result)
+            except Exception as exc:  # noqa: BLE001
+                self.get_logger().warning(f'오버레이 생략: {exc}')
 
     def _maybe_publish_debug(self, bgr, result) -> None:
         now = time.monotonic()
