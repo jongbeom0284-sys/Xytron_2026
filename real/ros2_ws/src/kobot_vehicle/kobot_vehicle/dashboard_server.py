@@ -839,6 +839,37 @@ class DriveToolsController:
         self._send(self.drive_cmd, {'cmd': 'vehicle_force', 'sec': sec})
         return {'message': f'앞차 인식을 {sec:.0f}초간 강제로 켭니다'}
 
+    def full_restart(self):
+        """스택 전체를 되살린다. 서비스가 Restart=on-failure 라 sudo 가 필요 없다.
+
+        대시보드 자신이 그 서비스 안에서 돌기 때문에, 응답을 먼저 보내고
+        배경에서 런치를 종료한다. systemd 가 3초 뒤 전부 다시 띄운다.
+        0823 하루 동안 손으로 반복하던 절차다 — 노드는 살아 있는데 토픽이
+        안 잡히거나, 죽은 노드가 그래프에 남거나, 모터 스택만 빠졌을 때.
+        """
+        def work():
+            time.sleep(1.0)
+            try:
+                self.release()          # 남은 시험 주행이 모터를 물고 있을 수 있다
+            except Exception:           # noqa: BLE001
+                pass
+            # 런치를 끊으면 systemd 가 되살린다. 되살아난 뒤 모터 스택과
+            # ROS 그래프는 다음 요청(또는 아래 지연 작업)에서 정리한다.
+            try:
+                out = subprocess.run(
+                    ['pgrep', '-f', 'race_last race.launch.py'],
+                    capture_output=True, text=True, timeout=5)
+                for pid in out.stdout.split():
+                    if pid.strip().isdigit():
+                        os.kill(int(pid), signal.SIGKILL)
+            except Exception:           # noqa: BLE001
+                pass
+
+        threading.Thread(target=work, daemon=True).start()
+        return {'message': '전체 재시작을 시작했습니다 — 20초쯤 뒤 화면이 '
+                           '다시 붙습니다. 돌아오면 모터 스택 켜기를 한 번 '
+                           '누르세요'}
+
     def ros_clean(self):
         """죽은 노드가 목록에 남아 점유 검사를 잘못 통과·거부시키는 것을 막는다."""
         for action in ('stop', 'start'):
@@ -1251,6 +1282,7 @@ class DashboardRequestHandler(SimpleHTTPRequestHandler):
                     'signal-on': lambda: tools.signal_on(),
                     'vehicle-on': lambda: tools.vehicle_on(sec),
                     'ros-clean': lambda: tools.ros_clean(),
+                    'full-restart': lambda: tools.full_restart(),
                 }
                 if action not in table:
                     return self._json(404, {'error': '없는 주행 도구입니다'})

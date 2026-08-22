@@ -200,6 +200,8 @@ function driveCard(){
 // 주행 도구 — 노드 안에 래치된 상태를 밖에서 푸는 버튼들.
 // 각 항목은 0823 실주행에서 실제로 겪은 사고 하나씩에 대응한다.
 const DRIVE_TOOLS=[
+  {act:'full-restart', label:'전체 재시작', cls:'danger',
+   why:'스택이 꼬였을 때. 20초쯤 뒤 화면이 다시 붙는다'},
   {act:'reset',   label:'완전 초기화', cls:'danger',
    why:'신호잠금·조향억제·회피·콘 상태를 전부 푼다'},
   {act:'release', label:'모터 점유 해제', cls:'',
