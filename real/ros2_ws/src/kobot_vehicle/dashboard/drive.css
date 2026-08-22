@@ -379,3 +379,91 @@
 .grid-3 .signal-card { gap: 12px; padding: 10px 13px; }
 .grid-3 .signal-lamps .lamp { width: 22px; height: 22px; font-size: 13px; }
 .grid-3 .signal-name { font-size: 21px; }
+
+
+/* ── 앞차 인식 결과 ───────────────────────────────────────── */
+.vehicle-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.vbox {
+  position: absolute;
+  border: 3px solid #ff9f43;
+  border-radius: 4px;
+  box-shadow: 0 0 0 2px rgba(8, 15, 30, .55), 0 0 14px rgba(255, 159, 67, .8);
+}
+
+.vbox.s-left  { border-color: #4dabf7; box-shadow: 0 0 0 2px rgba(8,15,30,.55), 0 0 14px rgba(77,171,247,.85); }
+.vbox.s-right { border-color: #ff9f43; box-shadow: 0 0 0 2px rgba(8,15,30,.55), 0 0 14px rgba(255,159,67,.85); }
+
+.vbox b {
+  position: absolute;
+  top: -19px;
+  left: -2px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(10, 14, 20, .88);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.vehicle-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 8px;
+  padding: 11px 16px;
+  border: 2px solid #cbd5e1;
+  border-radius: 14px;
+  background: #f1f5f9;
+  transition: background .12s, border-color .12s;
+}
+
+.vcar {
+  display: grid;
+  flex: none;
+  width: 46px;
+  height: 46px;
+  place-items: center;
+  border-radius: 11px;
+  background: #0f172a;
+  color: #334155;
+  font-size: 22px;
+  transition: color .1s, box-shadow .1s;
+}
+
+.vtext { min-width: 0; }
+
+.vname {
+  display: block;
+  font-size: 22px;
+  font-weight: 900;
+  line-height: 1.15;
+  letter-spacing: -.02em;
+  color: #475569;
+}
+
+.vsub {
+  display: block;
+  margin-top: 2px;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.vehicle-card[data-side="left"]  { border-color: #4dabf7; background: #eff8ff; }
+.vehicle-card[data-side="right"] { border-color: #ff9f43; background: #fff7ed; }
+.vehicle-card[data-side="left"]  .vname { color: #1667a8; }
+.vehicle-card[data-side="right"] .vname { color: #b35b09; }
+.vehicle-card[data-side="left"]  .vsub  { color: #1a76bd; }
+.vehicle-card[data-side="right"] .vsub  { color: #c2690c; }
+.vehicle-card[data-side="left"]  .vcar  { color: #4dabf7; box-shadow: 0 0 16px 3px rgba(77,171,247,.7); }
+.vehicle-card[data-side="right"] .vcar  { color: #ff9f43; box-shadow: 0 0 16px 3px rgba(255,159,67,.7); }
+
+.grid-3 .vehicle-card { gap: 11px; padding: 8px 12px; }
+.grid-3 .vcar { width: 34px; height: 34px; font-size: 17px; }
+.grid-3 .vname { font-size: 17px; }

@@ -20,6 +20,7 @@ setup(
     name=package_name,
     version='0.1.0',
     packages=find_packages(),
+    package_data={'kobot_vehicle': ['*.pt']},
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
@@ -42,6 +43,7 @@ setup(
         'lane_follow = kobot_vehicle.Lane_follow:main',
         'lidar_avoidance = kobot_vehicle.Lidar_Avoidance:main',
         'traffic_perception = kobot_vehicle.Traffic_Perception:main',
+        'vehicle_perception = kobot_vehicle.Vehicle_Perception:main',
         'yolop_drive = kobot_vehicle.yolop_drive_node:main',
     ]},
 )

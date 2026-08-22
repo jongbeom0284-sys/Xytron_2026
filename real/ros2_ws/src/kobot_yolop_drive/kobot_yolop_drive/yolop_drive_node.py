@@ -40,6 +40,7 @@ from sensor_msgs.msg import Image
 from std_msgs.msg import Bool, Float32MultiArray, String
 
 from kobot_yolop_drive.lane_core import (
+    divider_x,
     LaneConfig,
     LaneTracker,
     draw_overlay,
@@ -55,6 +56,13 @@ GO_CONFIRM = 7           # 초록·좌회전 확정에 필요한 연속 장수 (
 GO_LOCK_SEC = 10.0       # 확정 뒤 신호등 인식을 통째로 쉬는 시간 (빨간불 포함)
 STRAIGHT_HOLD_SEC = 3.0  # 직진 확정 직후 조향을 줄여 직진만 하는 시간
 STRAIGHT_HOLD_GAIN = 0.15  # 그동안 조향에 곱하는 값. 0 이면 완전 직진
+
+# ---- 앞차 회피. 거리·유지 값은 Lane_follow.py 원본 그대로 ----
+AVOID_ENTER_M = 1.30     # 이 거리 안이면 회피 시작
+AVOID_CLEAR_M = 1.80     # 이만큼 멀어지면 해제
+AVOID_HOLD_SEC = 0.8     # 차가 안 보여도 이 시간은 회피를 유지한다
+CAR_CONFIRM = 3          # 같은 방향이 이만큼 연속이어야 인정 (오검출 방지)
+AVOID_OFFSET_PX = 90.0   # 흰선에서 안쪽으로 띄울 거리. 실주행하며 맞춘다
 
 
 class YolopDriveNode(Node):
@@ -117,6 +125,12 @@ class YolopDriveNode(Node):
         self._go_locked_until = 0.0   # 이 시각까지 신호등을 아예 안 읽는다
         self._straight_hold_until = 0.0  # 이 시각까지 조향을 줄여 직진만 한다
 
+        # 앞차 회피 상태
+        self._car_recent = []        # 최근 car.dir. 연속 장수를 센다
+        self._avoid_side = None      # 'right' | 'left' | None
+        self._avoid_until = 0.0      # 이 시각까지 회피를 유지한다
+        self._car_dist = None
+
         self.tracker = LaneTracker(self._lane_config())
         self._load_model()
 
@@ -138,6 +152,8 @@ class YolopDriveNode(Node):
                                  self._on_record, 10)
         self.create_subscription(String, '/traffic_light/state',
                                  self._on_traffic, 10)
+        self.create_subscription(String, '/vehicle/state',
+                                 self._on_vehicle, 10)
         # 대시보드 기록주행 카드가 쓰는 토픽. QoS 를 발행측과 맞춘다.
         dashboard_qos = QoSProfile(depth=1)
         dashboard_qos.reliability = ReliabilityPolicy.RELIABLE
@@ -475,6 +491,85 @@ class YolopDriveNode(Node):
                 '좌회전 %d장 연속 — 직진 해제, %.0f초간 신호 무시'
                 % (GO_CONFIRM, GO_LOCK_SEC))
 
+    def _on_vehicle(self, message: String) -> None:
+        """앞차 위치를 받아 회피 방향을 정한다.
+
+        왼쪽 차 → 우측 흰선에 붙는다. 오른쪽 차 → 좌측 흰선에 붙는다.
+        한 프레임 오검출로 차선을 바꾸면 안 되므로 CAR_CONFIRM 장 연속을 본다.
+        차가 사라져도 AVOID_HOLD_SEC 동안은 유지한다. 지나치는 중이니까.
+        """
+        try:
+            payload = json.loads(message.data)
+            car = payload.get('car', {})
+            dist = car.get('dist')
+            boxes = payload.get('boxes') or []
+        except Exception:  # noqa: BLE001
+            return
+
+        # 좌/우는 인식 노드가 준 값(화면 중앙 기준) 대신 여기서 다시 정한다.
+        # 노란 중앙선을 기준으로 보면 카메라 장착 위치와 차의 치우침이 상쇄된다.
+        side = self._side_by_lane(boxes, payload)
+        if side == 'NONE':
+            side = str(car.get('dir', 'NONE'))   # 차선이 안 보이면 원래 값
+        now = time.monotonic()
+        self._car_dist = dist
+
+        near = (dist is not None) and (float(dist) <= AVOID_ENTER_M)
+        far = (dist is None) or (float(dist) >= AVOID_CLEAR_M)
+
+        self._car_recent.append(side if near else 'NONE')
+        if len(self._car_recent) > CAR_CONFIRM:
+            self._car_recent.pop(0)
+        steady = (len(self._car_recent) == CAR_CONFIRM
+                  and len(set(self._car_recent)) == 1)
+
+        if steady and near and side in ('LEFT', 'RIGHT'):
+            want = 'right' if side == 'LEFT' else 'left'
+            if self._avoid_side != want:
+                self.get_logger().warning(
+                    '앞차 %s %.2fm — %s 흰선으로 회피'
+                    % (side, float(dist), '우측' if want == 'right' else '좌측'))
+            self._avoid_side = want
+            self._avoid_until = now + AVOID_HOLD_SEC
+        elif far and self._avoid_side and now > self._avoid_until:
+            self.get_logger().info('앞차 벗어남 — 회피 해제')
+            self._avoid_side = None
+
+    def _side_by_lane(self, boxes, payload) -> str:
+        """가장 가까운 앞차가 노란 중앙선의 어느 쪽인지 본다.
+
+        비교할 행은 박스 아래쪽 y2 다. 차가 바닥에 닿는 지점이라 차선과
+        같은 평면이고, 원근 왜곡의 영향이 가장 작다.
+        """
+        if not boxes:
+            return 'NONE'
+        with self._lock:
+            payload_result = self._result
+        result = payload_result[0] if payload_result else None
+        if result is None:
+            return 'NONE'
+
+        width = float(payload.get('w') or 640)
+        height = float(payload.get('h') or 480)
+        # 가장 가까운 것 = 박스가 가장 큰 것
+        box = max(boxes, key=lambda b: float(b.get('w', 0)) * float(b.get('h', 0)))
+        cx = (float(box.get('x', 0)) + float(box.get('w', 0)) / 2.0) * width
+        y2 = (float(box.get('y', 0)) + float(box.get('h', 0))) * height
+
+        edge = divider_x(result, int(round(y2)))
+        if edge is None:
+            return 'NONE'
+        return 'LEFT' if cx < edge else 'RIGHT'
+
+    def _avoid_offset(self, now: float) -> float:
+        """이 순간 흰선에서 띄울 거리. 0 이면 평소 주행."""
+        # 직진 조향 억제 중에는 회피하지 않는다. 구간이 정해져 있어 억제가 이긴다.
+        if now < self._straight_hold_until:
+            return 0.0
+        if not self._avoid_side or now > self._avoid_until:
+            return 0.0
+        return AVOID_OFFSET_PX if self._avoid_side == 'right' else -AVOID_OFFSET_PX
+
     def _on_record(self, message: Bool) -> None:
         if bool(message.data):
             self._start_record()
@@ -555,6 +650,9 @@ class YolopDriveNode(Node):
                 lane, road = self._infer(bgr)
                 # 직진 트리거. 꺼져 있으면 기존 동작 그대로다.
                 self.tracker.config.straight_only = self._straight
+                # 앞차 회피. 0 이면 기존 동작 그대로다.
+                self.tracker.config.avoid_offset_px = self._avoid_offset(
+                    time.monotonic())
                 result = self.tracker.process(bgr, lane, road,
                                               time.monotonic())
                 self._latency_ms = (time.perf_counter() - started) * 1000.0

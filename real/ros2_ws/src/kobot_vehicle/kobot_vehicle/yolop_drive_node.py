@@ -467,16 +467,39 @@ class YolopDriveNode(Node):
                 f'YOLOPv2 적재 완료 ({"fp16" if self.use_fp16 else "fp32"}) '
                 f'{torch.cuda.get_device_name(0)}')
 
+    def _find_yolo_model_path(self) -> str:
+        """yolov8n.pt 모델 경로 탐색."""
+        candidates = [
+            self.yolo_model_path,
+            '/home/xytron/2026_Xytron/real/ros2_ws/src/kobot_vehicle/kobot_vehicle/yolov8n.pt',
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), 'yolov8n.pt'),
+            '/home/xytron/2026_Xytron/real/ros2_ws/src/kobot_vehicle/yolov8n.pt',
+        ]
+        for c in candidates:
+            if c and os.path.isfile(c):
+                return c
+        return ''
+
     def _load_yolo(self) -> None:
-        """YOLOv8n 장애물 감지 모델 로드."""
+        """YOLOv8n 장애물 감지 모델 로드 및 GPU 초기화."""
+        model_path = self._find_yolo_model_path()
+        if not model_path:
+            self.get_logger().error(
+                f'YOLOv8n 모델 파일을 찾을 수 없다. 탐색 경로: {self.yolo_model_path}')
+            return
+
         try:
+            # ultralytics 모듈 경로 보장
+            venv_path = '/home/xytron/clrernet_eval/venv/lib/python3.10/site-packages'
+            if venv_path not in sys.path:
+                sys.path.insert(0, venv_path)
+
             from ultralytics import YOLO
-            if os.path.exists(self.yolo_model_path):
-                self._yolo_model = YOLO(self.yolo_model_path)
-                self.get_logger().info(f'YOLOv8n 적재 완료: {self.yolo_model_path}')
-            else:
-                self.get_logger().warning(
-                    f'YOLOv8n 모델 파일을 찾을 수 없다: {self.yolo_model_path}')
+            self._yolo_model = YOLO(model_path)
+            # 워밍업 1회
+            dummy = np.zeros((480, 640, 3), dtype=np.uint8)
+            self._yolo_model(dummy, imgsz=320, conf=self.yolo_conf_thres, device='cuda:0', verbose=False)
+            self.get_logger().info(f'YOLOv8n 적재 및 GPU 준비 완료: {model_path}')
         except Exception as exc:  # noqa: BLE001
             self.get_logger().error(f'YOLOv8n 모델 적재 실패: {exc}')
 
@@ -551,7 +574,8 @@ class YolopDriveNode(Node):
             return
 
         height, width = bgr.shape[:2]
-        overhead_y = int(height * self.tracker.config.roi_top_ratio)
+        # 실제 천장/머리 위 구조물(상단 15% 약 72px)만 제외 (전방 도로 차량은 정상 검출)
+        overhead_y = int(height * 0.15)
         min_obstacle_dist = float('inf')
         closest_obstacle_dir = None
         person_detected = False

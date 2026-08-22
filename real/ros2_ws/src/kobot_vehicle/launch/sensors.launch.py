@@ -54,12 +54,15 @@ def generate_launch_description():
     ultrasonic = LaunchConfiguration('ultrasonic')
     imu = LaunchConfiguration('imu')
     lidar = LaunchConfiguration('lidar')
+    # ultralytics(차량 YOLO)는 clrernet venv 에만 있다. torch 경로와 함께 넣는다.
+    ultra_site = '/home/xytron/clrernet_eval/venv/lib/python3.10/site-packages'
     torch_site = os.environ.get(
         'KOBOT_TORCH_SITE',
         '/home/xytron/.venvs/twinmixing/lib/python3.10/site-packages',
     )
     inherited_pythonpath = os.environ.get('PYTHONPATH', '')
-    pythonpath = torch_site + (os.pathsep + inherited_pythonpath if inherited_pythonpath else '')
+    pythonpath = os.pathsep.join(
+        [p for p in (torch_site, ultra_site, inherited_pythonpath) if p])
     return LaunchDescription([
         SetEnvironmentVariable('PYTHONPATH', pythonpath),
         DeclareLaunchArgument('camera', default_value='true'),
@@ -68,10 +71,8 @@ def generate_launch_description():
         DeclareLaunchArgument('lidar', default_value='true'),
         Node(package='usb_cam', executable='usb_cam_node_exe', name='camera',
              parameters=[os.path.join(config, 'camera.yaml')], condition=IfCondition(camera)),
-        # 차선 인식: YOLOPv2 세그멘테이션 + 노랑/흰선 색 분류 + ROI 절단.
-        # armed 는 false 로 시작한다. 기록주행이 파라미터로 arm 한다.
-        # 이전 twinmixing 으로 되돌리려면 아래 Node 를 지우고
-        # /home/xytron/backups/sensors_launch_*.py 의 원본 Node 를 살린다.
+        # 차선 인식: YOLOPv2 세그멘테이션 + 신호등 연동(직진 트리거) + 앞차 회피.
+        # kobot_yolop_drive 가 기준이다. kobot_vehicle 안의 사본은 쓰지 않는다.
         Node(package='kobot_yolop_drive', executable='yolop_drive',
              name='yolop_drive',
              parameters=[os.path.join(
@@ -83,6 +84,12 @@ def generate_launch_description():
         Node(package='kobot_vehicle', executable='traffic_perception',
              name='traffic_perception_node',
              parameters=[{'debug_image': True, 'max_hz': 20.0}],
+             condition=IfCondition(camera), output='screen'),
+        # 차량 인식: YOLOv8n COCO(car) + 라이다 퓨전. 좌/우와 거리만 낸다.
+        # ultralytics 가 clrernet venv 에만 있어 PYTHONPATH 로 넣어준다.
+        Node(package='kobot_vehicle', executable='vehicle_perception',
+             name='vehicle_perception_node',
+             parameters=[{'debug_image': True, 'infer_interval': 3}],
              condition=IfCondition(camera), output='screen'),
         Node(package='kobot_vehicle', executable='ultrasonic_node',
              parameters=[os.path.join(config, 'ultrasonic.yaml')], condition=IfCondition(ultrasonic)),
