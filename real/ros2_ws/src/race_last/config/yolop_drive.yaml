@@ -46,14 +46,14 @@ yolop_drive:
     kp_far_lo: 30.0
     # 70 -> 90 (2026-08-22): BLDC 로 속도가 0.5~0.7 -> 2.0+ 로 오르며 곡선 이탈.
     # 원본 주석의 예약 단계 '부족하면 90 까지' 를 적용. 조향 로직 자체는 이식 전과 동일 검증됨.
-    kp_far_hi: 120.0
-    knee_norm: 0.14
+    kp_far_hi: 80.0
+    knee_norm: 0.20
     kp_near: 6.0
-    kd: 8.0
+    kd: 12.0
     deadband_norm: 0.035
     # 280 -> 400 (2026-08-22): frame218 실측 e_far -0.782 인데 출력 -31.9 정체.
     # 인식이 아니라 조향 도달 속도가 병목이라 상향.
-    max_rate: 400.0
-    filter_alpha: 0.85
+    max_rate: 280.0
+    filter_alpha: 0.65
     steering_sign: 1.0
     hold_seconds: 0.8
