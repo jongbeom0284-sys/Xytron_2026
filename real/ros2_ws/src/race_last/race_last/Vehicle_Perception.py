@@ -141,6 +141,12 @@ class VehiclePerception(Node):
         self.scan_at = time.time()
 
     def on_compressed(self, msg):
+        # 신호 잠금(직진 30s / 좌회전 20s) 동안은 판정이 확정돼 있어
+        # 인식이 무의미하다. CPU 를 조향에 넘긴다. (0822: 가드가
+        # on_raw 에만 있어 압축 전환 후 무력화됐던 것을 바로잡음)
+        if time.time() < self._skip_until:
+            return
+
         try:
             image = cv2.imdecode(np.frombuffer(msg.data, np.uint8),
                                  cv2.IMREAD_COLOR)
