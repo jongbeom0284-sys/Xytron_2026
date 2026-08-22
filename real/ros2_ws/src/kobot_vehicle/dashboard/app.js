@@ -266,8 +266,7 @@ function drawVehicleOverlay(layer){
   if(cw<2||ch<2||nw<2||nh<2){layer.innerHTML='';return;}
   const scale=Math.min(cw/nw,ch/nh), dw=nw*scale, dh=nh*scale;
   const ox=(cw-dw)/2, oy=(ch-dh)/2;
-  const roiHtml=roi?`<i class="roi-box" style="left:${(ox+roi.x*dw).toFixed(1)}px;top:${(oy+roi.y*dh).toFixed(1)}px;width:${(roi.w*dw).toFixed(1)}px;height:${(roi.h*dh).toFixed(1)}px"><b>ROI</b></i>`:'';
-  layer.innerHTML=roiHtml+boxes.map(b=>{
+  layer.innerHTML=boxes.map(b=>{
     const left=ox+b.x*dw, top=oy+b.y*dh;
     const width=b.w*dw, height=b.h*dh;
     const tag=`${b.ko||'차량'} ${CAR_SIDE[b.dir]||b.dir}`
@@ -321,7 +320,8 @@ function drawSignalOverlay(layer){
   if(cw<2||ch<2||nw<2||nh<2){layer.innerHTML='';return;}
   const scale=Math.min(cw/nw,ch/nh), dw=nw*scale, dh=nh*scale;
   const ox=(cw-dw)/2, oy=(ch-dh)/2;
-  layer.innerHTML=boxes.map(box=>{
+  const roiHtml=roi?`<i class="roi-box" style="left:${(ox+roi.x*dw).toFixed(1)}px;top:${(oy+roi.y*dh).toFixed(1)}px;width:${(roi.w*dw).toFixed(1)}px;height:${(roi.h*dh).toFixed(1)}px"><b>ROI</b></i>`:'';
+  layer.innerHTML=roiHtml+boxes.map(box=>{
     const pad=6;
     const left=ox+box.x*dw-pad, top=oy+box.y*dh-pad;
     const width=box.w*dw+pad*2, height=box.h*dh+pad*2;
