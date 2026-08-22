@@ -231,8 +231,9 @@ class TrafficLightPerception(Node):
         self.pub_state = self.create_publisher(String, TOPIC_STATE, 10)
         self.pub_debug = (self.create_publisher(Image, TOPIC_DEBUG, 1)
                           if self.publish_debug else None)
-        self.create_subscription(CompressedImage, TOPIC_IMAGE_COMPRESSED,
-                                 self.on_compressed, qos_profile_sensor_data)
+        self._skip_until = 0.0
+        # 압축 스트림 구독 제거 (2026-08-22): 원본과 중복 디코딩으로
+        # 초당 ~50회 디코드가 CPU 를 포화시켜 주행 판단이 4Hz 로 떨어졌다.
         self.create_subscription(Image, TOPIC_IMAGE_RAW,
                                  self.on_raw, qos_profile_sensor_data)
 
@@ -292,7 +293,6 @@ class TrafficLightPerception(Node):
         # 신호 잠금(직진 30s / 좌회전 20s) 동안은 판정이 확정돼 있어
         # 인식이 무의미하다. 그 사이 CPU 를 조향 파이프라인에 넘긴다.
         # (2026-08-22 실측: 주행 판단이 4.4Hz 까지 떨어져 커브 이탈)
-        self._skip_until = 0.0
         self.create_subscription(
             String, '/kobot_yolop/status', self._on_drive_status, 10)
 
