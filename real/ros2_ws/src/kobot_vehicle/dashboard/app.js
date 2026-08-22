@@ -111,10 +111,7 @@ const CAR_SIDE={LEFT:'왼쪽',RIGHT:'오른쪽',NONE:'없음'};
 function vehicleCardHtml(){
   return `<div class="vehicle-card" data-side="none">
     <div class="vcar"><span class="vicon">▣</span></div>
-    <div class="vtext">
-      <strong class="vname">앞차 없음</strong>
-      <span class="vsub">차량 노드 대기 중</span>
-    </div>
+    <strong class="vname">—</strong>
   </div>`;
 }
 
@@ -125,10 +122,6 @@ function signalCardHtml(){
       <span class="lamp" data-lamp="yellow"></span>
       <span class="lamp" data-lamp="left">←</span>
       <span class="lamp" data-lamp="green"></span>
-    </div>
-    <div class="signal-text">
-      <strong class="signal-name">신호 없음</strong>
-      <span class="signal-sub">노드 대기 중</span>
     </div>
   </div>`;
 }
@@ -248,8 +241,8 @@ function renderVehicleCards(){
   const dist=car.dist;
   const has=(!stale && side!=='NONE');
   const name=has
-    ? `앞차 ${CAR_SIDE[side]||side}${dist!=null?' · '+Number(dist).toFixed(2)+'m':''}`
-    : '앞차 없음';
+    ? `${side}${dist!=null?' · '+Number(dist).toFixed(2)+'m':''}`
+    : '—';
   const go=has?(side==='LEFT'?'우측 흰선으로 회피':'좌측 흰선으로 회피'):'';
   const sub=stale
     ? '차량 노드 신호 없음 · vehicle_perception 실행 필요'
