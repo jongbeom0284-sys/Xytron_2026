@@ -152,6 +152,16 @@ class ConePerception(Node):
             self._log_fh = open(path, 'w', buffering=1)
             self.get_logger().info('콘 기록 시작: %s' % path)
         payload['wall'] = time.time()
+        # 원본 스캔도 같이 남긴다 (2026-08-23). 결과만 있으면 '설정을
+        # 바꿨으면 어땠을까' 를 검증할 수 없다 — 의자다리 오인 수정 때
+        # 원본이 없어 콘 좌표만으로 간접 확인해야 했다.
+        # 소수 2자리(1cm)로 줄여 용량을 1/3 로 만든다.
+        payload['scan'] = {
+            'angle_min': round(float(msg.angle_min), 6),
+            'angle_increment': round(float(msg.angle_increment), 8),
+            'ranges': [(-1.0 if not math.isfinite(r) else round(float(r), 2))
+                       for r in msg.ranges],
+        }
         self._log_fh.write(json.dumps(payload) + chr(10))
 
 
