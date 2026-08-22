@@ -23,7 +23,10 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Float32MultiArray, String
 
-from .lidar_cones import LidarConeConfig, find_cone_gate
+from .kmu_race.perception.lidar_cones import (
+    LidarConeConfig,
+    find_cone_gate,
+)
 
 # 8/17 실측: 차 전진축 = 라이다 +124°
 # (출처: xycar_ws/src/kmu_race/config/params.yaml — 콘 주행이 쓰던 값)
@@ -48,6 +51,9 @@ class ConePerception(Node):
         self.pub_state = self.create_publisher(String, '/cone/state', 10)
         self.pub_gate = self.create_publisher(
             Float32MultiArray, '/cone/gate', 10)
+        # yolop_drive 의 cone_link 가 먹는 전체 관측 (JSON)
+        self.pub_reading = self.create_publisher(
+            String, '/cone/reading', 10)
         self.create_subscription(String, '/traffic_light/state',
                                  self._on_signal, 10)
         self.create_subscription(LaserScan, '/scan', self._on_scan,
@@ -104,6 +110,21 @@ class ConePerception(Node):
         else:
             text = 'X 콘%d' % gate.cones
         self.pub_state.publish(String(data=text))
+
+        payload = dict(
+            stamp=time.monotonic(),
+            valid=bool(gate.valid),
+            depth=round(float(gate.depth_m), 3),
+            width=round(float(gate.width_m), 3),
+            lateral=round(float(gate.lateral_m), 3),
+            cones=int(gate.cones),
+            near_left=(9.9 if math.isinf(gate.near_left_m)
+                       else round(float(gate.near_left_m), 3)),
+            near_right=(9.9 if math.isinf(gate.near_right_m)
+                        else round(float(gate.near_right_m), 3)),
+            pts=[[round(x, 3), round(y, 3)] for x, y in gate.points],
+        )
+        self.pub_reading.publish(String(data=json.dumps(payload)))
 
 
 def main(args=None):

@@ -39,6 +39,10 @@ from rclpy.signals import SignalHandlerOptions
 from sensor_msgs.msg import Image
 from std_msgs.msg import Bool, Float32MultiArray, String
 
+import json
+
+from .cone_link import ConeLink
+
 from .lane_core import (
     divider_x,
     LaneConfig,
@@ -154,6 +158,8 @@ class YolopDriveNode(Node):
                                  self._on_traffic, 10)
         self.create_subscription(String, '/vehicle/state',
                                  self._on_vehicle, 10)
+        self.create_subscription(String, '/cone/reading',
+                                 self._on_cone_reading, 10)
         # 대시보드 기록주행 카드가 쓰는 토픽. QoS 를 발행측과 맞춘다.
         dashboard_qos = QoSProfile(depth=1)
         dashboard_qos.reliability = ReliabilityPolicy.RELIABLE
@@ -162,6 +168,9 @@ class YolopDriveNode(Node):
                                  '/kobot_lane_drive/record_drive/enabled',
                                  self._on_enable, dashboard_qos)
 
+        self._cone_reading = None
+        self._cone_link = (ConeLink(self.get_logger())
+                           if self.cone_enabled else None)
         self._worker = threading.Thread(target=self._infer_loop, daemon=True,
                                         name='yolop-infer')
         self._worker.start()
@@ -211,6 +220,9 @@ class YolopDriveNode(Node):
         self.declare_parameter('max_row_run', 80)
         self.declare_parameter('crosswalk_row_width', 32.0)
         self.declare_parameter('crosswalk_aspect', 0.30)
+        # 라바콘 (kmu_race 이식 — cone_link.py)
+        self.declare_parameter('cone_enabled', True)
+        self.declare_parameter('cone_speed_scale', 0.7)
 
     def _value(self, name):
         return self.get_parameter(name).value
@@ -232,6 +244,8 @@ class YolopDriveNode(Node):
         self.use_fp16 = bool(self._value('use_fp16'))
         self.record_root = Path(str(self._value('record_root')))
         self.max_steer = float(self._value('max_steer'))
+        self.cone_enabled = bool(self._value('cone_enabled'))
+        self.cone_speed_scale = float(self._value('cone_speed_scale'))
         # 61 단위 = 4.87 m/s. VESC 22500 ERPM 상한과 맞춘다.
         if not 0.0 <= self.speed_units <= 61.0:
             raise ValueError('speed_units 는 0~61 단위로 제한한다')
@@ -653,6 +667,14 @@ class YolopDriveNode(Node):
         self._last_overlay_image = overlay
 
     # ------------------------------------------------------------ 제어
+    def _on_cone_reading(self, message: String) -> None:
+        try:
+            data = json.loads(message.data)
+        except ValueError:
+            return
+        with self._lock:
+            self._cone_reading = data
+
     def _on_control(self) -> None:
         now = time.monotonic()
         # red 를 STOP_RELEASE_SEC 넘게 못 보면 정지를 스스로 푼다.
@@ -696,6 +718,23 @@ class YolopDriveNode(Node):
             if self._recording is not None:
                 self._write_record(result, steer, speed,
                                    getattr(self, '_last_overlay_image', None))
+
+        # ── 라바콘 구간: kmu_race 이식 조향(cone_link)으로 대체 ──
+        if self._cone_link is not None and fault is None and enabled:
+            with self._lock:
+                cone_d = self._cone_reading
+                cam_ok = payload is not None and not self._stale
+            cone_cmd = self._cone_link.tick(
+                now, cone_d,
+                ego_mps=speed * self.mps_per_unit,
+                camera_ok=cam_ok)
+            if cone_cmd is not None:
+                steer = float(np.clip(cone_cmd[0], -self.max_steer,
+                                      self.max_steer))
+                cone_speed = min(cone_cmd[1] * self.cone_speed_scale,
+                                 self.speed_units)
+                speed = 0.0 if self._traffic_stop else cone_speed
+                basis = 'cone'
 
         message = Float32MultiArray()
         message.data = [float(steer), float(speed)]
