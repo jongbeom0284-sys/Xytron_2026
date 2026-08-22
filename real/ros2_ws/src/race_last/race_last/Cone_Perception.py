@@ -22,7 +22,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import LaserScan
-from std_msgs.msg import Float32MultiArray, String
+from std_msgs.msg import Bool, Float32MultiArray, String
 
 from .kmu_race.perception.lidar_cones import (
     LidarConeConfig,
@@ -37,6 +37,8 @@ DEFAULT_ANGLE_OFFSET = -2.164
 class ConePerception(Node):
     def __init__(self):
         super().__init__('cone_perception')
+        # 콘 구간 통과가 약 10초. 여유를 붙여 이만큼 열어 둔다 (0823).
+        self.declare_parameter('on_window_sec', 15.0)
         self.declare_parameter('signal_delay_sec', 1.0)
         self.declare_parameter('force_enabled', False)
         self.declare_parameter('angle_offset_rad', DEFAULT_ANGLE_OFFSET)
@@ -46,6 +48,7 @@ class ConePerception(Node):
 
         self.config = LidarConeConfig()
         self.green_at = None          # 직진 신호를 처음 본 시각
+        self.open_until = 0.0         # 이 시각까지 콘 인식을 연다
         self.enabled = self.force
         self.row_side = 0             # find_cone_gate 의 줄 판정 되먹임
 
@@ -57,15 +60,32 @@ class ConePerception(Node):
             String, '/cone/reading', 10)
         self.create_subscription(String, '/traffic_light/state',
                                  self._on_signal, 10)
+        self.create_subscription(Bool, '/cone/trigger', self._on_trigger, 10)
         self.create_subscription(LaserScan, '/scan', self._on_scan,
                                  qos_profile_sensor_data)
         self.get_logger().info(
-            '콘 인식 대기. 직진 신호 +%.1f초 뒤 활성 (force_enabled=%s)'
-            % (self.delay, self.force))
+            '콘 인식 대기. 차선 위 주황이 잡히면 %.0f초간 활성 '
+            '(force_enabled=%s)'
+            % (float(self.get_parameter('on_window_sec').value), self.force))
 
         # 콘 인식 결과를 jsonl 로 남긴다 — 라이다 기반이라 카메라 녹화에는
         # 안 남으므로, 재생 뷰어의 콘 미니맵은 이 파일로 그린다 (2026-08-22)
         self._log_fh = None
+
+    # ------------------------------------------------------------ 진입 트리거
+    def _on_trigger(self, msg):
+        """차선 위 주황이 잡혔다 — 콘 구간 진입. 창 시간만큼 연다.
+
+        첫 콘만 차선 위에 있으므로 이 신호는 진입 순간에만 온다. 그래서
+        '보이는 동안' 이 아니라 '받은 뒤 창 시간' 으로 유지한다.
+        """
+        if not bool(msg.data):
+            return
+        window = float(self.get_parameter('on_window_sec').value)
+        self.open_until = time.monotonic() + window
+        if not self.enabled:
+            self.get_logger().warning(
+                '차선 위 주황 — 콘 인식 %.0f초간 켬' % window)
 
     # ------------------------------------------------------------ 신호 게이트
     def _on_signal(self, msg):
@@ -89,22 +109,23 @@ class ConePerception(Node):
             # 직진이 아닌 '판정' 이 났을 때만 끈다.
             # none(신호등이 시야 밖) 은 판정이 아니라 관측 부재이므로
             # 직전 상태를 그대로 유지한다 (2026-08-23).
-            if self.enabled or self.green_at is not None:
+            if self.enabled or self.open_until:
                 self.get_logger().info('직진 해제(%s) — 콘 인식 끔' % state)
             self.green_at = None
+            self.open_until = 0.0
             self.enabled = self.force
         # state == 'none' / 'yellow' : 아무것도 바꾸지 않는다
 
     # ------------------------------------------------------------ 스캔 처리
     def _on_scan(self, msg):
-        if not self.enabled:
-            if (self.green_at is not None
-                    and time.monotonic() - self.green_at >= self.delay):
-                self.enabled = True
-                self.get_logger().info('콘 인식 활성')
-            else:
-                self.pub_state.publish(String(data='X 직진 대기'))
-                return
+        # 켜짐은 진입 트리거가 연 창 안에서만 성립한다. 창이 닫히면 꺼진다.
+        if not self.force and time.monotonic() >= self.open_until:
+            if self.enabled:
+                self.get_logger().info('콘 인식 창 종료 — 끔')
+            self.enabled = False
+            self.pub_state.publish(String(data='X 진입 대기'))
+            return
+        self.enabled = True
 
         gate = find_cone_gate(
             msg.ranges, msg.angle_min, msg.angle_increment,

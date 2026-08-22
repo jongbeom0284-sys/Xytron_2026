@@ -69,6 +69,17 @@ WAIT_GONE_MAX_SEC = 6.0
 STRAIGHT_HOLD_SEC = 3.0  # 직진 신호가 사라진 뒤 조향을 줄여 직진만 하는 시간
 STRAIGHT_HOLD_GAIN = 0.15  # 그동안 조향에 곱하는 값. 0 이면 완전 직진
 
+# ---- 콘 구간 진입 트리거 (0823) ----
+# 첫 라바콘만 차선 위에 놓인다 (실측). 그래서 차선 마스크와 주황이 겹치는
+# 픽셀 수가 진입 시점을 가리킨다. 임계는 실측 후 파라미터로 조정한다.
+CONE_HSV_LO = (3, 110, 70)     # 주황 하한 (OpenCV HSV, H 0~179)
+CONE_HSV_HI = (12, 255, 255)   # 주황 상한. 노란 중앙선(H 30~36)을 뺀다
+CONE_DILATE = 15               # 흰 선을 이만큼 부풀려 '선 근처'를 본다.
+                               # 콘이 선을 덮으면 그 자리 흰 픽셀이 사라진다
+CONE_BAND_TOP = 0.45           # 탐색 띠 상단 — 위쪽은 먼 배경
+CONE_BAND_BOT = 0.80           # 하단 — 이 아래는 차체 주황 스티커
+CONE_TRIG_CONFIRM = 3          # 이만큼 연속이어야 진입으로 본다
+
 # ---- 앞차 회피. 거리·유지 값은 Lane_follow.py 원본 그대로 ----
 AVOID_ENTER_M = 1.30     # 이 거리 안이면 회피 시작
 AVOID_CLEAR_M = 1.80     # 이만큼 멀어지면 해제
@@ -137,6 +148,9 @@ class YolopDriveNode(Node):
         self._last_red_at = 0.0       # 마지막으로 red 를 본 시각
         self._recent = []             # 최근 신호. 연속 장수를 센다
         self._go_locked_until = 0.0   # 이 시각까지 신호등을 아예 안 읽는다
+        self._cone_trig_px = 0        # 차선 위 주황 픽셀 수 (직전 프레임)
+        self._cone_trig_run = 0       # 임계를 넘긴 연속 장수
+        self._cone_triggered = False  # 콘 구간 진입을 이미 알렸는가
         self._lock_kind = None        # 확정했으나 아직 시야에 남아 있는 신호
         self._lock_since = 0.0        # 그 신호를 확정한 시각
         self._gone = 0                # 그 신호를 연속으로 못 본 장수
@@ -157,6 +171,9 @@ class YolopDriveNode(Node):
             Image, '/kobot_yolop/debug_image', 1)
         self.pub_status = self.create_publisher(
             String, '/kobot_yolop/status', 10)
+        # 콘 구간 진입을 한 번 알린다. Cone_Perception 이 받아 켜진다.
+        self._cone_trigger_pub = self.create_publisher(
+            Bool, '/cone/trigger', 10)
         self.pub_motor = None
         self._apply_armed(self.armed, announce=True)
         self.add_on_set_parameters_callback(self._on_parameters)
@@ -242,6 +259,8 @@ class YolopDriveNode(Node):
         self.declare_parameter('crosswalk_aspect', 0.30)
         # 라바콘 (kmu_race 이식 — cone_link.py)
         self.declare_parameter('cone_enabled', True)
+        # 차선 위 주황이 이 픽셀 수를 넘으면 콘 구간 진입. 0 이면 끈다.
+        self.declare_parameter('cone_trigger_px', 0)
         self.declare_parameter('cone_speed_scale', 0.7)
         # 통로가 보이면 진입 전에 이 속도로 미리 감속 (0822 벽 충돌 재발 방지:
         # 2.16 m/s 로 통로 돌진 -> 진입 후 감속으로는 늦다)
@@ -758,6 +777,10 @@ class YolopDriveNode(Node):
                 result = self.tracker.process(bgr, lane, road,
                                               time.monotonic())
                 self._latency_ms = (time.perf_counter() - started) * 1000.0
+                try:
+                    self._check_cone_trigger(bgr, result.white_mask)
+                except Exception as exc:  # noqa: BLE001
+                    self.get_logger().warning(f'콘 트리거 생략: {exc}')
             except Exception as exc:  # noqa: BLE001
                 self._raise_fault(f'추론 실패: {exc}')
                 continue
@@ -770,6 +793,46 @@ class YolopDriveNode(Node):
                 self._maybe_publish_debug(bgr, result)
             except Exception as exc:  # noqa: BLE001
                 self.get_logger().warning(f'오버레이 생략: {exc}')
+
+    def _check_cone_trigger(self, bgr, white) -> None:
+        """흰 차선 위(근처)에 주황이 얹혀 있는가 — 콘 구간 진입 판정.
+
+        첫 콘만 흰 차선 위에 놓이므로 이 겹침은 진입 순간에만 크게 나온다.
+        노란 중앙선은 색상으로 빼고, 차체 앞범퍼 스티커는 띠로 뺀다.
+        콘이 선을 덮으면 그 자리 흰 픽셀이 사라지므로 흰 마스크를 부풀린다.
+        """
+        if white is None:
+            self._cone_trig_px = 0
+            self._cone_trig_run = 0
+            return
+        hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+        orange = cv2.inRange(hsv, CONE_HSV_LO, CONE_HSV_HI) > 0
+        near = cv2.dilate(white.astype(np.uint8),
+                          np.ones((CONE_DILATE, CONE_DILATE), np.uint8)) > 0
+        height = orange.shape[0]
+        band = np.zeros_like(orange)
+        band[int(height * CONE_BAND_TOP):int(height * CONE_BAND_BOT)] = True
+        self._cone_trig_px = int(np.count_nonzero(orange & near & band))
+
+        threshold = int(self._value('cone_trigger_px'))
+        if threshold <= 0:
+            return                     # 0 이면 트리거를 끈 것이다
+        if not self._straight:
+            self._cone_trig_run = 0    # 초록불 확정 전에는 세지 않는다
+            return
+        if not self._straight:
+            self._cone_trig_run = 0    # 초록불 확정 전에는 세지 않는다
+            return
+        if self._cone_trig_px >= threshold:
+            self._cone_trig_run += 1
+        else:
+            self._cone_trig_run = 0
+        if self._cone_trig_run >= CONE_TRIG_CONFIRM and not self._cone_triggered:
+            self._cone_triggered = True
+            self._cone_trigger_pub.publish(Bool(data=True))
+            self.get_logger().warning(
+                '차선 위 주황 %d px 이 %d장 연속 — 콘 구간 진입'
+                % (self._cone_trig_px, CONE_TRIG_CONFIRM))
 
     def _vehicle_needed(self, now: float) -> bool:
         """차량 인식을 돌려야 하는가. Vehicle_Perception 이 이 값을 따른다."""
@@ -955,6 +1018,8 @@ class YolopDriveNode(Node):
             'straight_only': bool(self._straight),
             'straight_hold': round(max(
                 0.0, self._straight_hold_until - now), 2),
+            'cone_trig_px': int(self._cone_trig_px),
+            'cone_triggered': bool(self._cone_triggered),
             'avoid_side': self._avoid_side or '',
             'avoid_offset_px': round(self._avoid_offset(now), 1),
             'traffic_stop': bool(self._traffic_stop),

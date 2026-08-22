@@ -110,7 +110,7 @@ def generate_launch_description():
              name='vehicle_perception_node',
              parameters=[{'debug_image': debug_images, 'infer_interval': 3}],
              output='log'),
-        # 라바콘: 직진 신호 +1초 뒤 활성. kmu_race lidar_cones 그대로.
+        # 라바콘: 차선 위 주황(첫 콘)이 잡히면 15초간 활성. 0823 합의.
         Node(package='race_last', executable='cone_perception',
              name='cone_perception', output='log'),
         # 모터 텔레메트리 상시 기록 (~/motor_logs/*.csv) — 주행 진단용
