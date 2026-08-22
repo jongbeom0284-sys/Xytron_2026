@@ -86,7 +86,7 @@ CONE_TRIG_CONFIRM = 3          # 이만큼 연속이어야 진입으로 본다
 # ---- 앞차 회피. 거리·유지 값은 Lane_follow.py 원본 그대로 ----
 AVOID_ENTER_M = 1.30     # 이 거리 안이면 회피 시작
 AVOID_CLEAR_M = 1.80     # 이만큼 멀어지면 해제
-AVOID_HOLD_SEC = 4.0     # 인식이 꺼진 순간부터 이 시간은 회피 유지,
+AVOID_HOLD_SEC = 3.0     # 인식이 꺼진 순간부터 이 시간은 회피 유지,
                          # 지나면 차선 중앙으로 복귀 (0823 요구)
 CAR_CONFIRM = 5          # 같은 방향이 이만큼 연속이어야 차로 인정 (첫 진입만)
 AVOID_REARM_SEC = 6.0    # 회피가 걸렸던 뒤 이 시간 안에는 한 프레임만 봐도
