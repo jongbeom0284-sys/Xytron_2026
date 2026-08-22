@@ -86,11 +86,14 @@ CONE_TRIG_CONFIRM = 3          # 이만큼 연속이어야 진입으로 본다
 # ---- 앞차 회피. 거리·유지 값은 Lane_follow.py 원본 그대로 ----
 AVOID_ENTER_M = 1.30     # 이 거리 안이면 회피 시작
 AVOID_CLEAR_M = 1.80     # 이만큼 멀어지면 해제
-AVOID_HOLD_SEC = 2.0     # 인식이 꺼진 순간부터 이 시간은 회피 유지,
+AVOID_HOLD_SEC = 4.0     # 인식이 꺼진 순간부터 이 시간은 회피 유지,
                          # 지나면 차선 중앙으로 복귀 (0823 요구)
 CAR_CONFIRM = 5          # 같은 방향이 이만큼 연속이어야 차로 인정 (첫 진입만)
 AVOID_REARM_SEC = 6.0    # 회피가 걸렸던 뒤 이 시간 안에는 한 프레임만 봐도
                          # 바로 회피로 돌아간다. 인식이 깜빡여도 놓지 않는다
+VEHICLE_MUTE_SEC = 10.0  # 앞차를 확정하면 이 시간 동안 신호를 무시한다.
+                         # 앞차 구간에는 신호등이 없으므로 그 자리의 신호
+                         # 판정은 오검출이고, 그것이 회피를 막으면 안 된다
 CONE_FRESH_SEC = 0.6     # 콘 관측이 이보다 오래되면 없는 것으로 본다.
                          # 마지막 값을 붙들고 회피를 영구히 막던 문제 (0823)
                          # (0823: 3 -> 5, 순간 오검출로 회피가 서는 것 방지)
@@ -678,6 +681,14 @@ class YolopDriveNode(Node):
             self._avoid_side = want
             self._avoid_until = now + AVOID_HOLD_SEC
             self._avoid_rearm_until = now + AVOID_REARM_SEC
+            # 앞차가 먼저다. 이 구간엔 신호등이 없으니 신호 판정을 무시하고,
+            # 신호등 통과용인 직진 조향억제도 푼다 (0823 요구).
+            self._go_locked_until = max(self._go_locked_until,
+                                        now + VEHICLE_MUTE_SEC)
+            self._lock_kind = None
+            if self._straight_hold_until > now:
+                self.get_logger().info('앞차 확정 — 직진 조향억제 해제')
+            self._straight_hold_until = 0.0
         elif far and self._avoid_side and now > self._avoid_until:
             self.get_logger().info('앞차 벗어남 — 회피 해제')
             self._avoid_side = None
@@ -963,17 +974,13 @@ class YolopDriveNode(Node):
         link = self._cone_link
         if link is not None and (link.active or link.approach):
             return False
-        # 콘을 빠져나온 뒤에는 신호 잠금과 무관하게 앞차를 본다. 잠금 하나가
-        # 신호 무시와 앞차 정지를 함께 쥐고 있어, 초록불이 재확정될 때마다
-        # 30초가 갱신되며 앞차 인식이 내내 꺼져 있었다 (0823 실측 95%).
-        if self._cone_exited:
-            return True
-        # 좌회전/직진 신호 잠금 중에는 차량이 없다
-        if now < self._go_locked_until:
-            # 다만 회피를 유지 중이면 계속 봐야 한다 (지나치는 중)
-            if self._avoid_side and now <= self._avoid_until:
-                return True
-            return False
+        # 신호 잠금은 앞차 인식을 끄지 않는다 (0823).
+        #  · 코스상 앞차 구간이 초록불 잠금 30초 안에 들어가, 정작 필요한
+        #    구간에서 앞차를 못 봤다 (실측: armed 289행 중 274행이 꺼짐)
+        #  · 앞차를 확정하면 신호를 무시하도록 바꾼 뒤로는, 그 잠금이 다시
+        #    앞차 인식을 끄는 모순까지 생긴다
+        #  · CPU 여유도 있다 — 추론 54ms, 추론 주기 102ms
+        # 잠금은 신호 재판정만 막고, 앞차는 콘 구간이 아니면 항상 본다.
         return True
 
     def _maybe_publish_debug(self, bgr, result) -> None:
