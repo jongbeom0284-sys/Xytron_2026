@@ -697,6 +697,20 @@ class YolopDriveNode(Node):
             except Exception as exc:  # noqa: BLE001
                 self.get_logger().warning(f'오버레이 생략: {exc}')
 
+    def _vehicle_needed(self, now: float) -> bool:
+        """차량 인식을 돌려야 하는가. Vehicle_Perception 이 이 값을 따른다."""
+        # 좌회전/직진 신호 잠금 중에는 차량이 없다
+        if now < self._go_locked_until:
+            # 다만 회피를 유지 중이면 계속 봐야 한다 (지나치는 중)
+            if self._avoid_side and now <= self._avoid_until:
+                return True
+            return False
+        # 콘 구간(진입 또는 접근)에서는 콘을 차량으로 오인한다
+        link = self._cone_link
+        if link is not None and (link.active or link.approach):
+            return False
+        return True
+
     def _maybe_publish_debug(self, bgr, result) -> None:
         now = time.monotonic()
         if now - self._last_overlay < 1.0 / max(self.debug_hz, 0.1):
@@ -851,6 +865,12 @@ class YolopDriveNode(Node):
             'speed_mps': round(speed * self.mps_per_unit, 3),
             'signal_lock_s': round(max(
                 0.0, self._go_locked_until - now), 1),
+            # 차량 인식 필요 여부 (2026-08-22):
+            #  · 좌회전 잠금 중  -> 불필요 (그 구간에 차량 없음)
+            #  · 콘 구간 진입/접근 -> 불필요 (콘을 차량으로 오인)
+            #  · 회피 유지 중    -> 필요 (지나치는 중이라 계속 봐야 함)
+            # 회피 유지가 풀리는 순간 이 값이 함께 내려간다.
+            'vehicle_needed': bool(self._vehicle_needed(now)),
         }, ensure_ascii=False)))
 
     def _raise_fault(self, reason: str) -> None:

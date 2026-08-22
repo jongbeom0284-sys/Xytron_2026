@@ -118,7 +118,7 @@ class VehiclePerception(Node):
         self.pub_debug = (self.create_publisher(Image, TOPIC_DEBUG, 1)
                           if self.publish_debug else None)
 
-        self._skip_until = 0.0
+        self._paused = False
         # 압축 스트림 구독 제거 (2026-08-22): 원본과 중복 디코딩으로
         # 초당 ~50회 디코드가 CPU 를 포화시켜 주행 판단이 4Hz 로 떨어졌다.
         # 2026-08-22: 원본(900KB/장) 구독은 대역폭에 질식해 7.9Hz 까지
@@ -144,7 +144,7 @@ class VehiclePerception(Node):
         # 신호 잠금(직진 30s / 좌회전 20s) 동안은 판정이 확정돼 있어
         # 인식이 무의미하다. CPU 를 조향에 넘긴다. (0822: 가드가
         # on_raw 에만 있어 압축 전환 후 무력화됐던 것을 바로잡음)
-        if time.time() < self._skip_until:
+        if self._paused:
             return
 
         try:
@@ -164,13 +164,20 @@ class VehiclePerception(Node):
 
     def _on_drive_status(self, msg):
         try:
-            lock = float(json.loads(msg.data).get('signal_lock_s', 0.0))
+            data = json.loads(msg.data)
         except (ValueError, AttributeError, TypeError):
             return
-        self._skip_until = time.time() + lock if lock > 0.0 else 0.0
+        # 주행 노드가 '지금 차량 인식이 필요한가' 를 직접 알려준다.
+        # 좌회전 잠금·콘 구간이면 False, 콘 구간을 벗어나면 즉시 True,
+        # 회피 유지 중이면 잠금 중이라도 True (2026-08-22).
+        if 'vehicle_needed' in data:
+            self._paused = not bool(data['vehicle_needed'])
+            return
+        lock = float(data.get('signal_lock_s', 0.0))
+        self._paused = lock > 0.0
 
     def on_raw(self, msg):
-        if time.time() < self._skip_until:
+        if self._paused:
             return
         try:
             image = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
