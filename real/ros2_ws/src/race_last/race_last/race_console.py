@@ -40,6 +40,9 @@ class RaceConsole(Node):
         self.veh_dir = 'NONE'
         self.veh_dist = float('inf')
         self.cone = None              # None = 콘 노드 침묵
+        self.signal_at = 0.0
+        self.veh_at = 0.0
+        self.cone_at = 0.0
         self.cone_info = ''
         self.booted = False
 
@@ -65,13 +68,16 @@ class RaceConsole(Node):
 
     def _on_dir(self, msg):
         self.veh_dir = msg.data
+        self.veh_at = time.time()
 
     def _on_dist(self, msg):
         self.veh_dist = float(msg.data)
+        self.veh_at = time.time()
 
     def _on_signal(self, msg):
         try:
             self.signal = json.loads(msg.data).get('state', 'none')
+            self.signal_at = time.time()
         except (ValueError, AttributeError):
             self.signal = msg.data or 'none'
 
@@ -79,14 +85,20 @@ class RaceConsole(Node):
         data = msg.data or 'X'
         self.cone = 'O' if data[:1] == 'O' else 'X'
         self.cone_info = data[1:].strip()
+        self.cone_at = time.time()
 
     # ------------------------------------------------------------ 그리기
     def _alive(self):
         names = set(self.get_node_names())
         now = time.time()
+        # vehicle_perception_node 는 살아 있어도 node list 에 안 잡힐 때가
+        # 있다 (2026-08-22 실측, DDS 디스커버리 특성). 데이터 수신도 생존으로 본다.
+        data_at = {'traffic_perception_node': self.signal_at,
+                   'vehicle_perception_node': self.veh_at,
+                   'cone_perception': self.cone_at}
         rows = []
         for label, node in BOOT_NODES:
-            up = node in names
+            up = node in names or (now - data_at.get(node, 0.0)) < 2.0
             if node == 'camera':
                 up = up and (now - self.image_at) < 2.0
             if node == 'xycar_lidar_node':

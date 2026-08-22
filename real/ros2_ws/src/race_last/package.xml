@@ -13,6 +13,9 @@
   <exec_depend>cv_bridge</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
   <exec_depend>python3-opencv</exec_depend>
+  <exec_depend>rcl_interfaces</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
   <exec_depend>usb_cam</exec_depend>
   <exec_depend>kobot_vehicle</exec_depend>
   <exec_depend>xycar_lidar</exec_depend>

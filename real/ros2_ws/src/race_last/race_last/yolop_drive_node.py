@@ -39,7 +39,7 @@ from rclpy.signals import SignalHandlerOptions
 from sensor_msgs.msg import Image
 from std_msgs.msg import Bool, Float32MultiArray, String
 
-from kobot_yolop_drive.lane_core import (
+from .lane_core import (
     divider_x,
     LaneConfig,
     LaneTracker,
