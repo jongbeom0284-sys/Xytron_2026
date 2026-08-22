@@ -3,3 +3,27 @@
 @media(max-width:1050px){.topbar{flex-wrap:wrap}.brand{min-width:0}.device-nav{order:3;width:100%;margin:0}.status-pill{margin-left:auto}.cctv-grid.grid-3{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:680px){.topbar{gap:10px;padding:12px 4%}.topbar h1{font-size:18px}.status-pill{padding:6px 9px}.device-nav{justify-content:space-between}.device-icon{width:23%;height:52px}.device-icon svg{width:21px;height:21px}main{width:94%;padding-top:16px}.viewer-toolbar{align-items:flex-end}.viewer-toolbar h2{font-size:17px}.viewer-toolbar-actions{flex-direction:column-reverse;align-items:flex-end}.recovery-open{padding:7px 10px}.cctv-grid.grid-2,.cctv-grid.grid-3{grid-template-columns:1fr}.viewer-card-body{min-height:280px}.device-actions{grid-template-columns:1fr}.recovery-dialog-card{padding:20px}.recovery-safe{align-items:flex-start;flex-direction:column}.recovery-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.recovery-groups{grid-template-columns:1fr}.sensor-left{left:0}.sensor-right{right:0}.sensor-rear-left{left:0}.sensor-rear-right{right:0}}
 .lane-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(88px,1fr));gap:6px;margin-top:10px}.lane-stats>div{display:flex;min-width:0;flex-direction:column;gap:2px;border-radius:9px;padding:7px 9px;background:#f8fafc}.lane-stats span{color:#64748b;font-size:10px;font-weight:700;letter-spacing:.04em}.lane-stats strong{overflow:hidden;font-size:13px;font-variant-numeric:tabular-nums;text-overflow:ellipsis;white-space:nowrap}.grid-3 .lane-stats{grid-template-columns:repeat(auto-fit,minmax(74px,1fr))}.grid-3 .lane-stats strong{font-size:12px}
+
+/* ── 인식 ON/OFF 칩 (0823) ──────────────────────────────────────
+   'TRACKING' 한 단어로는 무엇이 켜져 있는지 알 수 없어서, 네 인식의
+   상태를 직접 띄운다. 하루 동안 로그를 뒤져야 알 수 있던 것들이다. */
+.perc {
+  display: inline-block;
+  margin: 1px 3px 1px 0;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: .01em;
+  white-space: nowrap;
+}
+
+.perc.on  { background: #e2f5e6; color: #14672c; }
+.perc.off { background: #f0f1f4; color: #8a92a3; }
+
+.perc-mode {
+  margin-left: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #8a92a3;
+}

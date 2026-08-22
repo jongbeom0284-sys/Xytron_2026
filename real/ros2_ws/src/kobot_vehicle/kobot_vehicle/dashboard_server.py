@@ -758,6 +758,98 @@ class RecordDriveController:
             self._terminate_process_unlocked()
 
 
+class DriveToolsController:
+    """주행 중 걸린 래치와 남은 프로세스를 밖에서 푸는 도구들.
+
+    0823 실주행에서 반복된 사고가 전부 여기에 대응한다. 각 도구는 SSH 로
+    하던 일을 그대로 옮긴 것이고, 새 판단 로직을 만들지 않는다.
+    """
+
+    # 시험 주행 스크립트가 남아 /xycar_motor 를 물고 있던 사고 (발행자 13개)
+    STRAY_SCRIPTS = ('cone_follow.py',)
+
+    def __init__(self, node):
+        self.node = node
+        self.drive_cmd = node.create_publisher(
+            String, '/kobot_yolop/command', 10)
+        self.cone_cmd = node.create_publisher(String, '/cone/command', 10)
+
+    def _send(self, publisher, payload):
+        message = String()
+        message.data = json.dumps(payload)
+        publisher.publish(message)
+
+    def reset(self):
+        self._send(self.drive_cmd, {'cmd': 'reset'})
+        return {'message': '래치 초기화 — 신호잠금·조향억제·회피·콘 상태를 풀었습니다'}
+
+    def release(self):
+        """모터 토픽 점유를 푼다. armed 를 내리고 남은 시험 주행을 정리한다."""
+        self._send(self.drive_cmd, {'cmd': 'release'})
+        killed = []
+        for name in self.STRAY_SCRIPTS:
+            try:
+                out = subprocess.run(
+                    ['pgrep', '-f', name], capture_output=True, text=True,
+                    timeout=5)
+            except Exception:  # noqa: BLE001
+                continue
+            for pid in out.stdout.split():
+                if pid.strip().isdigit() and int(pid) != os.getpid():
+                    try:
+                        os.kill(int(pid), signal.SIGKILL)
+                        killed.append(pid)
+                    except OSError:
+                        pass
+        extra = f', 남은 시험 주행 {len(killed)}개 정리' if killed else ''
+        return {'message': f'모터 점유 해제 — armed 내림{extra}'}
+
+    def motor_stack(self):
+        """모터 스택이 없으면 띄운다. 재부팅 뒤 안 올라와 출발을 못 한 적이 있다."""
+        if self.node.motor.stack_running():
+            return {'message': '모터 스택은 이미 실행 중입니다'}
+        subprocess.Popen(
+            ['/bin/bash', '-lc',
+             '. /home/xytron/kobot_env.sh && exec ros2 launch '
+             'kobot_vehicle motor.launch.py armed:=true'],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True)
+        return {'message': '모터 스택을 띄웁니다 — 10초쯤 걸립니다'}
+
+    def cone_on(self, sec):
+        sec = float(sec or 15.0)
+        self._send(self.cone_cmd, {'cmd': 'force', 'sec': sec})
+        return {'message': f'콘 구간을 {sec:.0f}초간 강제로 켰습니다'}
+
+    def cone_off(self):
+        self._send(self.cone_cmd, {'cmd': 'off'})
+        return {'message': '콘 구간을 껐습니다'}
+
+    def signal_off(self, sec):
+        sec = float(sec or 20.0)
+        self._send(self.drive_cmd, {'cmd': 'signal_mute', 'sec': sec})
+        return {'message': f'신호 인식을 {sec:.0f}초간 끕니다'}
+
+    def signal_on(self):
+        self._send(self.drive_cmd, {'cmd': 'signal_wake'})
+        return {'message': '신호 잠금을 풀었습니다 — 지금부터 다시 읽습니다'}
+
+    def vehicle_on(self, sec):
+        sec = float(sec or 30.0)
+        self._send(self.drive_cmd, {'cmd': 'vehicle_force', 'sec': sec})
+        return {'message': f'앞차 인식을 {sec:.0f}초간 강제로 켭니다'}
+
+    def ros_clean(self):
+        """죽은 노드가 목록에 남아 점유 검사를 잘못 통과·거부시키는 것을 막는다."""
+        for action in ('stop', 'start'):
+            try:
+                subprocess.run(['ros2', 'daemon', action],
+                               capture_output=True, timeout=15)
+            except Exception:  # noqa: BLE001
+                pass
+        return {'message': 'ROS 그래프를 정리했습니다 — 목록이 갱신됩니다'}
+
+
 class DashboardNode(Node):
     RECOVERY_GROUPS = {
         'media': ('camera', 'lane', 'video'),
@@ -798,6 +890,7 @@ class DashboardNode(Node):
             self.on_twinmixing_center_status,
             10,
         )
+        self.drive_tools = DriveToolsController(self)
         self.httpd = ThreadingHTTPServer(('0.0.0.0', 8000), self._handler_class())
         self.httpd.dashboard_node = self
         self.http_thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
@@ -1143,6 +1236,25 @@ class DashboardRequestHandler(SimpleHTTPRequestHandler):
                 if action not in actions:
                     return self._json(404, {'error': '없는 기록 주행 기능입니다'})
                 return self._json(200, actions[action]())
+            if path.startswith('/api/drive-tools/'):
+                action = path.rsplit('/', 1)[-1]
+                body = self._read_json()
+                tools = self.server.dashboard_node.drive_tools
+                sec = body.get('sec')
+                table = {
+                    'reset': lambda: tools.reset(),
+                    'release': lambda: tools.release(),
+                    'motor-stack': lambda: tools.motor_stack(),
+                    'cone-on': lambda: tools.cone_on(sec),
+                    'cone-off': lambda: tools.cone_off(),
+                    'signal-off': lambda: tools.signal_off(sec),
+                    'signal-on': lambda: tools.signal_on(),
+                    'vehicle-on': lambda: tools.vehicle_on(sec),
+                    'ros-clean': lambda: tools.ros_clean(),
+                }
+                if action not in table:
+                    return self._json(404, {'error': '없는 주행 도구입니다'})
+                return self._json(200, table[action]())
             if path in ('/api/recording/start', '/api/recording/stop'):
                 action = path.rsplit('/', 1)[-1]
                 result = self.server.dashboard_node.start_recording() if action == 'start' else self.server.dashboard_node.stop_recording()

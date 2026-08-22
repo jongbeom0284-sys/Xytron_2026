@@ -482,3 +482,89 @@
   border-radius: 4px; pointer-events: none; }
 .signal-overlay .roi-box b { position: absolute; top: -16px; left: 0;
   font-size: 11px; font-weight: 600; color: #22d3ee; }
+
+/* ── 주행 도구 (0823) ────────────────────────────────────────────
+   하루 동안 SSH 로만 풀 수 있던 래치들을 버튼으로 옮겼다. 버튼보다
+   윗줄의 래치 상태가 더 중요하다 — 원인을 먼저 보고 누르라는 뜻이다. */
+.drive-tools-panel {
+  margin-top: 10px;
+  border: 1px solid #e0d5c0;
+  border-radius: 11px;
+  padding: 11px 12px;
+  background: #fffdf8;
+}
+
+.drive-tools-panel > div:first-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #172033;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.drive-tools-badge {
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-size: 11px;
+  font-weight: 800;
+  background: #f3e6cc;
+  color: #7a5a12;
+}
+
+.drive-tools-latch {
+  margin: 8px 0 6px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: #f4f6fa;
+  color: #35405a;
+  font-size: 11.5px;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+  word-break: keep-all;
+}
+
+.drive-tools-sec-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: #5a6478;
+  margin-bottom: 8px;
+}
+
+.drive-tools-sec {
+  padding: 4px 8px;
+  border: 1px solid #d5dbe6;
+  border-radius: 7px;
+  font: inherit;
+  background: #fff;
+}
+
+.drive-tools-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+  gap: 6px;
+}
+
+.drive-tools-actions button {
+  padding: 7px 6px;
+  font-size: 11.5px;
+  font-weight: 700;
+  border: 1px solid #d5dbe6;
+  border-radius: 8px;
+  background: #fff;
+  color: #23304a;
+  cursor: pointer;
+}
+
+.drive-tools-actions button:hover { background: #eef2f8; }
+
+.drive-tools-actions button.danger {
+  border-color: #e6b8b8;
+  background: #fff5f5;
+  color: #9a2020;
+}
+
+.drive-tools-actions button.danger:hover { background: #ffe9e9; }

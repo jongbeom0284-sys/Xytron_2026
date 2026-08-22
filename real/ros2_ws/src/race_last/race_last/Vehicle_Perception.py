@@ -236,6 +236,9 @@ class VehiclePerception(Node):
         started = time.perf_counter()
         boxes = []
         car_dist, car_dir = float('inf'), None
+        # 승격 순위: (거리를 쟀는가, 거리 또는 -넓이). 작을수록 먼저.
+        # 거리를 못 재도 버리지 않는다 — 좌/우만 나오면 차로 인정한다.
+        car_rank = None
         person, person_dist = False, float('inf')
         try:
             result = self.model(image, imgsz=IMGSZ, conf=self.conf,
@@ -268,8 +271,10 @@ class VehiclePerception(Node):
                     person = True
                     person_dist = min(person_dist, dist)
             else:   # car / bus / truck / suitcase 전부 차량으로 본다
-                if dist < car_dist:
-                    car_dist, car_dir = dist, side
+                area = (x2 - x1) * (y2 - y1)
+                rank = ((0, dist) if math.isfinite(dist) else (1, -area))
+                if car_rank is None or rank < car_rank:
+                    car_rank, car_dist, car_dir = rank, dist, side
 
         self.infers += 1
         self.last = dict(

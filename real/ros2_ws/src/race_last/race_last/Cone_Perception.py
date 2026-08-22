@@ -64,6 +64,7 @@ class ConePerception(Node):
         self.create_subscription(String, '/traffic_light/state',
                                  self._on_signal, 10)
         self.create_subscription(Bool, '/cone/trigger', self._on_trigger, 10)
+        self.create_subscription(String, '/cone/command', self._on_command, 10)
         self.create_subscription(LaserScan, '/scan', self._on_scan,
                                  qos_profile_sensor_data)
         self.get_logger().info(
@@ -74,6 +75,28 @@ class ConePerception(Node):
         # 콘 인식 결과를 jsonl 로 남긴다 — 라이다 기반이라 카메라 녹화에는
         # 안 남으므로, 재생 뷰어의 콘 미니맵은 이 파일로 그린다 (2026-08-22)
         self._log_fh = None
+
+    # ------------------------------------------------------------ 강제 제어
+    def _on_command(self, msg):
+        """대시보드에서 콘 인식을 손으로 켜고 끈다.
+
+        신호등을 안 지나고 콘 구간만 시험할 때, 또는 오진입을 손으로 끊을 때
+        쓴다. 조건(초록불+주황)을 우회하므로 시험용이다.
+        """
+        try:
+            body = json.loads(msg.data)
+            cmd = str(body.get('cmd', ''))
+        except (ValueError, TypeError, AttributeError):
+            return
+        if cmd == 'force':
+            sec = float(body.get('sec', 15.0) or 15.0)
+            self.open_until = time.monotonic() + max(0.0, sec)
+            self.get_logger().warning('콘 인식 강제로 %.0f초 켬' % sec)
+        elif cmd == 'off':
+            self.open_until = 0.0
+            self.green_at = None
+            self.enabled = self.force
+            self.get_logger().warning('콘 인식 강제 종료')
 
     # ------------------------------------------------------------ 진입 트리거
     def _on_trigger(self, msg):

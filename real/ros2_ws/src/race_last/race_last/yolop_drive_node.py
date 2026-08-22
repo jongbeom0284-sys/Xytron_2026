@@ -210,6 +210,9 @@ class YolopDriveNode(Node):
         self._cone_reading = None
         self._cone_was_active = False  # 콘 구간 이탈을 잡기 위한 직전 상태
         self._cone_exited = False      # 한 번이라도 콘을 빠져나왔는가
+        self._vehicle_force_until = 0.0  # 이 시각까지 앞차 인식을 강제로 켠다
+        self.create_subscription(String, '/kobot_yolop/command',
+                                 self._on_command, 10)
         self._cone_link = (ConeLink(
             self.get_logger(),
             float(self._value('cone_approach_depth_m')),
@@ -846,6 +849,76 @@ class YolopDriveNode(Node):
                 '차선 위 주황 %d px 이 %d장 연속 — 콘 구간 진입'
                 % (self._cone_trig_px, CONE_TRIG_CONFIRM))
 
+    def _on_command(self, message: String) -> None:
+        """대시보드에서 오는 명령. 노드 안에 래치된 상태를 밖에서 푼다.
+
+        하루 동안 같은 사고가 반복됐는데 전부 래치 때문이었고, 밖에서 풀
+        방법이 없어 매번 서비스를 재시작해야 했다 (0823).
+        """
+        try:
+            body = json.loads(message.data)
+            cmd = str(body.get('cmd', ''))
+        except (ValueError, TypeError, AttributeError):
+            self.get_logger().warning('명령 해석 실패: %r' % message.data[:60])
+            return
+        now = time.monotonic()
+        sec = float(body.get('sec', 0.0) or 0.0)
+
+        if cmd == 'reset':
+            self._reset_latches()
+            self.get_logger().warning('완전 초기화 — 래치된 상태를 모두 풀었다')
+        elif cmd == 'release':
+            self._apply_armed(False, announce=True)
+            self._enabled = False
+            self._publish_motor(*STOP)
+            self.get_logger().warning('모터 점유 해제 — armed 내림')
+        elif cmd == 'signal_mute':
+            self._go_locked_until = now + max(0.0, sec)
+            self._lock_kind = None
+            self.get_logger().warning('신호 인식 %.0f초 끔' % sec)
+        elif cmd == 'signal_wake':
+            self._go_locked_until = 0.0
+            self._lock_kind = None
+            self._gone = 0
+            self._recent.clear()
+            self.get_logger().warning('신호 잠금 해제 — 지금부터 다시 읽는다')
+        elif cmd == 'vehicle_force':
+            self._vehicle_force_until = now + max(0.0, sec)
+            self.get_logger().warning('앞차 인식 %.0f초 강제 켬' % sec)
+        else:
+            self.get_logger().warning('모르는 명령: %s' % cmd)
+
+    def _reset_latches(self) -> None:
+        """래치된 상태를 전부 초기값으로 되돌린다. 주행 중에도 안전하다 —
+        조향·속도 자체는 매 프레임 새로 계산되고, 여기서 지우는 것은 과거
+        판정의 잔상뿐이다."""
+        self._go_locked_until = 0.0
+        self._lock_kind = None
+        self._gone = 0
+        self._recent.clear()
+        self._straight = False
+        self._straight_hold_until = 0.0
+        self._traffic_stop = False
+        self._last_red_at = 0.0
+        self._car_recent = []
+        self._avoid_side = None
+        self._avoid_until = 0.0
+        self._car_dist = None
+        self._cone_reading = None
+        self._cone_was_active = False
+        self._cone_exited = False
+        self._cone_triggered = False
+        self._cone_trig_run = 0
+        self._vehicle_force_until = 0.0
+        self._fault = None
+        link = self._cone_link
+        if link is not None:
+            link._active = False
+            link.approach = False
+            link._in.reset()
+            link._out.reset()
+            link._wall_prev = None
+
     def _check_cone_exit(self, now: float) -> None:
         """콘 구간을 빠져나온 순간을 잡는다.
 
@@ -867,6 +940,9 @@ class YolopDriveNode(Node):
 
     def _vehicle_needed(self, now: float) -> bool:
         """차량 인식을 돌려야 하는가. Vehicle_Perception 이 이 값을 따른다."""
+        # 대시보드에서 강제로 켠 동안은 무조건 본다
+        if now < self._vehicle_force_until:
+            return True
         # 콘 구간(진입 또는 접근)에서는 콘을 차량으로 오인한다
         link = self._cone_link
         if link is not None and (link.active or link.approach):
@@ -1060,6 +1136,9 @@ class YolopDriveNode(Node):
             'straight_hold': round(max(
                 0.0, self._straight_hold_until - now), 2),
             'cone_trig_px': int(self._cone_trig_px),
+            'cone_exited': bool(self._cone_exited),
+            'vehicle_force_s': round(max(
+                0.0, self._vehicle_force_until - now), 1),
             'cone_triggered': bool(self._cone_triggered),
             'avoid_side': self._avoid_side or '',
             'avoid_offset_px': round(self._avoid_offset(now), 1),

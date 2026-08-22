@@ -30,6 +30,7 @@ let recordingState={active:false,frames:0,last_path:''};
 let motorState={usb:false,stack_running:false,stack_state:'unknown',active:false,missing_processes:[],result:'잠김',error:null};
 let recordDriveState={state:'idle',result:'대기 중',can_start:true,can_pause:false,can_resume:false,can_finish:false,recording:{frames:0}};
 let recordDriveSettings={speed:0.5};
+let driveToolsSec=20;
 let recoveryState={busy:false,result:'복구 대기 중',error:null,components:{}};
 let driveSettings={speed:0.5,duration:10,steering:'center'};
 let driveStateText='잠김';
@@ -192,7 +193,68 @@ function driveCard(){
       <div class="record-drive-actions"><button class="primary" data-drive-action="record-start">기록 주행 시작</button><button data-drive-action="record-toggle">일시정지</button><button class="danger" data-drive-action="record-finish">기록 주행 종료</button></div>
       <p class="record-drive-state">${recordDriveState.result||'대기 중'}</p>
     </section>
+    ${driveToolsPanel()}
     <p class="drive-state">${driveStateText}</p>`;
+}
+
+// 주행 도구 — 노드 안에 래치된 상태를 밖에서 푸는 버튼들.
+// 각 항목은 0823 실주행에서 실제로 겪은 사고 하나씩에 대응한다.
+const DRIVE_TOOLS=[
+  {act:'reset',   label:'완전 초기화', cls:'danger',
+   why:'신호잠금·조향억제·회피·콘 상태를 전부 푼다'},
+  {act:'release', label:'모터 점유 해제', cls:'',
+   why:'armed 를 내리고 남은 시험 주행을 정리한다'},
+  {act:'motor-stack', label:'모터 스택 켜기', cls:'',
+   why:'재부팅 뒤 안 올라온 VESC·변환 노드를 띄운다'},
+  {act:'signal-on', label:'신호 잠금 해제', cls:'',
+   why:'잠금 때문에 신호를 못 읽는 상태를 푼다'},
+  {act:'signal-off', label:'신호 N초 끄기', cls:'', sec:true,
+   why:'비상구·반사를 신호로 잘못 읽을 때'},
+  {act:'cone-on', label:'콘 강제 ON', cls:'', sec:true,
+   why:'초록불 없이 라바콘 구간만 시험할 때'},
+  {act:'cone-off', label:'콘 강제 OFF', cls:'',
+   why:'콘 구간에 잘못 들어갔을 때 끊는다'},
+  {act:'vehicle-on', label:'앞차 강제 ON', cls:'', sec:true,
+   why:'신호 잠금에 가려 앞차를 못 볼 때'},
+  {act:'ros-clean', label:'ROS 정리', cls:'',
+   why:'죽은 노드가 목록에 남아 점유 검사를 흔들 때'},
+];
+
+function driveToolsPanel(){
+  const buttons=DRIVE_TOOLS.map(t=>
+    `<button class="${t.cls}" data-drive-action="tool:${t.act}" title="${t.why}">${t.label}</button>`
+  ).join('');
+  return `<section class="drive-tools-panel" aria-label="주행 도구">
+      <div><span>주행 도구</span><strong class="drive-tools-badge">문제 해결</strong></div>
+      <p class="drive-tools-latch">${driveLatchText()}</p>
+      <label class="drive-tools-sec-field">지속 시간
+        <select class="drive-tools-sec" aria-label="주행 도구 지속 시간">
+          ${[5,10,15,20,30,45,60].map(v=>`<option value="${v}" ${driveToolsSec===v?'selected':''}>${v}초</option>`).join('')}
+        </select>
+      </label>
+      <div class="drive-tools-actions">${buttons}</div>
+      <p class="record-drive-help">지속 시간은 “N초” 가 붙은 버튼에만 적용됩니다.</p>
+    </section>`;
+}
+
+// 지금 무엇이 걸려 있는지 한 줄로. 원인을 먼저 보게 한다.
+function driveLatchText(){
+  const s=latestLane||{};
+  if(s.mode===undefined)return '주행 노드 상태 없음';
+  const bits=[];
+  const lock=Number(s.signal_lock_s||0);
+  const hold=Number(s.straight_hold||0);
+  const vf=Number(s.vehicle_force_s||0);
+  bits.push(`모드 ${s.mode||'-'}`);
+  bits.push(`신호 ${s.traffic_state||'-'}`);
+  if(lock>0)bits.push(`신호잠금 ${lock.toFixed(0)}s`);
+  if(hold>0)bits.push(`조향억제 ${hold.toFixed(1)}s`);
+  if(s.cone_active)bits.push('콘 구간');
+  if(s.avoid_side)bits.push(`회피 ${s.avoid_side}`);
+  if(vf>0)bits.push(`앞차강제 ${vf.toFixed(0)}s`);
+  if(s.cone_trig_px!==undefined)bits.push(`주황 ${s.cone_trig_px}px`);
+  if(s.fault)bits.push(`고장 ${s.fault}`);
+  return bits.join(' · ');
 }
 
 function recordDriveLabel(){
@@ -359,6 +421,22 @@ function laneNumber(value,digits,unit){
   return Number.isFinite(number)?number.toFixed(digits)+(unit||''):'-';
 }
 
+// 인식 네 가지가 지금 켜져 있는지. TRACKING 한 단어보다 이게 훨씬 쓸모 있다.
+function perceptionChips(){
+  const l=latestLane||{};
+  const chip=(ok,label,note)=>
+    `<span class="perc ${ok?'on':'off'}" title="${note||''}">${label} ${ok?'ON':'OFF'}</span>`;
+  const lock=Number(l.signal_lock_s||0);
+  const laneOk=['TRACKING','HOLD'].includes(l.mode);
+  const vehOk=l.vehicle_needed===true||l.vehicle_needed===1;
+  const sigOk=lock<=0;
+  const coneOk=!!l.cone_active;
+  return chip(laneOk,'차선',l.mode||'')
+        +chip(vehOk,'차량',vehOk?'':'신호 잠금 또는 콘 구간이라 꺼짐')
+        +chip(sigOk,'신호',sigOk?'':`잠금 ${lock.toFixed(0)}초 남음`)
+        +chip(coneOk,'콘',coneOk?'콘 구간 주행 중':`차선 위 주황 ${l.cone_trig_px||0}px`);
+}
+
 function laneStatsHtml(){
   const lane=latestLane||{};
   const basis={yellow:'노란 중앙선',white_center:'흰선 중앙',hold:'유지',
@@ -366,8 +444,8 @@ function laneStatsHtml(){
   const mode=lane.mode||'—';
   const steerDir=Number(lane.steer)<0?'steer-left':Number(lane.steer)>0?'steer-right':'';
   return [
-    ['상태',mode],
-    ['판정 근거',basis],
+    ['인식',perceptionChips(),'perc-row'],
+    ['판정 근거',`${basis} <span class="perc-mode">${mode}</span>`],
     ['조향',laneNumber(lane.steer,1,' 단위'),steerDir],
     ['속도',laneNumber(lane.speed_mps,2,' m/s')],
   ].map(([label,value,cls])=>`<div><span>${label}</span><strong class="${cls||''}">${value}</strong></div>`).join('');
@@ -412,6 +490,8 @@ grid.addEventListener('change',event=>{
   if(steering)driveSettings.steering=steering.value;
   const recordSpeed=event.target.closest('.record-drive-speed');
   if(recordSpeed){recordDriveSettings.speed=Number(recordSpeed.value);refreshDriveButtons()}
+  const toolsSec=event.target.closest('.drive-tools-sec');
+  if(toolsSec)driveToolsSec=Number(toolsSec.value);
 });
 
 grid.addEventListener('input',event=>{
@@ -1043,6 +1123,9 @@ function refreshDriveUi(){
     el.textContent=recordDriveLabel();
     el.dataset.state=recordDriveState.state;
   });
+  document.querySelectorAll('.drive-tools-latch').forEach(el=>{
+    el.textContent=driveLatchText();
+  });
   const frames=recordDriveState.recording?.frames||0;
   const recordText=recordDriveState.error?`오류 · ${recordDriveState.error}`:`${recordDriveState.result||'대기 중'}${frames?` · ${frames}장`:''}`;
   document.querySelectorAll('.record-drive-state').forEach(el=>el.textContent=recordText);
@@ -1074,6 +1157,17 @@ function refreshDriveButtons(){
   document.querySelectorAll('[data-drive-action="record-finish"]').forEach(button=>button.disabled=motorBusy||!recordDriveState.can_finish);
 }
 async function handleDriveAction(action){
+  if(action.startsWith('tool:')){
+    const act=action.slice(5);
+    const sel=document.querySelector('.drive-tools-sec');
+    const sec=sel?Number(sel.value):driveToolsSec;
+    try{
+      const body=await api(`/api/drive-tools/${act}`,
+        {method:'POST',body:JSON.stringify({sec})});
+      toast(body.message||'적용했습니다');
+    }catch(error){toast(`주행 도구 오류: ${error.message}`)}
+    return;
+  }
   if(action==='test'){
     if(!validSpeed()||!validDuration())return;
     motorBusy=true;setDriveState('시간 주행 준비 중');refreshDriveButtons();
