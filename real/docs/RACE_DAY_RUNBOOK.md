@@ -53,7 +53,7 @@ flatpak run com.vesc_project.VescTool --offscreen --vescPort /dev/ttyACM1 --getM
    source ~/kobot_env.sh && ros2 launch kobot_vehicle motor.launch.py armed:=true
 
 4. 출발 (터미널 B 또는 새 창)
-   ~/race_go.sh 1.0        # 원하는 상한 속도 m/s
+   ~/race_go.sh          # 기본 2.0 m/s (숫자로 덮어쓰기 가능)        # 원하는 상한 속도 m/s
    → 이후는 노드가 알아서: 빨간불 정지, 직진 신호, +1초 뒤 콘 인식,
      콘 구간 진입/이탈, 차량 회피
 
