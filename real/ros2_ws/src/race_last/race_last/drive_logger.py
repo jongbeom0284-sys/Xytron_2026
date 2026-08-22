@@ -55,10 +55,14 @@ class DriveLogger(Node):
         self.get_logger().info('주행 로거 대기 — 주행 상태가 오면 기록 시작')
 
     def _on_traffic(self, msg):
+        """none 은 '신호등이 안 보임' 이지 '신호가 없음' 이 아니다.
+        마지막 유효 판정(red/yellow/green/left)을 유지해 기록한다."""
         try:
-            self._traffic = str(json.loads(msg.data).get('state', ''))
+            state = str(json.loads(msg.data).get('state', ''))
         except (ValueError, AttributeError, TypeError):
-            self._traffic = ''
+            return
+        if state and state != 'none':
+            self._traffic = state
 
     def _on_vehicle(self, msg):
         try:

@@ -86,11 +86,14 @@ class ConePerception(Node):
                 self.get_logger().info(
                     '직진 신호 — %.1f초 뒤 콘 인식을 켠다' % self.delay)
         elif state in ('left', 'red'):
-            # 직진이 아니면 즉시 끈다
+            # 직진이 아닌 '판정' 이 났을 때만 끈다.
+            # none(신호등이 시야 밖) 은 판정이 아니라 관측 부재이므로
+            # 직전 상태를 그대로 유지한다 (2026-08-23).
             if self.enabled or self.green_at is not None:
                 self.get_logger().info('직진 해제(%s) — 콘 인식 끔' % state)
             self.green_at = None
             self.enabled = self.force
+        # state == 'none' / 'yellow' : 아무것도 바꾸지 않는다
 
     # ------------------------------------------------------------ 스캔 처리
     def _on_scan(self, msg):
