@@ -89,6 +89,8 @@ AVOID_CLEAR_M = 1.80     # 이만큼 멀어지면 해제
 AVOID_HOLD_SEC = 1.0     # 인식이 꺼진 순간부터 이 시간은 회피 유지,
                          # 지나면 차선 중앙으로 복귀 (0823 요구)
 CAR_CONFIRM = 5          # 같은 방향이 이만큼 연속이어야 차로 인정
+CONE_FRESH_SEC = 0.6     # 콘 관측이 이보다 오래되면 없는 것으로 본다.
+                         # 마지막 값을 붙들고 회피를 영구히 막던 문제 (0823)
                          # (0823: 3 -> 5, 순간 오검출로 회피가 서는 것 방지)
 AVOID_OFFSET_PX = 90.0   # 흰선에서 안쪽으로 띄울 거리. 실주행하며 맞춘다
 
@@ -605,6 +607,13 @@ class YolopDriveNode(Node):
         # 사고가 있었다 (2026-08-22 21:39 실주행 로그).
         with self._lock:
             _cone_d = self._cone_reading
+        # 지금 보고 있는 관측일 때만 의미가 있다. 콘 인식이 꺼지면
+        # /cone/reading 이 끊기는데, 마지막 값이 '콘 2개' 라 그 뒤로 회피가
+        # 한 번도 안 걸린 적이 있다 (0823 실측).
+        if _cone_d is not None:
+            _age = time.monotonic() - float(_cone_d.get('stamp', 0.0))
+            if _age > CONE_FRESH_SEC:
+                _cone_d = None
         if _cone_d and int(_cone_d.get('cones', 0)) >= 2:
             self._avoid_side = None
             return
