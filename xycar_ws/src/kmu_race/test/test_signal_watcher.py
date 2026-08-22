@@ -182,3 +182,86 @@ def test_fires_only_once():
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     again = w.update(find_lamp_blobs(img), t + 1.0, stationary=True, gray=gray)
     assert not again.go
+
+
+# ──────────────────────────────────────────────────────────────────
+# 램프 피치 기하 — 규정 p.35/p.36 배치에서 나오는 구조 게이트
+# (0819: 같은 물리량이 detector/watcher 에 2배 어긋나 박혀 있던 것을
+#  perception/lamp_pitch.py 단일 출처로 통합하며 추가한 회귀들)
+# ──────────────────────────────────────────────────────────────────
+from kmu_race.perception import lamp_pitch  # noqa: E402
+
+
+def _cand(cx, size=8.0, cy=ROW_Y):
+    return lamp_pitch.LampCandidate(cx=cx, cy=cy, size=size, h=size)
+
+
+def test_measured_pitch_is_inside_the_window():
+    """실측 피치비 1.25 (LAMP_D 8 / SPACING 10) 는 창 안에 있어야 한다."""
+    win = lamp_pitch.PairWindow()
+    a, b = _cand(300.0, LAMP_D), _cand(300.0 + SPACING, LAMP_D)
+    assert lamp_pitch.adjacent_ok(a, b, win)
+
+
+def test_two_pitch_pair_is_rejected():
+    """2피치 떨어진 쌍은 직좌가 아니다 (직좌 = 3·4번 인접 한 칸).
+
+    구 창(detector 1.2~4.5)이 통과시키던 바로 그 형태 — 노랑+초록처럼
+    한 칸 건너뛴 조합은 규정 점등표에 존재하지 않는다.
+    """
+    win = lamp_pitch.PairWindow()
+    a, b = _cand(300.0, LAMP_D), _cand(300.0 + 2 * SPACING, LAMP_D)
+    assert not lamp_pitch.adjacent_ok(a, b, win)
+
+
+def test_ambiguous_gap_window_is_refused_at_construction():
+    """상한이 하한의 2배 이상인 창은 1피치와 2피치를 구분할 수 없다."""
+    try:
+        lamp_pitch.PairWindow(gap_min_mult=1.2, gap_max_mult=4.5)
+    except ValueError:
+        return
+    raise AssertionError("모호한 창이 그대로 만들어졌다")
+
+
+def test_row_of_three_lights_is_not_a_pair():
+    """같은 간격 점등체 셋은 신호등이 아니다 (책상 위 물건·천장 조명 열).
+
+    직좌는 정확히 두 개만 켜진다 — 4번 오른쪽은 유닛 끝이고 3번 왼쪽의
+    노랑은 꺼져 있다. 양옆 여백 게이트가 이 열 전체를 죽인다.
+    """
+    xs = [300.0, 300.0 + SPACING, 300.0 + 2 * SPACING]
+    cands = [_cand(x, LAMP_D) for x in xs]
+    assert lamp_pitch.find_adjacent_pair(cands) is None
+
+
+def test_true_pair_with_empty_flanks_is_found():
+    cands = [_cand(300.0, LAMP_D), _cand(300.0 + SPACING, LAMP_D)]
+    assert lamp_pitch.find_adjacent_pair(cands) == (0, 1)
+
+
+def test_lit_object_right_of_green_vetoes_pair():
+    """4번(초록) 오른쪽에 점등체가 또 있으면 신호등 하우징이 아니다."""
+    cands = [
+        _cand(300.0, LAMP_D),
+        _cand(300.0 + SPACING, LAMP_D),
+        _cand(300.0 + SPACING + int(1.5 * SPACING), LAMP_D),
+    ]
+    assert lamp_pitch.find_adjacent_pair(cands) is None
+
+
+def test_watcher_rejects_row_of_three_lamps():
+    """워처 경로 회귀 — 세 점 열은 직좌로 승격되지 않는다."""
+    w = SignalWatcher()
+    img = frame_with_lamps([300, 300 + SPACING, 300 + 2 * SPACING])
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    res = w.update(find_lamp_blobs(img), 0.0, stationary=True, gray=gray)
+    assert not res.green_left
+
+
+def test_watcher_rejects_two_pitch_pair():
+    """워처 경로 회귀 — 한 칸 건너뛴 쌍은 직좌가 아니다."""
+    w = SignalWatcher()
+    img = frame_with_lamps([300, 300 + 2 * SPACING])
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    res = w.update(find_lamp_blobs(img), 0.0, stationary=True, gray=gray)
+    assert not res.green_left

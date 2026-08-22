@@ -37,6 +37,7 @@
 
 from __future__ import annotations
 
+import bisect
 import itertools
 from dataclasses import dataclass
 from typing import List, Optional, Sequence, Tuple
@@ -45,6 +46,7 @@ import cv2
 import numpy as np
 
 from ..core.types import SignalReading, SignalState
+from . import lamp_pitch
 
 
 @dataclass
@@ -69,8 +71,23 @@ class SignalConfig:
 
     # 점등 판정: 램프 밝기가 4개 평균보다 이만큼 밝으면 켜진 것
     bright_margin: float = 15.0
-    # 원이 이보다 많이 잡히면 노이즈로 보고 포기 (조합 폭발 방지)
-    max_candidates: int = 9
+    # 원이 이보다 많이 잡히면 노이즈로 보고 포기 (조합 폭발 방지).
+    # ★ 9 → 40 (0820 저녁 실측). 이 실내는 천장 형광등이 Hough 원을 프레임당
+    #   20~30개 만든다 — 상한 9 는 **진짜 4구 하우징이 이미 원으로 잡혀 있는
+    #   프레임을 탐색도 하기 전에 통째로 버렸다**. run_0820_1821 의 겐트리
+    #   정지 구간 6프레임 전부 `circle_count=25~30(>9, noisy)` 로 기각됐고,
+    #   그 안에 x=324/364/400/440 (간격 40/36/40) 인 진짜 하우징이 있었다.
+    #   조합 폭발은 상한이 아니라 _pick_best_4 의 행 밴드 분할로 막는다
+    #   (n=30 에서 2.8ms 실측 — 옛 전수조합 37.8ms 보다 오히려 빠르다).
+    max_candidates: int = 40
+    # 4구 조합 탐색의 안전 상한 (행 밴드로 이미 줄지만 최악을 못박는다).
+    # 6000 → 3000 (0820 저녁 프로파일): 겐트리 5프레임의 판정과 하우징 폭
+    # (112~118px)은 그대로면서 최악 탐색시간이 절반이 된다. 덤으로 조명이
+    # 많은 프레임의 가짜 RED 한 건이 사라졌다.
+    max_subset_probes: int = 3000
+    # 같은 하우징의 인접 램프 간격은 서로 이만큼 이상 차이 나지 않는다.
+    # 실측 간격 38~46px(비 1.35) 에 여유를 얹은 값 — lamp_pitch 참조.
+    subset_gap_ratio_max: float = 1.9
 
     # ── 채도 게이트 (run4 bag 실측 기반, 모듈 주석 참조) ──
     # 초록 램프 실측 H 75~95 — 약간의 여유를 둔다.
@@ -150,6 +167,23 @@ class SignalConfig:
     # 이 위라 전멸한다. ⚠️ 카메라 재장착·겐트리 이동 시 반드시 재실측.
     washed_min_y_frac: float = 0.30
 
+    # ── 직좌 페어 기하 (perception/lamp_pitch.py 단일 출처) ──
+    # watcher 의 같은 판정과 값을 공유한다. 실측 피치비 1.25.
+    pair_gap_min_mult: float = lamp_pitch.PAIR_GAP_MIN_MULT
+    pair_gap_max_mult: float = lamp_pitch.PAIR_GAP_MAX_MULT
+    pair_size_ratio_max: float = lamp_pitch.PAIR_SIZE_RATIO_MAX
+    pair_row_tol_mult: float = lamp_pitch.PAIR_ROW_TOL_MULT
+    pair_neighbour_clear_mult: float = lamp_pitch.PAIR_NEIGHBOUR_CLEAR_MULT
+
+    def pair_window(self) -> lamp_pitch.PairWindow:
+        return lamp_pitch.PairWindow(
+            gap_min_mult=self.pair_gap_min_mult,
+            gap_max_mult=self.pair_gap_max_mult,
+            size_ratio_max=self.pair_size_ratio_max,
+            row_tol_mult=self.pair_row_tol_mult,
+            neighbour_clear_mult=self.pair_neighbour_clear_mult,
+        )
+
     # 배치 검증 — min/max_radius 에서 파생되는 값이라 "N배" 관계를 그대로 둔다.
     @property
     def vert_diff_max(self) -> int:
@@ -190,18 +224,87 @@ class SignalDetector:
     def _pick_best_4(self, circles: Sequence) -> Tuple[Optional[List], str]:
         """원이 4개보다 많이 잡혔을 때 가장 신호등다운 4개 조합을 고른다.
 
-        여러 조합이 배치검증을 통과하면 세로 퍼짐이 가장 작은 것을 택한다 —
-        같은 높이에 나란할수록 진짜 신호등일 확률이 높다는 가정.
+        2026-08-20 재설계 — 천장 형광등이 원을 20~30개 만드는 실내에서
+        진짜 하우징을 찾아내야 한다. 옛 방식은 두 가지가 문제였다:
+
+          1) 전수 조합(C(30,4)=27405)이라 상한 9 를 걸 수밖에 없었고, 그
+             상한이 곧 '조명 많은 프레임은 포기'가 됐다.
+          2) 점수가 '세로 퍼짐 최소' 하나뿐이라, 우연히 같은 높이에 놓인
+             조명 4개를 하우징보다 먼저 골랐다 (t213.0s 실측 오선택 →
+             밝기 121/104/106/107 = no_lamp_lit).
+
+        바뀐 점:
+          · **행 밴드 분할** — y 로 정렬해 vert_diff_max 폭의 슬라이딩 밴드
+            안에서만 조합한다. 배치 검증상 어차피 통과할 수 없는 조합을
+            아예 만들지 않으므로 n=30 에서 2.8ms (전수 37.8ms).
+          · **구조 점수** — 네 램프는 한 하우징에 등간격·등크기로 박혀 있다
+            (lamp_pitch 모듈 주석). 간격 변동계수와 반지름 변동계수를 점수에
+            넣어 '나란하기만 한 조명 4개'와 진짜 하우징을 가른다.
+
+        실측(run_0820_1821 겐트리 6프레임): 옛 방식은 상한 때문에 0/6,
+        상한만 40 으로 올리면 4/6, 이 구조 점수까지 넣으면 6/6 에서
+        x≈322/364/402/440 (간격 38~44) 을 정확히 집는다.
         """
-        best, best_score = None, None
-        for combo in itertools.combinations(circles, 4):
-            ok, _ = self._shape_ok(combo)
-            if not ok:
+        cfg = self.config
+        by_y = sorted(
+            ((int(c[0]), int(c[1]), int(c[2])) for c in circles), key=lambda c: c[1]
+        )
+        n = len(by_y)
+        ys_sorted = [c[1] for c in by_y]
+        best: Optional[Tuple] = None
+        best_score: Optional[float] = None
+        prev_hi = -1
+        tried = 0
+        for i in range(n):
+            # 행 밴드 = y 정렬 배열의 연속 구간. bisect 로 끝을 찾는다.
+            hi = bisect.bisect_right(ys_sorted, ys_sorted[i] + cfg.vert_diff_max)
+            if hi - i < 4 or hi == prev_hi:
+                # 같은 끝을 가진 밴드는 앞엣것이 상위집합이라 다시 볼 필요 없다
                 continue
-            ys = [c[1] for c in combo]
-            score = max(ys) - min(ys)
-            if best_score is None or score < best_score:
-                best, best_score = combo, score
+            prev_hi = hi
+            band = by_y[i:hi]
+            for combo in itertools.combinations(band, 4):
+                tried += 1
+                if tried > cfg.max_subset_probes:
+                    break
+                xs = sorted(c[0] for c in combo)
+                if xs[-1] - xs[0] > cfg.horiz_diff_max:
+                    continue
+                gaps = [xs[k + 1] - xs[k] for k in range(3)]
+                gmin = min(gaps)
+                if gmin < cfg.min_gap:
+                    continue
+                # 등간격 — 한 하우징에 박힌 램프의 정의적 성질
+                if max(gaps) > cfg.subset_gap_ratio_max * gmin:
+                    continue
+                rs = [c[2] for c in combo]
+                rmin = max(1, min(rs))
+                if max(rs) > lamp_pitch.PAIR_SIZE_RATIO_MAX * rmin:
+                    continue
+                # ★ 스케일 불변 게이트 — 피치/지름 비. 램프가 7px 로 보이든
+                #   35px 로 보이든 같은 수가 나오는 유일한 하드웨어 상수다
+                #   (lamp_pitch 모듈 주석). 이게 '나란한 천장 조명 4개'와
+                #   진짜 하우징을 가르는 핵심이다. 실측 1.09~1.31.
+                gmean = sum(gaps) / 3.0
+                rmean = sum(rs) / 4.0
+                pitch_ratio = gmean / max(1.0, 2.0 * rmean)
+                if not (
+                    lamp_pitch.PAIR_GAP_MIN_MULT
+                    <= pitch_ratio
+                    <= lamp_pitch.PAIR_GAP_MAX_MULT
+                ):
+                    continue
+                ys = [c[1] for c in combo]
+                vert = (max(ys) - min(ys)) / max(1.0, float(cfg.vert_diff_max))
+                gap_cv = (
+                    sum((g - gmean) ** 2 for g in gaps) / 3.0
+                ) ** 0.5 / max(1.0, gmean)
+                r_cv = (
+                    sum((r - rmean) ** 2 for r in rs) / 4.0
+                ) ** 0.5 / max(1.0, rmean)
+                score = vert + 2.0 * gap_cv + r_cv
+                if best_score is None or score < best_score:
+                    best, best_score = combo, score
         if best is None:
             return None, "no_valid_4subset"
         return list(best), ""
@@ -388,23 +491,29 @@ class SignalDetector:
         (의자 바퀴 등 25~45개)으로 4구 원 분류가 불가능해, 원 없이 이 페어가
         GREEN_LEFT 의 근거다. 왼쪽 멤버는 소등 검사(빨·노 꺼짐)를 통과해야
         한다 — 구조 보증은 왼쪽이 담당하고 오른쪽은 면제(이웃이 켜진 화살표).
+
+        ★ 0819: 기하 판정을 perception/lamp_pitch.py 로 이관했다. 여기 있던
+        창 `1.2w ≤ gap ≤ 4.5w` 는 상한이 하한의 3.75배라 **2피치·3피치 떨어진
+        쌍까지** 통과시켰다 — 직좌는 3·4번 인접 한 칸이므로 그건 오검 표면
+        그 자체였고, watcher 의 같은 판정(0.9~2.2)과도 2배 어긋나 있었다.
+        이 페어는 `gantry_span_px` 로도 흘러가므로(아래 detect 참조) 느슨한
+        창은 유령 랩 목격 경로이기도 했다.
         """
-        cfg = self.config
-        cands = sorted(blobs, key=lambda b: b["cx"])
-        for i in range(len(cands) - 1):
-            left, right = cands[i], cands[i + 1]
-            if not left["unlit_ok"]:
-                continue
-            w = max(left["bw"], right["bw"])
-            if max(left["bw"], right["bw"]) > 2.5 * min(left["bw"], right["bw"]):
-                continue
-            gap = right["cx"] - left["cx"]
-            if not (1.2 * w <= gap <= 4.5 * w):
-                continue
-            if abs(left["cy"] - right["cy"]) > 1.5 * max(left["bh"], right["bh"]):
-                continue
-            return left, right
-        return None
+        cands = [
+            lamp_pitch.LampCandidate(
+                cx=float(b["cx"]), cy=float(b["cy"]),
+                size=float(max(b["bw"], b["bh"])), h=float(b["bh"]),
+            )
+            for b in blobs
+        ]
+        found = lamp_pitch.find_adjacent_pair(
+            cands, self.config.pair_window(),
+            accept=lambda i, _j: bool(blobs[i]["unlit_ok"]),
+        )
+        if found is None:
+            return None
+        i, j = found
+        return blobs[i], blobs[j]
 
     def _washed_core_span(self, hsv: np.ndarray) -> int:
         """과노출 심 경로의 랩 마커 span. (블롭 수집은 detect() 와 공유)"""
@@ -547,6 +656,8 @@ class SignalDetector:
 
         # 좌→우 정렬 = [빨강, 노랑, 좌회전, 녹색]
         ordered = sorted(chosen, key=lambda c: c[0])
+        # 랩 마커 2세대 — 구조 검증을 통과한 하우징의 가로폭 (types 주석 참조)
+        housing_span = int(ordered[-1][0] - ordered[0][0])
         bright = [self._brightness(gray, int(x), int(y), int(rr)) for x, y, rr in ordered]
         avg = float(np.mean(bright))
         lit = [bv - avg > cfg.bright_margin for bv in bright]
@@ -599,7 +710,8 @@ class SignalDetector:
             circle_count=n,
             reject_reason="" if state is not SignalState.UNKNOWN else "no_lamp_lit",
             gantry_span_px=gantry_span,
-                start_blob_px=start_blob,
+            housing_span_px=housing_span,
+            start_blob_px=start_blob,
         )
         return self.last
 

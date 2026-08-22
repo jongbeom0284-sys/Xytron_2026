@@ -221,9 +221,55 @@ class LaneConfig:
     max_curvature_px: float = 3.5e-3
     # 목표선의 프레임간 최대 이동 [px]. 30fps·1m/s 실제 횡이동은 ~15px 이라
     # 이보다 큰 도약은 검출 오류다 (체커존 노란 호 실측 최대 1142px 점프).
-    target_max_step_px: float = 70.0
+    # ★ 70 → 18 (0820 저녁 실측 스윕). 주석 그대로 물리 한계는 30fps·1m/s 에서
+    #   ~15px/프레임인데 70 은 그 4.7배라 사실상 제한이 아니었다 — 실주행
+    #   run_0820_1821 에서 프레임간 |Δoffset| 의 p95 가 정확히 70(=제한기 포화)
+    #   이었고, 0.5m/s 인 차가 33ms 에 8.6cm 를 횡이동할 수는 없으니 그 도약은
+    #   전부 검출 오류였다. 같은 bag 4값 스윕(직선/코너 분리 집계):
+    #        step  직선 부호반전/s  조향 p95|Δ|  코너 p90|off|  코너 최대
+    #          70        2.26          24.4         212          491
+    #          40        2.03          22.0         166          486
+    #          25        1.77          20.2         151          351
+    #          15        1.30          19.6         136          261
+    #   단조 개선이고 코너도 같이 좋아진다(=진짜 조향을 깎는 게 아니다).
+    #   18 은 실주행 속도(≈0.5m/s)의 물리 최대 횡이동률의 약 2.3배로, 진짜
+    #   움직임은 통과시키면서 검출 도약만 막는 자리다. 재획득(_lost_frames >
+    #   target_snap_after_lost)은 여전히 무제한 스냅이라 복귀는 안 늦는다.
+    target_max_step_px: float = 18.0
+
+    # ── 노란 중앙선 유지 (점선 대응) ────────────────────────────────
+    # 중앙선이 점선이라 cy 는 점선 주기로 나타났다 사라진다. 그때마다 목표가
+    # 노란선 → 흰선+half_road 로 갈아타는데, 두 추정의 차이가 그대로 조향
+    # 입력이 된다. 0820 실주행 실측: 잔차 RMS 135px, 1.22Hz 좌우 왕복,
+    # 같은 쪽 유지 중앙 4프레임(0.13초) — 차가 물리적으로 낼 수 없는 진동이다.
+    # cy 가 잠깐 끊긴 동안은 직전 노란선 추정을 유지해 전환 자체를 없앤다.
+    center_hold_frames: int = 24      # 약 0.8초 @30fps (점선 간격보다 길게)
     # 이 프레임 수 이상 목표선을 놓쳤다가 재획득하면 제한 없이 스냅한다.
     target_snap_after_lost: int = 5
+    # ── 0820 저녁 수정의 롤백 스위치 (실측 근거는 각 사용처 주석) ──
+    # 중앙선 후보를 ROI 안으로 제한할까 (LaneFit.at 무제한 외삽 차단)
+    center_roi_bounds: bool = True
+    # 직전 목표 근처에 후보가 없을 때 전역 최대 span 으로 되돌아갈까.
+    # False = 되돌아가지 않고 None 을 돌려 _cy_hold 가 유지하게 한다.
+    #
+    # ★ True 로 둔다 (0820 저녁 4-way 실측). False 는 '정지 화면에서도 후보가
+    #   뒤집힌다'는 관측에 대한 처방이었는데, 실제로 재보니 **부드러워지는 대신
+    #   코너에서 목표가 늦어** 더 나빠졌다 (run_0820_1821, 같은 bag 한 번에 4벌):
+    #        지표            V2(전역폴백 유지)   V3(폴백 봉인)
+    #        코너 오차 중앙        49.2px          77.1px
+    #        코너 포화율          17.0%           29.0%
+    #        최장 연속포화        6.95초          8.99초
+    #        직선 오차 최대       581px           635px
+    #   부호반전(0.95→0.74)과 조향 p95|Δ|(25.8→21.6)만 좋아지는데, 그건 목표를
+    #   붙들어 둔 결과지 추종이 좋아진 게 아니다. 후보 뒤집힘의 실질 피해는
+    #   center_roi_bounds 가 이미 걷어냈다(|오차|>300 비율 7.4%→5.8%).
+    center_global_fallback: bool = True
+    # ── 단측 폴백 타당성 (0820 밤) — 사용처 주석에 실측 근거 ──
+    single_side_plausible: bool = True
+    # 라벨이 함의하는 경계 위치에서 half 의 이 배수 이상 벗어나면 위치 불신.
+    # 0.5 → 오른쪽 선은 x≥488, 왼쪽 선은 x≤152 일 때만 경계로 인정한다
+    # (half 335 / center 320 기준). 실주행 풀락 프레임의 wr 은 328 이었다.
+    single_side_tol_frac: float = 0.5
     exclude_dilate_px: int = 9      # 주황·노랑 제외 시 엣지 헤일로까지 덮는 팽창
     glare_max_side_px: int = 55     # minAreaRect 짧은 변이 이보다 크면 반사 웅덩이
     # …이면서 채움비가 이 이상일 때만 지운다. 채움비 조건이 없으면 휜 차선이
@@ -267,6 +313,9 @@ class LaneDetector:
         self._center_yellow: Optional[np.ndarray] = None
         # 목표선 일관성 상태 — 흰 선↔노란선 거리 학습값, 직전 목표, 소실 카운트
         self._half_road: float = self.config.half_road_default_px
+        # 노란선 유지 — 직전에 성립한 노란선 근/원거리 값과 경과 프레임
+        self._cy_hold = None
+        self._cy_hold_age: int = 0
         self._prev_target: Optional[float] = None
         self._lost_frames: int = 0
         # 좌/우 정체성 연속성 — 직전 프레임에서 각 선이 있던 근거리 x.
@@ -773,9 +822,26 @@ class LaneDetector:
                 self._half_road = a_hr * d + (1.0 - a_hr) * self._half_road
 
         half = self._half_road
+        # 노란선 유지: cy 가 점선 간격으로 잠깐 끊겼을 뿐이면 추정 방식을
+        # 갈아타지 않는다. 갈아타는 순간의 도약(실측 57px)이 곧 조향 입력이라,
+        # 점선 주기마다 좌우로 흔들리는 원인이 된다.
+        if cy is not None:
+            self._cy_hold = (float(cy), float(at(cf_target, yv)))
+            self._cy_hold_age = 0
+        elif self._cy_hold is not None:
+            self._cy_hold_age += 1
+            if self._cy_hold_age > c.center_hold_frames:
+                self._cy_hold = None
+
+        side_line: Optional[float] = None   # 단측 폴백에 쓴 선의 근거리 x
+        side_sign: float = 0.0              # +1 = 오른쪽 선, -1 = 왼쪽 선
         if cy is not None:
             raw_near, raw_far = cy, at(cf_target, yv)
             center_fit = cf_target
+        elif self._cy_hold is not None:
+            # 유지 구간 — 직전 노란선 추정을 그대로 쓴다. 방향(center_fit)은
+            # 넘기지 않아 기울기·곡률은 아래에서 흰 선으로 계산된다.
+            raw_near, raw_far = self._cy_hold
         elif pair_ok:
             # 진짜 흰 선 쌍이 보이면 **그 중점**이 도로 중앙이다. 학습값
             # half_road 로 한쪽에서 환산하면 학습 오차가 그대로 편향이 된다.
@@ -785,14 +851,45 @@ class LaneDetector:
         elif wr is not None and (wl is None or (rf.width, rf.span) >= (lf.width, lf.span)):
             # 단측(또는 타당하지 않은 쌍 → 관측이 긴 쪽 하나만 신뢰)
             raw_near, raw_far = wr - half, at(rf, yv) - half
+            side_line, side_sign = float(wr), +1.0
         elif wl is not None:
             raw_near, raw_far = wl + half, at(lf, yv) + half
+            side_line, side_sign = float(wl), -1.0
         else:
             raw_near = raw_far = (
                 float(np.mean(self._cx_hist)) if self._cx_hist else w_roi / 2.0
             )
 
-        if cy is None and wl is None and wr is None:
+        # ★★ 단측 폴백 타당성 검사 (0820 밤, 실주행 race_0820_2119 최악 사건) ★★
+        #
+        # 실측: |오차|>300px 사건 9건이 **전부** lane='-R-' 또는 'L--' 였고,
+        # t80.6~83.6 은 lane=-R- 로 **4초 연속 조향 −42.0 포화**였다.
+        #
+        # 기하가 원인이다. BEV ROI 폭은 640px 인데 도로 전폭은 실측 약 670px
+        # (반차선 335px @810px/m). 즉 근거리에서 진짜 왼선은 x≈−15, 오른선은
+        # x≈655 로 **둘 다 화면 밖**이다. 그런데 좌/우 라벨은 화면 절반으로만
+        # 갈리므로(x<320 이면 L), ROI 한복판에서 잡힌 이음새·벽 밑단 조각이
+        # 도로 경계로 승격되고 거기에 ±335px 가 더해진다 —
+        # x=328 인 조각 하나가 목표를 −327px 로 만든다(실측값 그대로다).
+        # 21px 차이로 목표가 ±670px 뒤집힌다.
+        #
+        # 고치는 방식: **위치 신뢰도와 방향 신뢰도를 분리한다.**
+        # 라벨이 R 이면 그 선은 x ≈ center+half 부근이어야 한다. 거기서 크게
+        # 벗어나면 '도로 경계'로 인정하지 않고 **위치만** 직전 목표로 되돌린다.
+        # 기울기·곡률은 그대로 그 선에서 읽으므로 방향 제어는 살아 있다.
+        # 검출을 좁히는 게 아니라 그 프레임에서 무엇을 믿을지 나누는 것이다.
+        if (
+            side_line is not None
+            and c.single_side_plausible
+            and self._prev_target is not None
+        ):
+            expected = w_roi / 2.0 + side_sign * half
+            if abs(side_line - expected) > c.single_side_tol_frac * half:
+                shift = self._prev_target - raw_near
+                raw_near += shift
+                raw_far += shift      # 같은 양만큼 옮기므로 기울기는 보존된다
+
+        if cy is None and wl is None and wr is None and self._cy_hold is None:
             self._lost_frames += 1
         else:
             self._lost_frames = 0
@@ -910,6 +1007,14 @@ class LaneDetector:
 
         fits = self._fit_tracks(mask, h_roi)
         y_near = float(h_roi - 1)
+        # ★ 무조건 게이트 — 중앙선은 정의상 화면 안에 있다. LaneFit.at 은
+        #   관측 범위 밖을 끝단 접선으로 잇는데 그 외삽 거리에 상한이 없어,
+        #   ROI 위쪽에만 짧게 남은 조각이 근거리에서 x<0 으로 발산한다
+        #   (0820 실측 x@near = -53, -42). 아래 lo/hi 기하 게이트는 흰 선이
+        #   잡힌 프레임에서만 걸리는데 이번 주행은 왼쪽 흰 선이 8프레임 중
+        #   3프레임에만 있었다 — 대부분의 프레임에서 하한이 비어 있었다.
+        if c.center_roi_bounds:
+            fits = [f for f in fits if 0.0 <= f.at(y_near) <= float(w_roi)]
         m = c.center_inside_margin_px
         if lo is not None:
             fits = [f for f in fits if f.at(y_near) >= lo + m]
@@ -928,7 +1033,23 @@ class LaneDetector:
                 if abs(f.at(y_near) - self._prev_target) <= c.margin
             ]
             if near:
-                return max(near, key=lambda f: f.span)
+                # 동점(span 이 같은 후보 둘)일 때 앞엣것이 아니라 직전 목표에
+                # 가까운 쪽을 고른다 — 정지 화면에서도 후보가 프레임마다
+                # 뒤집히던 원인 (0820 실측 i316: span 80/80 동점).
+                return max(near, key=lambda f: (f.span, -abs(f.at(y_near) - self._prev_target)))
+            # ★ 근처에 아무것도 없다 = 이 프레임의 노란 덩어리는 직전까지
+            #   따라오던 그 선이 아니다. 여기서 **전역 최대 span 으로 되돌아가면
+            #   안 된다** — 체커존 테두리 노란 띠처럼 트랙 어딘가의 다른 노란
+            #   표식을 중앙선으로 승격시켜 목표가 220~380px 옆으로 이동한다
+            #   (0820 실측: 차가 완전히 정지한 겐트리 앞에서 cy@near 가 92~408px
+            #    로 요동, Δ383px). None 을 돌려주면 위 호출부의 _cy_hold 가
+            #   직전 노란선 추정을 24프레임(0.8초) 붙들어 준다.
+            #   오래 놓쳤다가 다시 잡는 경우는 아래 재획득 경로로 빠진다.
+            if (
+                not c.center_global_fallback
+                and self._lost_frames <= c.target_snap_after_lost
+            ):
+                return None
         return max(fits, key=lambda f: f.span)
 
     def _fit_center_histogram(

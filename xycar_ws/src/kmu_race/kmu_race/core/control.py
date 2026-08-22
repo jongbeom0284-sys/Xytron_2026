@@ -12,11 +12,125 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from typing import Sequence, Tuple
 
 WHEELBASE_M = 0.30
 # motor_adapter(팀원 kobot_vehicle) 실측 체인: δ[rad] = cmd × 0.0068,
 # 이후 vesc.yaml servo 0.15~0.85 가 δ 를 ±0.288rad(16.5°)로 자른다.
 CMD_TO_RAD = 0.0068
+# 서보 하드스톱 [rad] — vesc.yaml servo 0.15~0.85 → ±0.288rad(16.5°)
+SERVO_MAX_RAD = 0.288
+# 서보 하드스톱: vesc.yaml servo 0.15~0.85 → δ ±0.288rad(16.5°) → cmd ±42.3.
+# 이 위로 올려 봐야 바퀴는 더 안 꺾이고, 감속 로직만 과하게 자극한다.
+CMD_SATURATION = 42.0
+CAR_HALF_M = 0.15        # 차 반폭 (실측 차폭 30cm)
+CONE_RADIUS_M = 0.075    # 콘 밑면 반지름 (실측 지름 15cm)
+# ★ 차체는 점도 원반도 아니다 (0821 밤). 기준점은 **뒷차축**이고 차체는
+#   그 앞뒤로 뻗어 있다. 돌 때 **앞 바깥 코너가 가장 크게 쓸고 나간다**:
+#       R=1.0m 에서  안쪽 뒷모서리 0.85m,  바깥 앞코너 √(1.15²+0.40²)=1.22m
+#       → 실효 폭 37cm (차폭 30cm 보다 7cm 넓다)
+#   원반(반지름 0.15) 모델은 이 앞오버행 스윙아웃을 통째로 놓쳐서,
+#   "여유 있다"고 판단한 조향이 실제로는 콘을 친다.
+CAR_FRONT_M = 0.40       # 뒷차축에서 앞범퍼까지 (축거 0.30 + 앞오버행 0.10)
+CAR_REAR_M = 0.12        # 뒷차축에서 뒷범퍼까지
+
+
+def path_clearance(
+    cmd: float,
+    cones: Sequence[Tuple[float, float]],
+    *,
+    horizon_m: float,
+    wheelbase: float = WHEELBASE_M,
+) -> float:
+    """이 조향으로 갈 때 콘까지 최소 여유 [m]. 음수면 부딪힌다.
+
+    차체를 반폭 CAR_HALF_M 의 원반으로 근사해 호를 따라 쓸어본다.
+    수평선(horizon_m)은 **명령이 실제로 유지되는 시간**만큼만 잡는다 —
+    그 이상은 어차피 다시 조향하므로 등속곡률 가정이 깨진다.
+    """
+    if not cones:
+        return 9.9
+    delta = max(-SERVO_MAX_RAD, min(SERVO_MAX_RAD, cmd * CMD_TO_RAD))
+    # 뒷차축 궤적 + 그 지점에서의 차체 방향
+    poses = []
+    s = 0.05
+    if abs(delta) < 1e-4:
+        while s <= horizon_m:
+            poses.append((s, 0.0, 0.0)); s += 0.05
+    else:
+        radius = wheelbase / math.tan(abs(delta))
+        sgn = -1.0 if cmd > 0.0 else 1.0        # +cmd = 우회전
+        while s <= horizon_m:
+            th = s / radius
+            poses.append((radius * math.sin(th),
+                          sgn * radius * (1.0 - math.cos(th)),
+                          sgn * th))
+            s += 0.05
+    if not poses:
+        return 9.9
+    best = 9.9
+    for (cx, cy) in cones:
+        for (px, py, pth) in poses:
+            # 콘을 차체 좌표로 옮겨 **사각형**까지의 거리를 잰다
+            dx, dy = cx - px, cy - py
+            c, sn = math.cos(pth), math.sin(pth)
+            bx = dx * c + dy * sn
+            by = -dx * sn + dy * c
+            ox = max(-CAR_REAR_M - bx, bx - CAR_FRONT_M, 0.0)
+            oy = max(abs(by) - CAR_HALF_M, 0.0)
+            gap = math.hypot(ox, oy) - CONE_RADIUS_M
+            if gap < best:
+                best = gap
+                if best < -0.5:
+                    return best
+    return best
+
+
+def clamp_steer_for_cones(
+    cmd: float,
+    cones: Sequence[Tuple[float, float]],
+    *,
+    speed_mps: float,
+    margin_m: float = 0.03,
+    react_s: float = 0.35,
+    min_horizon_m: float = 0.25,
+    max_cmd: float = CMD_SATURATION,
+    step: float = 2.0,
+) -> Tuple[float, float]:
+    """콘을 관통하는 조향이면, **가장 가까운 안전한 조향**으로 바꾼다.
+
+    ★ 0821 밤 신설. 오늘 라바콘 결함을 다섯 개 고쳤는데도 주행마다
+      결과가 갈렸다 — 어떤 주행은 통과하고 어떤 주행은 박았다.
+      추정(게이트·곡률·전방주시)을 전부 맞히는 방식으로는 일관성이 안 나온다.
+      그래서 **마지막 단계가 충돌 명령 자체를 못 내게** 막는다.
+      게이트가 틀려도, 통로 추정이 틀려도, 보이는 콘을 관통하는 명령은
+      나가지 않는다.
+
+    수평선은 v × react_s (구동지연 0.04 + 서보 τ 0.06 + 여유)로 잡는다.
+    그 안에서는 등속곡률 가정이 유효하다.
+
+    반환: (안전한 조향, 그때의 여유 [m])
+    """
+    if not cones:
+        return cmd, 9.9
+    horizon = max(min_horizon_m, abs(speed_mps) * react_s)
+    base = path_clearance(cmd, cones, horizon_m=horizon)
+    if base >= margin_m:
+        return cmd, base
+    # 원 명령에서 가까운 순서로 훑어 처음으로 안전해지는 값을 쓴
+    best_cmd, best_gap = cmd, base
+    k = 1
+    while k * step <= 2.0 * max_cmd:
+        for cand in (cmd - k * step, cmd + k * step):
+            if cand < -max_cmd or cand > max_cmd:
+                continue
+            gap = path_clearance(cand, cones, horizon_m=horizon)
+            if gap >= margin_m:
+                return cand, gap
+            if gap > best_gap:
+                best_cmd, best_gap = cand, gap
+        k += 1
+    return best_cmd, best_gap
 
 
 def pure_pursuit_steer(
@@ -41,6 +155,46 @@ def pure_pursuit_steer(
     return max(-max_steer, min(max_steer, steer))
 
 
+def pure_pursuit_cmd(
+    target_x: float,
+    target_y: float,
+    *,
+    wheelbase: float = WHEELBASE_M,
+    max_cmd: float = CMD_SATURATION,
+) -> float:
+    """퓨어 퍼수트 조향을 **모터 cmd 단위**로 낸다.
+
+    ★ 0821: 이 함수가 없어서 라바콘 구간만 조향의 39%밖에 안 걸리고 있었다.
+
+    /xycar_motor 로 나가는 값은 **각도가 아니라 무차원 cmd** 다 —
+    motor_adapter 가 `steering_angle = -(cmd × 0.0068)` 로 rad 을 만든다
+    (real/ros2_ws/.../motor_adapter.py). 차선 경로는 처음부터 cmd 단위였고
+    (LaneController.k_curvature 가 WHEELBASE_M/CMD_TO_RAD 를 곱한다),
+    분기 조향 -34 도 cmd 다. 그런데 라바콘 경로만 pure_pursuit_steer 의
+    **도(deg)** 값을 환산 없이 그대로 발행하고 있었다.
+
+    결과: δ_실제 = 발행값 × 0.3896° 라 **의도한 조향의 1/2.567** 만 걸린다.
+        발행 -22.1 → 바퀴 8.61° → 선회반경 1.98m
+        발행 -10.9 → 바퀴 4.25° → 선회반경 4.04m
+    통로가 R 1.0~1.5m 로 굽는데 차는 R 2~4m 짜리 원을 그렸다 — 사용자가
+    본 "커브인데 그대로 직진해서 콘에 부딪힌다"가 이것이다.
+    ±50 클램프도 **도 단위**라 δ=50° 가 필요해야 걸린다: 실주행 로그의
+    '조향 포화 0회'는 안정의 증거가 아니라 이 버그의 지문이었다.
+
+    참고 (cmd 단위로 바로잡은 뒤의 필요값):
+        R 2.0m → 21.9    R 1.5m → 29.0    R 1.2m → 36.0
+        R 1.0m → 42.9 (서보 한계 42.3 바로 위)   R 0.8m → 52.8 (불가)
+    """
+    ld_sq = target_x * target_x + target_y * target_y
+    if ld_sq < 1e-6:
+        return 0.0
+    ld = math.sqrt(ld_sq)
+    alpha = math.atan2(target_y, target_x)
+    delta = math.atan2(2.0 * wheelbase * math.sin(alpha), ld)   # [rad]
+    cmd = -delta / CMD_TO_RAD
+    return max(-max_cmd, min(max_cmd, cmd))
+
+
 @dataclass
 class PixelPID:
     """BEV 픽셀 오차용 PID. 차선주행 기본 제어.
@@ -54,9 +208,31 @@ class PixelPID:
     #   절반도 못 써 코너(반경 ~1m)에서 언더스티어 → 차선 이탈. 코너에서는
     #   포화까지 가야 하므로 실측 오프셋(~120px)에서 cmd 40 이 나오는 값.
     #   직선 소오프셋(10~30px)엔 3~10° 라 진동 위험 낮음 (스무더 5창+420°/s).
-    kp: float = 0.34
+    # ★ 0820 실주행 + lanesim 재튜닝.
+    #   실주행(run_0820_0019) 실측: |offset|>150px 인 프레임이 51.9%. 옛 kp 0.34
+    #   에서 offset 150px 는 cmd 51 로 max_steer 50 을 넘겨 **주행의 절반 이상
+    #   조향이 포화**했다 — 좌우 최대락을 번갈아 치는 bang-bang 이 되고, 실측
+    #   1.22Hz 좌우 왕복·차선 이탈의 직접 원인이다.
+    #   lanesim(지연 모델 포함, 긴 직선 30m + 초기 횡오차 0.18m + 코너 R=1.0m)
+    #   스윕 결과 — 코너 최대오차가 kp 에 단조 의존한다:
+    #     kp 0.34 → 0.344m (반차선 0.41m 의 84%, 사실상 이탈)
+    #     kp 0.24 → 0.207m / kp 0.20 → 0.130m / kp 0.16 → 0.110m
+    #   직선 정상상태 오차는 어느 조합에서도 1cm 내로 수렴하므로, 코너 여유가
+    #   가장 크게 벌리는 쪽을 택한다.
+    #
+    #   ★ 0820 밤 2차 조정: 0.20 → 0.16.
+    #   (1) BEV 축척 스윕(±13%, 60 시나리오): 이탈이 0.34→9, 0.20→7, **0.16→5**.
+    #       특히 축척 920 에서 0.20 은 **연속 S자(슬라럼) 이탈**이 새로 생겼는데
+    #       (0.34 보다 나쁨) 0.16 은 슬라럼 이탈이 0 이다. 슬라럼은 라바콘 구간과
+    #       같은 형태라 이 항목이 중요하다.
+    #   (2) 최악 코너 R=0.8m @0.6m/s: 0.20 은 이탈(0.415m), **0.16 은 완주(0.380m)**.
+    #   실패 원인이 굼뜸이 아니라 오버슈트·진동이라 낮출수록 좋아진다.
+    #   더 낮춰도(0.14/0.12) 이득이 미미해 응답성만 버리므로 0.16 에서 멈춘다.
+    #   ※ R=0.8m @1.0m/s 는 어떤 게인으로도 이탈한다(0.42~0.44m vs 반차선 0.4125m).
+    #     그 속도로 그 반경은 물리적으로 불가능하다 — 게인 문제가 아니다.
+    kp: float = 0.16
     ki: float = 0.0
-    kd: float = 0.27
+    kd: float = 0.10
     deadzone_px: float = 10.0
     max_steer: float = 50.0
     integral_limit: float = 400.0
@@ -170,11 +346,27 @@ class LaneController:
     # 상쇄돼 저절로 꺼진다 — 슬라럼은 안쪽에 붙는 게 아니라 가운데로 지나야
     # 하므로 이게 물리적으로도 옳다 (0817 시뮬: 연속 S자 이탈 0.90m → 통과).
     apex_ema_alpha: float = 0.08
+    # ★ 아펙스 폭주 차단 (0820 저녁 실측). 발동 조건이 '출력 포화율' 하나뿐이라
+    #   양의 되먹임이 성립한다 — 가짜 목표로 0.7초만 포화하면 _sat_slow 가
+    #   0.80 을 넘고, 그때 더해지는 bias 184px 는 그 자체로 0.16×184 = 29cmd
+    #   (포화한계 42 의 70%)라 검출이 정상으로 돌아와도 포화가 안 풀린다.
+    #   run_0820_1821 실측 재생: 발동 968/6508 = 14.9%, t144.03~149.22 에
+    #   **5.20초 연속 풀락**. 두 겹으로 막는다.
+    #
+    #   (1) 곡률 부호 일치 — 진짜 코너면 목표선 곡률이 같은 쪽을 가리킨다.
+    #       곡률 '크기'는 요구하지 않는다(짧은 피팅에서 과소추정되므로).
+    apex_require_curv_sign: bool = True
+    #   (2) 연속 발동 시간 상한 [s] — 넘으면 bias 를 0 으로 되돌리고, 포화가
+    #       한 번 풀릴 때까지 재발동을 막는다. 트랙 최악 코너(R≈0.8m)를 도는
+    #       데 필요한 시간이 약 1.6초라 2.5초면 진짜 코너는 안 자른다.
+    apex_max_engage_s: float = 2.5
 
     pid: PixelPID = field(default_factory=PixelPID)
 
     _curv_ema: float = 0.0
     _sat_slow: float = 0.0
+    _apex_since: float = -1.0        # 아펙스 연속 발동 시작 시각 (미발동 -1)
+    _apex_locked: bool = False       # 상한 초과로 잠긴 상태
     _slope_ema: float = 0.0
     _bias_px: float = 0.0
     _primed: bool = False
@@ -183,6 +375,8 @@ class LaneController:
         self.pid.reset()
         self._curv_ema = 0.0
         self._sat_slow = 0.0
+        self._apex_since = -1.0
+        self._apex_locked = False
         self._slope_ema = 0.0
         self._bias_px = 0.0
         self._primed = False
@@ -207,6 +401,7 @@ class LaneController:
         curvature_px: float,
         lane_width_px: float = 0.0,
         both_found: bool = True,   # (미사용) 게이트 철회 후 호환용 — 주석 참조
+        now: float = 0.0,          # 아펙스 연속 발동 시간 상한용 [s]
     ) -> float:
         if not self._primed:
             self._curv_ema = curvature_px
@@ -230,6 +425,30 @@ class LaneController:
         half_lane = (
             lane_width_px / 2.0 if lane_width_px > 1.0 else self.default_half_lane_px
         )
+        # ── 아펙스 폭주 차단 (apex_max_engage_s 주석 참조) ──
+        if over > 0.0 and self.apex_require_curv_sign:
+            # 곡률이 사실상 0 인 프레임은 방향 정보가 없다고 보고 통과시킨다
+            # (짧은 피팅에서 곡률은 자주 0 에 가깝다 — 여기서 막으면 진짜
+            #  코너의 아펙스를 놓친다). 부호가 **반대**일 때만 거부한다.
+            if self._curv_ema * tight < 0.0:
+                over = -1.0
+        if over > 0.0:
+            if self._apex_since < 0.0:
+                self._apex_since = now
+            elif (
+                not self._apex_locked
+                and now - self._apex_since > self.apex_max_engage_s
+            ):
+                self._apex_locked = True
+        else:
+            self._apex_since = -1.0
+        if self._apex_locked:
+            # 포화가 한 번이라도 풀려야 잠금을 해제한다 — 안 그러면 bias 만
+            # 0 으로 갔다가 곧바로 같은 되먹임으로 재발동한다.
+            if abs(self._sat_slow) < self.apex_engage:
+                self._apex_locked = False
+            else:
+                over = -1.0
         if over > 0.0:
             span = max(1e-6, 1.0 - self.apex_engage)
             target_bias = (
@@ -311,6 +530,13 @@ class SteerSmoother:
 __all__ = [
     "WHEELBASE_M",
     "pure_pursuit_steer",
+    "pure_pursuit_cmd",
+    "CMD_SATURATION",
+    "clamp_steer_for_cones",
+    "path_clearance",
+    "CAR_FRONT_M",
+    "CAR_REAR_M",
+    "CAR_HALF_M",
     "PixelPID",
     "LaneController",
     "SteerSmoother",

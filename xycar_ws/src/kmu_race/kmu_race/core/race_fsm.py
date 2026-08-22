@@ -32,7 +32,7 @@ from typing import Optional
 
 from .race_context import RaceContext
 from .safety import SafetyDecision
-from .types import Observation, SignalState
+from .types import Observation, SignalState, TrackedObject
 
 
 class Mode(str, Enum):
@@ -75,6 +75,18 @@ class FSMConfig:
     # 4틱(0.06s) — 오검 방어는 상승엣지·RED 거부·링 게이트가 겹겹이 맡는다.
     green_confirm_frames: int = 3
     green_confirm_seconds: float = 0.06
+    # ── 출발 대기 워치독 (0820 감사) ────────────────────────────────
+    # WAIT_GREEN 의 탈출구는 manual_go 와 go_hit 둘뿐이고 시간 폴백이 없다.
+    # 세 판정 경로가 모두 침묵하면 무한 대기 = DNF 다. 두 겹으로 막는다.
+    #  (1) 진단 에스컬레이션 — 이 주기마다 '어디서 막혔는지'를 WARN 으로
+    #      찍는다. 심판·운영자가 즉시 안다. 항상 켜져 있다.
+    wait_green_warn_period_s: float = 5.0
+    #  (2) 최후 폴백 — 이 시간이 지나면 RED 가 아닌 한 출발한다 [s].
+    #      ★ 기본값 0.0 = 꺼짐. 이건 규정 트레이드오프라 사람이 정할 일이다:
+    #        켜면 판독 실패 시 DNF 를 면하지만, 아직 빨간불인데 나가면
+    #        규정 p.20 의 벌초를 받는다. 실차에서 '초록인데 못 읽는' 것이
+    #        확인되면 실제 대기시간보다 넉넉히 큰 값으로 켤 것.
+    wait_green_timeout_s: float = 0.0
     # 출발 판정 보조: 출발선 거리(3~4m)에서는 램프가 작아(반지름 3~7px)
     # 4구 원 분류가 거의 안 된다 — run4 bag 실측 11,056프레임 중 GREEN 분류
     # 2프레임뿐, FSM 리플레이에서 출발 실패. 반면 채도 초록 블롭은 green-on
@@ -96,6 +108,17 @@ class FSMConfig:
     cone_enter_frames: int = 3
     cone_exit_frames: int = 14          # 콘이 사라졌다고 확신할 때까지
     cone_min_orange_px: int = 900
+    # ★ 라바콘 구간을 **나가려면** 라이다 콘도 이보다 적어야 한다 (0821 밤).
+    #   카메라만 보고 나가면, 라이다가 콘을 8~14개 보는 상황에서 차선
+    #   검출로 조향이 넘어간다 (실측 31~33%). 각진 벽 근처에서 그게
+    #   코스 이탈이 된다.
+    cone_exit_min_lidar: int = 3
+    # 라이다 콘이 이만큼 보이고 게이트가 서면 **카메라 없이도** 진입한다.
+    # 4개면 좌우 두 줄이 두 쌍은 보인다는 뜻이라 벽 무더기와 구분된다.
+    cone_enter_min_lidar: int = 4
+    # 진입의 **최소 조건**: 라이다에 콘이 이만큼은 보여야 한다.
+    # (카메라가 먼저 보는 경우를 죽이지 않도록 낮게 둔다)
+    cone_enter_require_lidar: int = 2
     # 게이트가 이 시간 이상 안 생기면 구간이 끝난 것으로 보고 이탈한다.
     # 벽면 보관 콘 무더기는 orange_px 를 계속 채우지만 게이트를 못 만들어
     # (run4 실측: 660프레임 중 게이트 5프레임) 이탈 디바운스를 굶긴다 —
@@ -105,6 +128,9 @@ class FSMConfig:
     # 나가면 콘에 오염된 차선 추종으로 떨어져 실패. 4.0s 로 늘리고, 그 사이
     # 단측 가상 게이트가 조향을 맡는다. 무더기(벽면 보관) 이탈은 여전히 된다.
     cone_gate_lost_exit_s: float = 4.0
+    # 라이다에 콘이 남아 있어도 이 시간을 넘기면 나간다 (갇힘 방지).
+    # 규정 p.25 는 라바콘 구간 1분 초과를 실격으로 본다.
+    cone_max_dwell_s: float = 30.0
     # 규정 p.25: 라바콘 구간 1분 내 통과 실패 = 실격. 이 시간을 넘기면
     # 로그로 경고한다 (자동 행동 변경은 없음 — 어차피 계속 전진 중이다).
     cone_section_warn_s: float = 30.0
@@ -119,6 +145,56 @@ class FSMConfig:
     # ── 전방 타겟 (고정장애물 / 방해차량) ──
     target_trigger_dist_m: float = 1.45
     target_enter_frames: int = 2
+    # ★ 진입 최소 지속시간 [s] (0820 저녁 신설). 옛 게이트는 '연속 2틱'뿐인데
+    #   제어는 50Hz, 라이다는 8.8Hz다 — 2틱(0.04s)은 **같은 스캔을 두 번 본
+    #   것**이라 사실상 디바운스가 없었다. 진짜 장애물은 1.45m→0.5m 를
+    #   0.5m/s 로 약 2초에 걸쳐 계속 막는다. 실측(run_0820_1821, 차선기준
+    #   코리도 0.40×0.30, 주행 186초):
+    #       지속 임계   남는 이벤트   기동 총시간
+    #        0.07s        54회        33.0초(18%)
+    #        0.40s        23회        27.2초(15%)
+    #        0.80s        16회        22.9초(12%)
+    #        1.50s         7회        13.4초( 7%)
+    #   0.80 은 '스쳐가는 것'을 자르면서 접근 중인 장애물은 0.5m 남기고도
+    #   충분히 일찍(1.45−0.5×0.8 = 1.05m) 잡는 자리다.
+    # ★ 0.80 → 0.40 (0820 밤 감사). 0.80 은 **본선 속도에서 구조적으로 발화
+    #   불가**였다: _front_target 이 타겟을 인정하는 창은
+    #   x ∈ [target_min_dist_m 0.40, target_trigger_dist_m 1.45] = 1.05m 인데,
+    #   LANE_DRIVE base 20 × speed_to_mps 0.08 = 1.60m/s 면 그 창을 0.656초에
+    #   통과한다. 0.80초 연속을 요구하면 정지 장애물에 **어떤 프레임에서도**
+    #   AVOID_STATIC 이 서지 않는다 (실주행 race_0820_2119 에서 OVERTAKE 가
+    #   0.46m 에서 딱 1회 선 것도 그 지점이 저속이었기 때문이다).
+    #   0.40 이면 2.6m/s 까지 창이 성립한다. run_0820_1821 재생에서 이미
+    #   계측된 동작점이다 (이벤트 23회 / 기동 27.2초 = 15%).
+    target_enter_seconds: float = 0.40
+    # 접근 확인 — 진입 창 동안 타겟이 실제로 가까워졌는가 [m].
+    # 정면을 가로질러 스쳐가는 물체는 x 가 줄지 않는다. 0 이면 검사 안 함.
+    target_approach_min_m: float = 0.12
+    # 타임아웃 탈출 후 재진입 금지 시간 [s] — PassResult.aborted 주석 참조.
+    maneuver_cooldown_s: float = 2.0
+    # ★ 차선 기준 코리도 (0820 저녁 신설) ─────────────────────────────
+    # 문제: nearest_front 의 코리도는 **차 정면으로 곧게 뻗은 직사각형**이다.
+    #   이 트랙의 차로 반폭은 0.41m(노란선↔흰선 335px @810px/m)인데 코리도
+    #   반폭은 0.45m — 차로보다 넓다. 그래서 코너에서 바깥 벽이 정면 1.45m
+    #   안에 구조적으로 들어온다. run_0820_1821 실측(주행 1796스캔):
+    #       코리도 ±0.45m → 트리거 후보 38.3%, 2스캔연속 전이 35회
+    #       코리도 ±0.20m → 트리거 후보 24.7%, 전이 26회  ← 좁혀도 안 없어진다
+    #   좁히는 걸로는 못 고친다. 코너에서는 **바깥 벽이 진짜로 정면에 있기**
+    #   때문이다. 고쳐야 할 것은 폭이 아니라 코리도의 '모양'이다.
+    # 해법: 카메라가 아는 차로를 따라 코리도를 휘게 한다. 장애물은 '차로를
+    #   막고 있는 것'이고 벽은 '차로의 경계'다 — 이 둘은 차로 좌표에서만
+    #   갈린다. 차선이 안 잡히는 프레임은 옛 직사각형 코리도로 되돌아간다
+    #   (검출을 좁히지 않는다 — 판정 기준을 바꾸는 것이다).
+    lane_corridor_enabled: bool = True
+    lane_corridor_half_m: float = 0.30   # 차로 중심 기준 반폭 [m]
+    # 전방으로 인정하는 종방향 하한 [m]. nearest_front 의 0.15 는 '자기 반사
+    # 배제'가 목적이었는데, 이 값이 낮으면 (0.15, −0.30) 처럼 **차 옆 63°**에
+    # 있는 반환까지 전방 장애물로 센다 — 이미 옆에 있는 것은 피할 수도 없다.
+    # 라이다는 차체 중앙 부근이고 앞 범퍼까지 ≈0.25m 이므로 그 밖을 요구한다.
+    target_min_dist_m: float = 0.40
+    # BEV 축척 (0818 실측 — tools/lanesim.py 주석과 같은 출처)
+    bev_px_per_m_lat: float = 810.0
+    bev_px_per_m_fwd: float = 730.0
     # 정지/주행 판별: 상대 접근속도가 자차속도의 이 비율보다 '느리면' 주행 중이다.
     # 정지 물체는 vx ≈ -v_ego 로 관측되고, 같은 방향으로 달리는 차는 그보다 작다.
     moving_ratio: float = 0.6
@@ -142,7 +218,23 @@ class FSMConfig:
     #   90° 급전환이 아니다 — 72° 를 기다리면 과회전해 반대편 차선을 문다.
     shortcut_turn_deg: float = 55.0
     # 요가 안 돌아도 이 시간이 지나면 완료로 보고 차선주행에 넘긴다 (교착 방지)
-    shortcut_timeout_s: float = 3.2
+    # ★ 3.2 → 1.6 (0820 밤 감사). imu_enabled=false 면 obs.yaw_deg 가 영구히
+    #   0.0 이라 `turned >= shortcut_turn_deg(55)` 종료 조건은 **구조적으로
+    #   절대 발화하지 않고**, 이 타임아웃이 유일한 exit 이 된다. 그 동안
+    #   policy 가 차선 피드백 없이 shortcut_steer_deg 를 고정 출력하므로
+    #   이 값이 곧 개루프 회전각이다. 실차 캘리브는 '진입 좌회전 57°/1.5초'
+    #   (run4) 이므로 3.2초는 78~120° = 주석이 '반대편 차선을 문다'고 못박은
+    #   72° 를 모든 경우에 넘는다. 언더슛은 LANE_DRIVE 가 차선 피드백으로
+    #   회수할 수 있고 오버슛은 회수 불가라 짧은 쪽으로 틀리는 것이 옳다.
+    shortcut_timeout_s: float = 1.6
+    # ── 규정 추론 (race_context.may_take_shortcut 의 infer_lap3) ──
+    # 규정 p.35 상 좌회전은 랩2·랩3 중 정확히 한 번 나온다. 랩2 에서 겐트리를
+    # 이만큼 또렷이 보고도 직좌가 아니었으면 좌회전은 랩3 확정이다.
+    # ⚠️ 기본 봉인. 켜면 랩3 에서 검출이 침묵해도 지름길로 들어간다 —
+    #    기회 상실(놓침)을 무신호 진입 리스크와 맞바꾸는 선택이라 운영자
+    #    판단 영역이다. 진짜 직좌 bag 으로 페어 검출이 검증되기 전에는 켜지 말 것.
+    lap3_infer_enabled: bool = False
+    lap2_clear_frames_min: int = 8
 
     # ── 안전 정지 복귀 ──
     # 규정 p.21: 멈춘 뒤 1분 내 재개 못하면 실격. 그래서 STOP 은 터미널이
@@ -189,9 +281,13 @@ class RaceFSM:
         self._green = _Debouncer(c.green_confirm_frames, c.green_confirm_seconds)
         self._cone_in = _Debouncer(c.cone_enter_frames)
         self._cone_out = _Debouncer(c.cone_exit_frames)
-        self._target_in = _Debouncer(c.target_enter_frames)
+        self._target_in = _Debouncer(c.target_enter_frames, c.target_enter_seconds)
+        # 진입 창 동안의 최원거리 — 접근 확인용 (target_approach_min_m)
+        self._target_far_x: float = 0.0
         self._stop_recover = _Debouncer(c.stop_recover_frames, c.stop_recover_seconds)
 
+        # WAIT_GREEN 워치독이 마지막으로 경고한 대기시간 [s]
+        self._wait_warned_at: float = 0.0
         # 좌회전 신호를 마지막으로 확실히 본 시각
         self._left_seen_at: float = -1e9
         # SHORTCUT 진입 시점의 요와 시각
@@ -199,6 +295,10 @@ class RaceFSM:
         self._shortcut_t0: float = 0.0
         # 기동 상태가 자기 종료를 보고하는 통로 (policy 가 써 준다)
         self.maneuver_done: bool = False
+        # 타임아웃 탈출 신호 (policy 가 써 준다). '통과 완료'와 구분한다.
+        self.maneuver_aborted: bool = False
+        # 타임아웃 탈출 직후 재진입 금지 만료 시각
+        self._maneuver_cooldown_until: float = -1e9
         # ── 시운전 스위치 (race_node 파라미터로 설정, 본선은 둘 다 기본값) ──
         # manual_go: 외부(/kmu_race/go)에서 출발 명령이 오면 다음 틱에 출발.
         #   0817 첫 자율주행: 원거리(8~10m) 출발 판정 마진 부족으로 오출발 —
@@ -268,11 +368,19 @@ class RaceFSM:
         # 신선창이 정전 시간만큼 늘어난다. 신선한 프레임에서만 래치한다.
         if (
             obs.camera_ok
-            and (
-                obs.signal.state is SignalState.GREEN_LEFT
-                or obs.signal.watcher_green_left
-            )
-            and obs.signal.gantry_span_px >= self.config.left_latch_min_span_px
+            # ★ watcher_green_left 제거 (0820 밤 감사). signal_detector 의
+            #   동형 페어 경로는 pair_green_left_enabled=False 로 이미 봉인돼
+            #   있는데(0817 전수조사: 진짜 직좌 0발화·주행 중 오검 다수),
+            #   signal_watcher 의 페어는 '색을 쓰지 않는' 밝기·모양 판정이라
+            #   더 약한데도 FSM 래치로 우회해 살아 있었다. 지름길 오래치 1회 =
+            #   직진 랩 한복판 좌회전이다. 진짜 경로는 4구 구조검증이 담당한다.
+            and obs.signal.state is SignalState.GREEN_LEFT
+            # 0820 저녁: 하우징 폭도 받아 준다. GREEN_LEFT 는 이제 4구 구조
+            # 검증을 통과해야만 나오므로 하우징 폭이 곧 근접 증거이고, 블롭
+            # 경로(watcher)만 살아 있는 프레임도 여전히 통과한다 — 둘 중
+            # 큰 쪽을 쓰는 것은 게이트를 좁히지 않고 넓히는 방향이다.
+            and max(obs.signal.housing_span_px, obs.signal.gantry_span_px)
+            >= self.config.left_latch_min_span_px
         ):
             self._left_seen_at = obs.now
             # (0817 폐기 기록) GREEN_LEFT 목격이 결정 창을 재개방하는 변경을
@@ -285,6 +393,7 @@ class RaceFSM:
         if self.state is Mode.INIT:
             if safety.inputs_ready:
                 self._green.reset()
+                self._wait_warned_at = 0.0
                 return self._to(Mode.WAIT_GREEN, "inputs ready", ctx, obs.now)
             return self._stay(safety.reason or "waiting inputs")
 
@@ -293,7 +402,7 @@ class RaceFSM:
             # 이 시점에 차는 신호등 바로 앞에 서 있다. 랩 트래커의 '목격 1'이
             # 여기서 잡히고, 그 결과 current_lap 이 1이 된다.
             ctx.lap.update(
-                gantry_span_px=obs.signal.gantry_span_px,
+                gantry_span_px=obs.signal.lap_marker_px,
                 now=obs.now,
                 yaw_deg=obs.yaw_deg,
             )
@@ -343,6 +452,33 @@ class RaceFSM:
                 return self._to(Mode.LANE_DRIVE, "manual go", ctx, obs.now)
             if self.manual_start_mode:
                 return self._stay("waiting manual go")
+            # 워치독 (1) — 판정이 왜 안 되는지 주기적으로 알린다
+            waited = obs.now - ctx.state_entered_at
+            if waited - self._wait_warned_at >= self.config.wait_green_warn_period_s:
+                self._wait_warned_at = waited
+                sig = obs.signal
+                ctx.log(
+                    obs.now,
+                    f"WAIT_GREEN {waited:.0f}s — state={sig.state.value} "
+                    f"reject={sig.reject_reason or '-'} "
+                    f"housing={sig.housing_span_px} span={sig.gantry_span_px} "
+                    f"start_blob={sig.start_blob_px} watcher={sig.watcher_go} "
+                    f"dark_seen={self._dark_phase_seen}",
+                )
+            # 워치독 (2) — 최후 폴백 (기본 꺼짐, 설정 주석 참조)
+            if (
+                self.config.wait_green_timeout_s > 0.0
+                and waited >= self.config.wait_green_timeout_s
+                and obs.signal.state is not SignalState.RED
+            ):
+                ctx.race_started_at = obs.now
+                ctx.lap.ensure_start_sighting(now=obs.now, yaw_deg=obs.yaw_deg)
+                ctx.log(
+                    obs.now,
+                    f"⚠ WAIT_GREEN 워치독 {waited:.0f}s 초과 → 출발 "
+                    f"(신호 판독 실패, 규정 벌초 감수)",
+                )
+                return self._to(Mode.LANE_DRIVE, "wait watchdog", ctx, obs.now)
             if self._green.update(go_hit, obs.now):
                 ctx.race_started_at = obs.now
                 # 출발 = 신호등 앞 목격 1 — 원거리 출발 경로로 span 이 0 이어도
@@ -354,16 +490,28 @@ class RaceFSM:
 
         # ── 여기서부터 주행 중 ─────────────────────────────────────
         new_sighting = ctx.lap.update(
-            gantry_span_px=obs.signal.gantry_span_px,
+            gantry_span_px=obs.signal.lap_marker_px,
             now=obs.now,
             yaw_deg=obs.yaw_deg,
         )
+        # 제3 채널 — 라바콘 구간 보충 랩 (LapTrackerConfig.cone_fill_enabled
+        # 주석에 실측 근거). 겐트리도 IMU 도 못 쓰는 상태에서 완주 판정이
+        # 0채널이 되는 것을 막는다.
+        if ctx.lap.note_cone_section(
+            in_cone=(self.state is Mode.CONE_DRIVE), now=obs.now
+        ):
+            new_sighting = True
+            ctx.log(obs.now, f"라바콘 구간 통과 → 보충 랩 {ctx.lap.sightings}")
 
         if ctx.lap.finished:
             ctx.log(obs.now, f"finished {ctx.lap.sightings - 1} laps")
             return self._to(Mode.FINISH, "3 laps complete", ctx, obs.now)
 
         if new_sighting:
+            # 새 목격 = 이전 랩의 결정 창은 끝났다. 랩2 였다면 여기서 결론.
+            ctx.conclude_lap2_observation(
+                min_frames=self.config.lap2_clear_frames_min, now=obs.now
+            )
             ctx.log(obs.now, f"lap {ctx.lap.current_lap} begins")
             # 분기점 도착. 판단은 원샷이 아니라 잠시 열어 둔다 — 좌회전 분류가
             # 목격 확정보다 몇 틱 늦게 도착해도(분류 가능 거리와 확정 거리가
@@ -376,7 +524,19 @@ class RaceFSM:
             and self.state not in MANEUVER_MODES
         ):
             left_fresh = (obs.now - self._left_seen_at) <= self.config.left_signal_latch_s
-            if ctx.may_take_shortcut(left_fresh):
+            # 랩2 음성 관측 집계 — '겐트리를 또렷이 봤는데 직좌가 아니었다'
+            # 는 프레임을 센다. 규정 p.35 상 그게 성립하면 좌회전은 랩3 이다.
+            ctx.note_lap2_gantry_frame(
+                gantry_clear=(
+                    obs.camera_ok
+                    and obs.signal.gantry_span_px
+                    >= self.config.left_latch_min_span_px
+                ),
+                saw_left=left_fresh,
+            )
+            if ctx.may_take_shortcut(
+                left_fresh, infer_lap3=self.config.lap3_infer_enabled
+            ):
                 self._decision_until = -1e9
                 ctx.commit_shortcut(obs.now)
                 self._shortcut_yaw0 = obs.yaw_deg
@@ -416,7 +576,28 @@ class RaceFSM:
                 obs.now - self._cone_gate_last_valid
                 >= self.config.cone_gate_lost_exit_s
             )
-            gone = obs.cone.orange_px < self.config.cone_min_orange_px
+            # ★ 나가는 판정에 **라이다도 본다** (0821 밤).
+            #   옛 코드는 카메라 주황 픽셀만 봤다. 그래서 라이다가 콘을
+            #   8~14개 보고 있는데도 CONE_DRIVE 를 나가 **카메라 차선**으로
+            #   조향했다 — 실측(cone_0821_0344/0323): 차선 주행 프레임의
+            #   31~33% 가 그런 상태였고, t=13.1s 에는 콘 11개가 보이는데
+            #   차선을 따라 +42(풀락)로 꺾었다. 각진 벽 근처에서 차선
+            #   검출이 헛것을 잡으면 그대로 코스를 이탈한다.
+            #   라이다에 콘이 남아 있으면 아직 라바콘 구간이다.
+            lidar_busy = obs.cone.lidar_cones >= self.config.cone_exit_min_lidar
+            gone = (obs.cone.orange_px < self.config.cone_min_orange_px
+                    and not lidar_busy)
+            # ※ gate_lost 는 라이다로 막지 않는다. 벽면 보관 무더기는 콘이
+            #   많아도 통로가 아니다 — 게이트가 cone_gate_lost_exit_s 동안
+            #   한 번도 안 서면 그건 통로가 아니라는 뜻이다.
+            #   (게이트가 깜빡이는 문제는 가상 게이트가 이미 해결했다:
+            #    구간 내 게이트 성립 52% → 93.5%)
+            # ★ 다만 **영영 갇히면 안 된다**. 벽면 보관 무더기처럼 라이다에
+            #   콘이 계속 잡히는데 통로가 아닌 상황이 있을 수 있다.
+            #   구간 제한(규정 p.25 1분)의 절반을 넘기면 라이다와 무관하게
+            #   나간다 — 갇힘이 실격이라 이탈보다 나쁘다.
+            if obs.now - self._cone_entered_at > self.config.cone_max_dwell_s:
+                gate_lost = True
             if gate_lost or self._cone_out.update(gone, obs.now):
                 self._cone_in.reset()
                 reason = "gate lost" if gate_lost else "cones gone"
@@ -426,9 +607,26 @@ class RaceFSM:
 
         if self.state in (Mode.AVOID_STATIC, Mode.OVERTAKE):
             if self.maneuver_done:
+                aborted = self.maneuver_aborted
                 self.maneuver_done = False
+                self.maneuver_aborted = False
                 self._target_in.reset()
-                ctx.log(obs.now, f"{self.state.value} complete")
+                self._target_far_x = 0.0
+                if aborted:
+                    # ★ 타임아웃 탈출 — 타겟은 아직 거기 있다. 그대로 돌려
+                    #   보내면 2틱 만에 재진입해 리밋사이클이 된다 (0820 감사).
+                    #   쿨다운 동안은 차선주행으로 지나가되, 다시 걸리지
+                    #   않게 트리거를 잠근다.
+                    self._maneuver_cooldown_until = (
+                        obs.now + self.config.maneuver_cooldown_s
+                    )
+                    ctx.log(
+                        obs.now,
+                        f"{self.state.value} 타임아웃 탈출 → 차선주행 "
+                        f"({self.config.maneuver_cooldown_s:.0f}s 재진입 금지)",
+                    )
+                else:
+                    ctx.log(obs.now, f"{self.state.value} complete")
                 return self._to(Mode.LANE_DRIVE, "pass complete", ctx, obs.now)
             # 정지 물체인 줄 알았는데 움직이면 추월 규정이 적용된다. 승격시킨다.
             if self.state is Mode.AVOID_STATIC and self._target_is_moving(obs):
@@ -445,6 +643,30 @@ class RaceFSM:
                 # 게이트는 카메라 또는 라이다 어느 쪽이든 인정 (0818 저녁 —
                 # 라이다 쌍은 미터 직접 관측이라 카메라보다 먼저·자주 선다).
                 cone_hit = cone_hit and gate_seen
+            # ★ 라이다만으로도 진입한다 (0821 밤). 나가는 판정에 라이다를
+            #   넣은 것(cone_exit_min_lidar)과 대칭이다.
+            #   옛 코드는 **카메라 주황 픽셀**이 병목이라 두 가지가 생겼다:
+            #     · 라이다에 콘이 0개인데 진입 (cone_0821_0407 t=12.7/14.2/
+            #       35.9/38.0) — 따라갈 통로가 없는 채로 콘 모드가 된다.
+            #     · 진입이 늦다. 실측 cone_0821_0356 t=32.3 은 최근접 콘
+            #       47cm 에서 들어갔는데 콘은 0.69초 전 95cm 에서 이미 보였다.
+            #   진입이 늦으면 정렬할 거리가 없다 — 실측 진입각이 중앙 13.5°,
+            #   38%가 20°를 넘는데, R1.5 통로에서 20°를 지우려면 1.11m 가
+            #   필요하고 그동안 19.3cm 가 밀린다 (여유는 18.5cm 뿐).
+            #   실측 효과: 진입 16~24회 → 7~9회(떨림 감소), 콘 0개 진입 소멸.
+            lidar_solid = (
+                obs.cone.lidar_cones >= self.config.cone_enter_min_lidar
+                and obs.cone.lidar_gate_valid
+            )
+            cone_hit = cone_hit or lidar_solid
+            # ★ 그리고 **라이다에 콘이 하나도 없으면 진입하지 않는다**
+            #   (0821 밤 2차). 위를 OR 로 두니 카메라 단독 진입이 그대로
+            #   남아, 실측(cone_0821_0443)에서 진입 10회 중 **4회가 라이다
+            #   콘 0개** 였다. 통로가 안 보이는데 콘 모드로 들어가면 따라갈
+            #   게 없어 조향이 폴백(직전 목표 유지)으로 흐른다.
+            #   카메라가 먼저 보는 경우를 살리려 문턱은 낮게 둔다(2개).
+            if obs.cone.lidar_cones < self.config.cone_enter_require_lidar:
+                cone_hit = False
             if self._cone_in.update(cone_hit, obs.now):
                 self._cone_out.reset()
                 self._cone_entered_at = obs.now
@@ -459,14 +681,25 @@ class RaceFSM:
             #   2틱이면 AVOID_STATIC 이 서는데, 콘 진입(3틱+게이트)보다 빨라
             #   라바콘 구간 입구에서 회피 기동으로 콘 열에 처박힌다. 좌우 두 줄
             #   게이트는 '장애물'이 아니라 '지나갈 통로'라는 확정 신호다.
-            target = obs.lidar.nearest_front()
+            target = self._front_target(obs)
             blocked = (
                 self.maneuvers_enabled
                 and not gate_seen
                 and target is not None
-                and target.x <= self.config.target_trigger_dist_m
+                and obs.now >= self._maneuver_cooldown_until
             )
-            if self._target_in.update(blocked, obs.now):
+            # 접근 확인 — 진입 창이 열려 있는 동안 본 가장 먼 x 를 기억한다
+            if blocked:
+                self._target_far_x = max(self._target_far_x, target.x)
+            else:
+                self._target_far_x = 0.0
+            approached = (
+                self.config.target_approach_min_m <= 0.0
+                or (target is not None
+                    and self._target_far_x - target.x
+                    >= self.config.target_approach_min_m)
+            )
+            if self._target_in.update(blocked, obs.now) and approached:
                 moving = self._target_is_moving(obs)
                 mode = Mode.OVERTAKE if moving else Mode.AVOID_STATIC
                 ctx.log(
@@ -480,6 +713,49 @@ class RaceFSM:
         return self._stay("no transition")
 
     # ──────────────────────────────────────────────────────────────
+    def _front_target(self, obs: Observation) -> Optional[TrackedObject]:
+        """전방에서 '내 차로를 막고 있는' 가장 가까운 물체.
+
+        차선이 유효하면 차로를 따라 휘는 코리도로 판정한다
+        (FSMConfig.lane_corridor_half_m 주석에 실측 근거).
+        차선이 없으면 옛 직사각형 코리도로 되돌아간다.
+        """
+        cfg = self.config
+        lane = obs.lane
+        if not (cfg.lane_corridor_enabled and lane.valid):
+            # 차선이 없으면 옛 직사각형으로 폴백하되 **거리창은 같이 쓴다**.
+            # nearest_front 의 조건은 x>0.15, |y|≤0.45 뿐이라 상한이 없어,
+            # 코너 바깥 벽이 2~2.5m 앞에 있어도 타겟이 된다. 진입 지속을
+            # 0.40s 로 낮춘 지금은 '차선 잠깐 잃음 + 코너 벽'이 곧바로
+            # 회피 오발동으로 승격된다 (0820 밤 감사).
+            ob = obs.lidar.nearest_front()
+            if (
+                ob is None
+                or ob.x < cfg.target_min_dist_m
+                or ob.x > cfg.target_trigger_dist_m
+            ):
+                return None
+            return ob
+
+        # 차로 중심의 횡위치 [m] (차량 기준 y+ = 좌).
+        #   offset_px > 0 = 목표선이 화면 중앙보다 오른쪽 = 차로가 내 오른쪽
+        y0 = -lane.offset_px / cfg.bev_px_per_m_lat
+        # heading_slope 는 BEV 픽셀 기울기(dx_px/df_px)다. 가로·세로 축척이
+        # 달라 미터 기울기로 환산해야 한다: (dx/810)/(df/730) = slope·730/810
+        slope_m = lane.heading_slope * (cfg.bev_px_per_m_fwd / cfg.bev_px_per_m_lat)
+
+        best: Optional[TrackedObject] = None
+        for ob in obs.lidar.objects:
+            # x 하한 0.15m 는 nearest_front 와 같은 근거(자기 반사) — types 주석
+            if ob.x < cfg.target_min_dist_m or ob.x > cfg.target_trigger_dist_m:
+                continue
+            y_center = y0 - slope_m * ob.x     # + 기울기 = 전방에서 우측으로
+            if abs(ob.y - y_center) > cfg.lane_corridor_half_m:
+                continue
+            if best is None or ob.x < best.x:
+                best = ob
+        return best
+
     def _target_is_moving(self, obs: Observation) -> bool:
         """전방 타겟이 방해차량(주행)인가 고정장애물(정지)인가.
 
@@ -491,7 +767,7 @@ class RaceFSM:
         주행 타겟용 컨트롤러가 매 프레임 재평가를 하므로 정지 타겟에도 안전하고,
         반대로 오판했을 때의 손해(추월 방향 위반 = 차선이탈 판정)가 더 크기 때문.
         """
-        target = obs.lidar.nearest_front()
+        target = self._front_target(obs)
         if target is None:
             return False
         if obs.ego_speed_mps < self.config.moving_min_ego_mps:

@@ -38,6 +38,8 @@ from typing import List, Optional, Tuple
 import cv2
 import numpy as np
 
+from . import lamp_pitch
+
 
 # ──────────────────────────────────────────────────────────────────
 @dataclass
@@ -144,12 +146,18 @@ class WatcherConfig:
     switch_min_mult: float = 1.6
     switch_max_mult: float = 6.5
     # 같은 하우징이면 세로가 거의 같다 (램프 높이 배수)
-    row_tol_mult: float = 1.8
+    row_tol_mult: float = lamp_pitch.PAIR_ROW_TOL_MULT
     # 같은 신호등의 램프끼리는 크기가 비슷하다
-    size_ratio_max: float = 2.4
-    # ── 직좌 동시신호 (두 점) ──
-    pair_gap_min_mult: float = 0.9
-    pair_gap_max_mult: float = 2.2
+    size_ratio_max: float = lamp_pitch.PAIR_SIZE_RATIO_MAX
+    # ── 직좌 동시신호 (두 점) ── 창은 perception/lamp_pitch.py 단일 출처.
+    # ★ 0819: 상한 2.2 → 1.75. 2.2 는 하한 0.9 의 2.44배라 인접(1피치)뿐
+    #   아니라 **2피치 떨어진 쌍**까지 통과시켰다. 직좌는 3·4번 = 인접
+    #   한 칸이므로 2피치 쌍은 물리적으로 불가능한 오검 표면이었다.
+    pair_gap_min_mult: float = lamp_pitch.PAIR_GAP_MIN_MULT
+    pair_gap_max_mult: float = lamp_pitch.PAIR_GAP_MAX_MULT
+    # 직좌 쌍의 양옆 여백 — 4번(초록)은 유닛 오른쪽 끝이고 3번 왼쪽의
+    # 2번(노랑)은 직좌에서 꺼져 있다. 같은 줄 점등체 열은 신호등이 아니다.
+    pair_neighbour_clear_mult: float = lamp_pitch.PAIR_NEIGHBOUR_CLEAR_MULT
     # 두 점 왼쪽에 '꺼진 램프' 자리가 있어야 한다 (하우징 구조 확인).
     # 이게 0817 책상 반사 오검을 죽인 게이트다.
     require_dark_left: bool = True
@@ -201,25 +209,33 @@ class SignalWatcher:
         frac = float(np.count_nonzero(strip < c.dark_left_v_max)) / strip.size
         return frac >= c.dark_left_frac_min
 
+    def _pair_window(self) -> lamp_pitch.PairWindow:
+        c = self.config
+        return lamp_pitch.PairWindow(
+            gap_min_mult=c.pair_gap_min_mult,
+            gap_max_mult=c.pair_gap_max_mult,
+            size_ratio_max=c.size_ratio_max,
+            row_tol_mult=c.row_tol_mult,
+            neighbour_clear_mult=c.pair_neighbour_clear_mult,
+        )
+
     def _find_pair(
         self, blobs: List[LampBlob], gray: Optional[np.ndarray]
     ) -> Optional[Tuple[LampBlob, LampBlob]]:
-        c = self.config
-        s = sorted(blobs, key=lambda b: b.cx)
-        for i in range(len(s) - 1):
-            a, b = s[i], s[i + 1]
-            big, small = max(a.size, b.size), min(a.size, b.size)
-            if small <= 0 or big / small > c.size_ratio_max:
-                continue
-            gap = b.cx - a.cx
-            if not (c.pair_gap_min_mult * big <= gap <= c.pair_gap_max_mult * big):
-                continue
-            if abs(a.cy - b.cy) > c.row_tol_mult * max(a.h, b.h):
-                continue
-            if not self._dark_left_ok(gray, a):
-                continue
-            return a, b
-        return None
+        """직좌 동시점등 쌍. 기하는 lamp_pitch 가, 하우징 구조는 여기가 본다."""
+        cands = [
+            lamp_pitch.LampCandidate(cx=b.cx, cy=b.cy, size=b.size, h=b.h)
+            for b in blobs
+        ]
+        found = lamp_pitch.find_adjacent_pair(
+            cands,
+            self._pair_window(),
+            accept=lambda i, _j: self._dark_left_ok(gray, blobs[i]),
+        )
+        if found is None:
+            return None
+        i, j = found
+        return blobs[i], blobs[j]
 
     # ── 메인 ──────────────────────────────────────────────────────
     def update(

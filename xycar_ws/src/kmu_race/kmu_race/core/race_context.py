@@ -42,7 +42,17 @@ class LapTrackerConfig:
     #   출발 대기 시에도 6~8px (run4 구 카메라의 32px 과는 딴판).
     #   크기로는 근/원거리 분리가 안 되므로 오검 억제는 검출기의 링·구조
     #   게이트와 LapTracker 의 min_gap_s 가 담당한다 (동 bag 오검 0 실측).
-    min_gantry_span_px: int = 5
+    # 트랙별 교정값이다. 카메라·조명·겐트리 크기에 따라 달라지므로 코드가 아니라
+    # **params.yaml 의 min_gantry_span_px** 로 넣는다 (race_node 가 주입).
+    # 여기 기본값은 시험·오프라인 도구용 중립값이다.
+    # 0820 실측(run_0820_0019, --sweep-gantry): 이 실내 배경에서 겐트리가
+    # 6844/6873 프레임(99.6%)에 잡혀 5 로는 1899 프레임이 목격으로 세어졌다.
+    # 목격이 정확히 2회 나오는 구간 135~184 → 트랙 설정값 163.
+    # ★ 지표 변경 (0820 저녁): 이 값이 재는 대상은 이제 초록 블롭 폭이 아니라
+    #   **구조 검증된 4구 하우징의 가로폭**이다 (SignalReading.lap_marker_px).
+    #   run_0820_1821 실측 겐트리 84~124px → 40 은 '봤다'의 하한이자 원거리
+    #   오검 배제용 여유 게이트다. 옛 163 은 블롭 축척의 값이라 무의미하다.
+    min_gantry_span_px: int = 40
     # 목격 확정에 필요한 연속 가시 시간 [s].
     # ★ 프레임 수가 아니라 '시간'이다 — 실차는 50Hz 제어 틱(카메라 프레임을
     #   ~1.7회 재소비)이고 리플레이는 30fps 카메라 프레임이라, 프레임 수 기준
@@ -51,7 +61,14 @@ class LapTrackerConfig:
     # 0817 실측 하향(0.10→0.06): 출발 대기 거리에서 검출 스트릭이 3프레임
     # (0.066s@30fps)까지 짧아진다 — 0.06 이면 3연속 프레임에 확정되면서
     # 1~2프레임 플리커는 여전히 걸러진다 (50Hz 실차 틱으로는 3틱).
-    confirm_s: float = 0.06
+    # ★ 0.06 → 0.10 (0820 저녁, 랩 마커를 lap_marker_px 로 바꾸면서 재산출):
+    #   같은 bag 에서 겐트리 접근 중 연속 검출은 4~18프레임(0.10~0.57s)인데
+    #   비겐트리 오검은 **최장 2프레임(0.036s)** 이다. 0.10 이면 2.8배 여유로
+    #   오검을 자르면서 목격은 t192.19 에 그대로 확정된다 (실측 목격 1/오검 0).
+    #   0.10 은 10Hz 샘플링에서 경계에 정확히 걸려 부동소수점으로 갈린다 —
+    #   0.09 로 두면 30fps 에서 4프레임(0.100s)에 확정되고 오검(최장 2프레임
+    #   =0.036s)과는 2.8배 여유가 유지된다.
+    confirm_s: float = 0.09
     # 목격이 끝났다고 보기까지 필요한 연속 미검출 시간 [s]
     release_s: float = 0.40
     # 직전 목격으로부터 최소 이 시간(s)이 지나야 새 목격으로 센다.
@@ -68,6 +85,27 @@ class LapTrackerConfig:
     #   보충 발화 시각이 실제 통과와 1s 이내로 일치. 드리프트 여유는
     #   실측 1.1°/min × 4분 ≈ 4.4° < 5°. (360 이상은 금지 — 영원히 안 참)
     yaw_fill_deg: float = 355.0
+    # ── 제3 채널: 라바콘 구간 보충 랩 (0820 밤 신설) ──────────────────
+    # 왜 필요한가 — 본선 설정 실주행(race_0820_2119, 183초)에서 완주 판정
+    # 수단이 **0개**였다:
+    #   · 목격 채널: sig 가 190/190 샘플 UNKNOWN. 전 프레임 탐색 결과 초록
+    #     램프 크기 블롭이 2프레임(10×6px)뿐 — 차가 겐트리를 제대로 본 적이
+    #     없다 (직전 bag 은 886프레임 / 최대 40×34px).
+    #   · 요 채널: IMU 하드웨어 사망으로 yaw 가 영구히 0 → 355° 영원히 미달.
+    # 그래서 lap 이 1/3 에 고정됐고 3바퀴 FINISH 가 성립할 수 없었다.
+    #
+    # 라바콘 구간은 한 바퀴에 정확히 한 번 지나는 트랙 고유 구간이고, 같은
+    # 주행에서 **두 번 다 깨끗이 잡혔다**(t9.2~26.1 / t101.0~117.8, 각 16.9초,
+    # 조향 포화 0%). 겐트리보다 훨씬 견고한 관측이다. 그래서 '충분히 오래
+    # 머문 라바콘 구간을 빠져나온 것'을 랩 경계로 쓴다.
+    #
+    # 안전장치 셋:
+    #   ① 최소 체류 시간 — 짧은 오진입은 세지 않는다 (같은 주행 t41.2 에
+    #      0.8초짜리 가짜 진입이 실제로 있었다)
+    #   ② min_gap_s 공유 — 목격 채널과 같은 15초 중복 차단
+    #   ③ 보충일 뿐 — 진짜 목격이 서면 그쪽이 앵커를 갱신한다
+    cone_fill_enabled: bool = True
+    cone_fill_min_dwell_s: float = 5.0
 
 
 @dataclass
@@ -87,6 +125,38 @@ class LapTracker:
     _last_close_at: float = -1e9
     _in_sighting: bool = False
     _yaw_at_last_sighting: float = 0.0
+    cone_filled: int = 0                 # 콘 보충으로 오른 랩 수 (진단용)
+    _cone_since: Optional[float] = None  # 현재 콘 구간 진입 시각
+
+    def note_cone_section(self, *, in_cone: bool, now: float) -> bool:
+        """라바콘 구간 체류를 알려 준다. 보충 랩이 서면 True.
+
+        FSM 이 CONE_DRIVE 에 있는 동안 매 틱 in_cone=True 로 부른다.
+        구간을 **빠져나오는 순간** 체류 시간을 보고 랩을 보충한다
+        (cone_fill_min_dwell_s 주석에 실측 근거).
+        """
+        if not self.config.cone_fill_enabled:
+            self._cone_since = None
+            return False
+        if in_cone:
+            if self._cone_since is None:
+                self._cone_since = now
+            return False
+        # 구간 이탈 시점
+        since, self._cone_since = self._cone_since, None
+        if since is None:
+            return False
+        if (now - since) < self.config.cone_fill_min_dwell_s:
+            return False                       # ① 짧은 오진입은 무시
+        if self.sightings < 1:
+            return False                       # 출발 기준선 전이면 세지 않는다
+        if (now - self.last_sighting_at) < self.config.min_gap_s:
+            return False                       # ② 목격 채널과 중복 차단
+        self.sightings += 1
+        self.cone_filled += 1
+        self.last_sighting_at = now
+        self._in_sighting = False
+        return True
 
     def update(self, *, gantry_span_px: int, now: float, yaw_deg: float) -> bool:
         """한 프레임 갱신. 새 목격(또는 요 보충 랩)이 확정되면 True.
@@ -148,11 +218,23 @@ class LapTracker:
         으로 출발 → 4바퀴를 돌아야 FINISH). 출발 = 신호등 앞 = 목격 1 이
         규정상 자명하므로 여기서 기준선을 확정한다 (요 보충 랩의 기준도 됨).
         """
+        # ★ 0820 밤 감사 — 앵커(last_sighting_at)는 **항상** 출발 시각으로
+        #   다시 찍는다. 옛 코드는 세 줄이 모두 `sightings == 0` 안에 있었다.
+        #   WAIT_GREEN 은 매 틱 update() 를 부르고 차는 겐트리 바로 앞에 서
+        #   있으므로 목격 1이 '대기 시작' 시각에 확정되고 _in_sighting 이
+        #   래치된다. hold_start_baseline 은 sightings 만 1로 캡할 뿐 앵커를
+        #   갱신하지 않아, 대기가 min_gap_s(15s)보다 길면 앵커가 그만큼 낡는다.
+        #   그 상태로 출발 직후 하우징 검출이 release_s(0.40s) 끊겼다
+        #   confirm_s 재획득되면 **그 자리에서 목격 2** 가 서고, 진짜 랩3
+        #   목격이 4번째가 되어 **2바퀴째 끝에 FINISH** = 미완주 실격이다.
+        #   IMU 사망으로 요 교차검증도 없어 이 오계수를 잡아 줄 채널이 없다.
+        #   랩을 잃지는 않는다 — 이미 1이면 1 그대로고, 다음 진짜 목격은
+        #   35~45s 뒤라 min_gap_s 가 정상 작동한다.
         if self.sightings == 0:
             self.sightings = 1
-            self.last_sighting_at = now
-            self._yaw_at_last_sighting = yaw_deg
-            self._in_sighting = True
+        self.last_sighting_at = now
+        self._yaw_at_last_sighting = yaw_deg
+        self._in_sighting = True
 
     def hold_start_baseline(self, *, yaw_deg: float) -> None:
         """출발 대기(WAIT_GREEN) 중 매 틱 호출 — 출발 전 상태를 고정한다.
@@ -199,6 +281,9 @@ class RaceContext:
     lap: LapTracker = field(default_factory=LapTracker)
 
     race_started_at: Optional[float] = None
+    # 출발 직후 이만큼은 '랩 목격 없음'이 정상이라 압박 가드를 유예한다 [s].
+    # 한 바퀴 최단이 35~45s 이므로 60 이면 첫 바퀴를 통째로 덮는다.
+    no_lap_pressure_grace_s: float = 60.0
     state_entered_at: float = 0.0
     stop_reason: str = ""
 
@@ -208,6 +293,18 @@ class RaceContext:
 
     # 좌회전 신호를 실제로 본 랩 (진단/로그용)
     left_signal_seen_on_lap: Optional[int] = None
+
+    # ── 규정 추론: 좌회전이 어느 랩에 나오는가 ──────────────────────
+    # 규정 p.35 "좌회전 신호는 두 바퀴, 또는 세 바퀴(마지막)째 나옴 (랜덤)"
+    # — 즉 **정확히 한 번** 나온다. 따라서 랩2 접근에서 겐트리를 충분히
+    # 오래 또렷이 보고도 직좌가 아니었다면, 좌회전은 랩3 에 있는 것이
+    # 규정상 확정이다.
+    #
+    # ⚠️ 이 추론은 '못 봤다'가 아니라 '보고서 아니었다'일 때만 성립한다.
+    #    랩2 에 좌회전이 떴는데 검출을 놓친 경우와 구분되어야 하므로,
+    #    겐트리가 또렷한(span 게이트 통과) 프레임을 셈해 근거로 쓴다.
+    lap2_clear_frames: int = 0
+    arrow_ruled_out_on_lap2: bool = False
 
     # 미션 수행 이력 (로그 및 회차 간 비교용)
     events: List[str] = field(default_factory=list)
@@ -234,6 +331,13 @@ class RaceContext:
         # ×1.3 이 걸린다 ("40%" 로 돌린다고 믿었는데 실제 52%, 0818 저녁 감사).
         if TOTAL_LAPS > 3:
             return 0.0
+        # ★ 랩을 한 번도 못 센 상태에서 '남은 바퀴'를 추정하면 안 된다
+        #   (0820 감사). current_lap 이 1 에 고정되면 laps_left=3 → per_lap
+        #   =(240−t)/3 → t=135s 부터 압박 1.0 고정 → LANE_DRIVE 속도 ×1.30 이
+        #   후반 내내 걸린다. 랩 카운터가 죽었을 때 가속하는 것은 근거 없는
+        #   위험이므로 압박을 0 으로 둔다 (이탈 손실 > 따라잡기 기대이익).
+        if self.lap.sightings <= 1 and self.elapsed(now) > self.no_lap_pressure_grace_s:
+            return 0.0
         laps_left = max(0, TOTAL_LAPS - self.lap.current_lap + 1)
         if laps_left == 0:
             return 0.0
@@ -251,19 +355,65 @@ class RaceContext:
         return (comfortable - per_lap) / (comfortable - tight)
 
     # ── 지름길 판단 ────────────────────────────────────────────────
-    def may_take_shortcut(self, signal_allows_left: bool) -> bool:
+    def note_lap2_gantry_frame(self, *, gantry_clear: bool, saw_left: bool) -> None:
+        """랩2 결정 창에서 겐트리를 본 프레임 하나를 기록한다.
+
+        gantry_clear: 겐트리 블롭이 span 게이트를 넘어 '또렷이 보인다'
+        saw_left:     그 프레임에서 좌회전(직좌)이 읽혔다
+        """
+        if self.lap.current_lap != 2 or self.arrow_ruled_out_on_lap2:
+            return
+        if saw_left:
+            # 한 프레임이라도 직좌를 봤으면 음성 관측이 아니다 — 무효화.
+            self.lap2_clear_frames = 0
+            return
+        if gantry_clear:
+            self.lap2_clear_frames += 1
+
+    def conclude_lap2_observation(self, *, min_frames: int, now: float) -> None:
+        """랩2 결정 창이 닫힐 때 호출 — 음성 관측이 충분했으면 랩3 을 확정한다.
+
+        호출 시점(새 목격 확정 직후)에는 `lap.current_lap` 이 이미 3 으로
+        올라가 있다. 그래서 여기서 랩을 다시 보면 안 된다 — 랩2 라는 근거는
+        `lap2_clear_frames` 자체가 들고 있다 (note_lap2_gantry_frame 이
+        랩2 에서만 증가시킨다).
+        """
+        if self.arrow_ruled_out_on_lap2:
+            return
+        if self.lap2_clear_frames >= min_frames:
+            self.arrow_ruled_out_on_lap2 = True
+            self.log(
+                now,
+                f"lap2 clear x{self.lap2_clear_frames} → 좌회전은 랩3 (규정 p.35)",
+            )
+
+    def may_take_shortcut(
+        self, signal_allows_left: bool, *, infer_lap3: bool = False
+    ) -> bool:
         """지금 지름길로 들어가도 되는가.
 
         규정 p.6/p.35: 4구 신호등에서 좌회전 신호를 인식한 뒤 지름길 주행 가능.
                    좌회전 신호는 2바퀴 또는 3바퀴(마지막)째에 랜덤으로 나온다.
                    3바퀴 중 1번만 통과할 수 있다.
         기회는 랜덤하게 딱 한 번 오므로, 보이면 무조건 잡는다.
+
+        infer_lap3: 랩2 음성 관측이 확정된 상태에서 랩3 에 도달하면, 검출이
+            침묵해도 규정상 좌회전이 켜져 있다고 보고 진입한다. **기본 꺼짐**
+            — 추론이 틀리는 유일한 경로(랩2 에 떴는데 놓쳤고, 그런데도 랩2
+            음성 관측이 성립한 경우)는 무신호 진입이 되고, 규정에 그 벌칙이
+            기재돼 있지 않아 심판 재량 영역이다. 켜는 판단은 운영자 몫이다.
         """
         if self.shortcut_used:
             return False
-        if not signal_allows_left:
+        if self.lap.current_lap not in (2, 3):
             return False
-        return self.lap.current_lap in (2, 3)
+        if signal_allows_left:
+            return True
+        return bool(
+            infer_lap3
+            and self.arrow_ruled_out_on_lap2
+            and self.lap.current_lap == 3
+        )
 
     def commit_shortcut(self, now: float) -> None:
         self.shortcut_used = True

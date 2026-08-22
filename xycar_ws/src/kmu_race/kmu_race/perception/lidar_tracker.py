@@ -135,7 +135,16 @@ class LidarTracker:
         width = math.hypot(xs[-1] - xs[0], ys[-1] - ys[0])
         if width > cfg.max_cluster_width_m:
             return []
-        return [(sum(xs) / len(xs), sum(ys) / len(ys), width)]
+        # ★ 대표점 = 중심이 아니라 **가장 가까운 점** (0820 저녁).
+        #   호(arc)처럼 각도로 넓게 퍼진 클러스터의 중심은 물체가 있는 자리가
+        #   아니다 — 차 양옆을 감싸는 점들의 평균은 원점 근처로 떨어져,
+        #   모든 점이 min_range(0.30m) 밖인데도 중심 거리가 0.16m 로 나온다.
+        #   run_0820_1821 실측: 전방 코리도 트리거의 최근접 x 가 0.15~0.28m 에
+        #   몰려 있었는데, 그 거리는 차체 반경 안쪽이라 물리적으로 '전방
+        #   장애물'일 수가 없다(진짜라면 이미 충돌).
+        #   충돌 판단에 의미 있는 점도 최근접점이므로 대표점을 그리 옮긴다.
+        near = min(pts, key=lambda p: p[2])
+        return [(near[0], near[1], width)]
 
     # ── 트래킹 ────────────────────────────────────────────────────
     def _associate(

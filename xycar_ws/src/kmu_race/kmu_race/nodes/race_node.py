@@ -23,7 +23,7 @@ from __future__ import annotations
 import math
 import time
 from dataclasses import replace
-from typing import Optional
+from typing import List, Optional
 
 import numpy as np
 import rclpy
@@ -77,10 +77,29 @@ class RaceNode(Node):
         # (0.5 저속 → 0.75 → 1.0). 조향은 건드리지 않는다: 저속에서도 같은
         # 곡률을 그리려면 조향각은 그대로여야 한다. 본선은 반드시 1.0.
         self.declare_parameter("speed_scale", 1.0)
+        # 구간별 목표속도 — 트랙에서 바로 조절하기 위한 노브.
+        # 0 이하면 코드 기본값(SpeedConfig)을 그대로 쓴다.
+        self.declare_parameter("cone_speed", 0.0)
+        self.declare_parameter("lane_speed", 0.0)
         # 시운전 스위치 (core/race_fsm.py 주석) — 본선은 둘 다 기본값!
         self.declare_parameter("manual_start", False)
+        # IMU 를 아예 없는 것으로 치고 달린다. 이 차의 IMU 는 0820 실측에서
+        # 자이로·가속도·쿼터니언이 전부 정확히 0 이었다(중력조차 안 보임) — 즉
+        # 센서를 못 읽고 빈 메시지만 50Hz 로 나온다. 요 적산이 0 에 묶이므로
+        # 요 보충 랩·지름길 완료 판정은 어차피 동작하지 않는다. 이 값을 False 로
+        # 두면 그 사실을 알고 가는 것으로 보고 경고를 반복하지 않는다.
+        self.declare_parameter("imu_enabled", True)
+        # 겐트리 목격 임계 [px] — 트랙별 교정값. replay --sweep-gantry 로 실측한다.
+        # 0820 실측(run_0820_0019): 이 실내 배경에서 겐트리가 99.6% 프레임에 잡혀
+        # 코드 기본값 5 로는 1899 프레임이 목격으로 세어졌다 (한 바퀴가 여러 바퀴로).
+        # 목격이 정확히 2회 나오는 구간 135~184 → 중앙 163.
+        self.declare_parameter("min_gantry_span_px", 40)
         self.declare_parameter("maneuvers_enabled", True)
         self.declare_parameter("shortcut_enabled", True)
+        # 규정 p.35 추론: 랩2 에서 겐트리를 또렷이 보고도 직좌가 아니었으면
+        # 좌회전은 랩3 확정 → 랩3 에서 판독이 침묵해도 지름길로 들어간다.
+        # 기본 봉인. 진짜 직좌 bag 으로 페어 검출을 검증한 뒤에만 켤 것.
+        self.declare_parameter("lap3_infer_enabled", False)
         # 시운전용: 3 이 아니면 랩 목표를 바꾼다 (99 = 자진 FINISH 없음 —
         # 유령 랩이 남아 있어도 데이터 수집 주행이 안 끊긴다). 본선은 3!
         self.declare_parameter("total_laps", 3)
@@ -96,10 +115,18 @@ class RaceNode(Node):
         self.speed_to_mps = float(self.get_parameter("speed_to_mps").value)
         self.input_timeout = float(self.get_parameter("input_timeout_s").value)
         self.speed_scale = float(self.get_parameter("speed_scale").value)
+        self.cone_speed = float(self.get_parameter("cone_speed").value)
+        self.lane_speed = float(self.get_parameter("lane_speed").value)
         self.manual_start = bool(self.get_parameter("manual_start").value)
+        self.imu_enabled = bool(self.get_parameter("imu_enabled").value)
         self.maneuvers_enabled = bool(self.get_parameter("maneuvers_enabled").value)
         self.signal_exposure = int(self.get_parameter("signal_exposure").value)
         self.drive_exposure = int(self.get_parameter("drive_exposure").value)
+        if not self.imu_enabled:
+            self.get_logger().warn(
+                "⚠️ imu_enabled=False — IMU 를 무시한다. 요 적산 0 고정, "
+                "요 보충 랩·지름길 좌회전 완료 판정 없음 (겐트리 목격만으로 랩 계수)"
+            )
         if self.manual_start:
             self.get_logger().warn(
                 "⚠️ 시운전: manual_start=True — /kmu_race/go 수신 시 출발 (본선 금지!)"
@@ -119,6 +146,10 @@ class RaceNode(Node):
         self.lane_det = LaneDetector()
         self.cone_det = ConeDetector()
         self.lidar_trk = LidarTracker()
+        # 워처 go 이벤트 유지창 — 위 _on_image 주석 참조. 0.30s 면 30fps 에서
+        # 9프레임, 50Hz 제어로 15틱이라 _green(3틱) 이 확실히 본다.
+        self.WATCHER_GO_HOLD_S = 0.30
+        self._watcher_go_until = -1e9
         # 색을 쓰지 않는 위치 기반 신호 판정 (perception/signal_watcher.py)
         self.watcher = SignalWatcher()
         self.exposure = CameraExposure()
@@ -126,6 +157,10 @@ class RaceNode(Node):
 
         # ── core ─────────────────────────────────────────────────
         self.ctx = RaceContext()
+        # 트랙 교정값을 랩 트래커에 주입한다 (코드 기본값은 시험용 중립값).
+        self.ctx.lap.config.min_gantry_span_px = int(
+            self.get_parameter("min_gantry_span_px").value
+        )
         self.fsm = RaceFSM()
         self.fsm.maneuvers_enabled = self.maneuvers_enabled
         self.fsm.shortcut_enabled = bool(self.get_parameter("shortcut_enabled").value)
@@ -138,8 +173,30 @@ class RaceNode(Node):
             )
         if not self.fsm.shortcut_enabled:
             self.get_logger().warn("⚠️ 시운전: shortcut_enabled=False — 지름길 잠금 (본선 금지!)")
+        self.fsm.config.lap3_infer_enabled = bool(
+            self.get_parameter("lap3_infer_enabled").value
+        )
+        if self.fsm.config.lap3_infer_enabled:
+            self.get_logger().warn(
+                "⚠️ lap3_infer_enabled=True — 랩2 음성 관측이 서면 랩3 은 "
+                "판독 없이도 지름길 진입 (규정 p.35 추론, 무신호 진입 리스크 감수)"
+            )
         self.fsm.manual_start_mode = self.manual_start
         self.policy = DrivePolicy(PolicyConfig())
+        # 구간 목표속도 주입 (0 이하면 코드 기본값 유지)
+        _sp = self.policy.config.speed
+        if self.cone_speed > 0.0:
+            _sp.base["CONE_DRIVE"] = self.cone_speed
+        if self.lane_speed > 0.0:
+            _sp.base["LANE_DRIVE"] = self.lane_speed
+            _sp.max_speed = max(_sp.max_speed, self.lane_speed)
+        self.get_logger().info(
+            f"속도: 차선 {_sp.base['LANE_DRIVE']:.0f}"
+            f"({_sp.base['LANE_DRIVE']*self.speed_to_mps:.2f}m/s) / "
+            f"라바콘 {_sp.base['CONE_DRIVE']:.0f}"
+            f"({_sp.base['CONE_DRIVE']*self.speed_to_mps:.2f}m/s) / "
+            f"상한 {_sp.max_speed:.0f}"
+        )
         self.safety = SafetyMonitor()
 
         # ── 최신 관측 (콜백이 쓰고 타이머가 읽는다) ──────────────
@@ -157,6 +214,17 @@ class RaceNode(Node):
         self._heading_bias_logged = False
         self._last_image_t = 0.0
         self._last_scan_t = 0.0
+        # ── 갇힘 감지 (0821 신설) ──────────────────────────────────
+        # cone_0821_0016 t54~66: 라이다 값(폭 115cm·깊이 58cm·횡편차 +40cm·
+        # 콘 10개)이 12초 동안 **한 글자도 변하지 않았다** = 차가 물리적으로
+        # 못 움직인 것이다. 그런데 조향 −26 이 계속 나갔다. 장면이 안 변하면
+        # 명령을 아무리 보내도 소용없고, 운영자가 그걸 즉시 알아야 한다.
+        self._prev_ranges: Optional[List[float]] = None
+        self._scene_delta: float = 1.0        # 스캔 간 중앙 |Δrange| [m]
+        self._still_since: Optional[float] = None
+        self._stuck: bool = False
+        self._stuck_warned_at: float = -1e9
+        self._last_cmd_speed: float = 0.0
 
         # ── ROS I/O ──────────────────────────────────────────────
         # 콜백 그룹: 서로 다른 콜백은 병렬로, '같은' 콜백은 직렬로.
@@ -269,10 +337,19 @@ class RaceNode(Node):
                 self._pending_go = False
                 wr.go = True
                 self.get_logger().warn("신호 워처 go 래치 해제 — 정면 비었음, 출발")
-            if wr.go or wr.green_left:
+            # ★ 워처 go 는 런 전체에서 정확히 한 프레임만 True 다
+            #   (signal_watcher 의 _fired 원샷). 그런데 FSM 의 _green 은
+            #   **연속 3틱**을 요구한다 — 카메라 33.3ms / 제어 20ms 라 한
+            #   프레임이 소비되는 틱은 1~2회, 절대 3회가 아니다. 즉 이 경로는
+            #   구조적으로 발화할 수 없었다 (0820 감사).
+            #   검출 게이트는 그대로 두고 **이벤트 유지시간만** 늘린다.
+            if wr.go:
+                self._watcher_go_until = self._now() + self.WATCHER_GO_HOLD_S
+            go_live = self._now() < self._watcher_go_until
+            if go_live or wr.green_left:
                 self._signal = replace(
                     self._signal,
-                    watcher_go=wr.go,
+                    watcher_go=go_live,
                     watcher_green_left=wr.green_left,
                     lamp_spacing_px=wr.spacing_px,
                 )
@@ -305,14 +382,25 @@ class RaceNode(Node):
         # 라이다 게이트를 합류 (신선할 때만 — 스캔 10~15Hz vs 영상 30Hz).
         # 미터 단위 직접 관측이라 policy 가 이 쪽을 1순위로 쓴다.
         lg = self._lidar_gate
-        if lg.valid and (self._now() - self._lidar_gate_t) < 0.4:
+        if (self._now() - self._lidar_gate_t) < 0.4:
+            # ★ 게이트가 안 서도 **차 옆 콘 거리는 싣는다** (0821 저녁).
+            #   옛 코드는 lg.valid 일 때만 합류시켰다. 그런데 policy 의
+            #   폴백 경로(게이트도 콘 픽셀도 없을 때)는 바로 그 near_left/right
+            #   로 밀어내기를 한다 — 즉 **그 경로의 밀어내기가 통째로 죽어
+            #   있었다**. 실측(cone_0821_0037) 라바콘 구간 스캔의 16.5% 가
+            #   게이트 미성립인데, 그 동안 옆 콘이 1cm 로 붙어도 아무 반응이
+            #   없었다는 뜻이다.
             self._cone = replace(
                 self._cone,
-                lidar_gate_valid=True,
+                lidar_gate_valid=bool(lg.valid),
                 lidar_gate_depth_m=lg.depth_m,
                 lidar_gate_width_m=lg.width_m,
                 lidar_gate_lateral_m=lg.lateral_m,
                 lidar_cones=lg.cones,
+                lidar_near_left_m=lg.near_left_m,
+                lidar_near_right_m=lg.near_right_m,
+                lidar_cone_pts=lg.points,
+                lidar_gate_age_s=max(0.0, self._now() - self._lidar_gate_t),
             )
 
         self._last_image_t = self._now()
@@ -333,20 +421,73 @@ class RaceNode(Node):
             angle_increment=msg.angle_increment,
             now=self._now(),
         )
+        # 갇힘 감지 — 장면이 안 변하면 차가 못 가고 있는 것이다 (위 주석)
+        try:
+            self._update_stuck(msg.ranges)
+        except Exception as exc:                      # noqa: BLE001
+            self._warn_throttled("stuck", exc)
+
         # 라이다 콘 게이트 (0818 신설) — 카메라와 무관한 제2의 눈.
         # 같은 각도 보정을 그대로 쓴다 (전진축 = 라이다 +124°, 실측 3중 일치).
+        # ★ 직전 스캔의 줄 소속을 물려준다 (LidarGate.near_row_side 주석).
+        #   신선할 때만 — 오래된 값을 잇는 것보다 모른다고 하는 편이 낫다.
+        prev_side = (
+            self._lidar_gate.near_row_side
+            if (self._now() - self._lidar_gate_t) < 0.4
+            else 0
+        )
         try:
             self._lidar_gate = find_cone_gate(
                 msg.ranges,
                 msg.angle_min,
                 msg.angle_increment,
                 angle_offset=self.lidar_trk.config.angle_offset,
+                prev_row_side=prev_side,
             )
         except Exception as exc:                      # noqa: BLE001
             self.get_logger().warn(f"lidar cone gate: {exc}")
             self._lidar_gate = LidarGate()
         self._lidar_gate_t = self._now()
         self._last_scan_t = self._now()
+
+    # 갇힘 판정 상수 — 0820 실측: 정지 구간의 중앙 |Δrange| 는 0.007~0.010,
+    # 주행 중은 0.019~0.111 이다. 0.012 면 둘을 가른다.
+    STUCK_DELTA_M = 0.012
+    STUCK_SECONDS = 2.5
+
+    def _update_stuck(self, ranges) -> None:
+        """연속 스캔의 변화량으로 '차가 못 가고 있다'를 판정한다."""
+        cur = [r for r in ranges]
+        prev, self._prev_ranges = self._prev_ranges, cur
+        if prev is None or len(prev) != len(cur):
+            return
+        diffs = [
+            abs(a - b)
+            for a, b in zip(prev, cur)
+            if math.isfinite(a) and math.isfinite(b) and 0.3 < a < 6.0 and 0.3 < b < 6.0
+        ]
+        if len(diffs) < 30:
+            return
+        diffs.sort()
+        self._scene_delta = diffs[len(diffs) // 2]
+        now = self._now()
+        moving_cmd = self._last_cmd_speed > 0.5
+        if self._scene_delta < self.STUCK_DELTA_M and moving_cmd:
+            if self._still_since is None:
+                self._still_since = now
+            elif now - self._still_since >= self.STUCK_SECONDS:
+                self._stuck = True
+                if now - self._stuck_warned_at >= 2.0:
+                    self._stuck_warned_at = now
+                    self.get_logger().error(
+                        f"⛔ 갇힘 의심 — 라이다 장면이 {now - self._still_since:.1f}초째 "
+                        f"거의 안 변한다 (Δ={self._scene_delta*100:.1f}cm/scan) 인데 "
+                        f"속도 명령 {self._last_cmd_speed:.0f} 이 나가고 있다. "
+                        f"차가 콘·벽에 걸렸을 가능성"
+                    )
+        else:
+            self._still_since = None
+            self._stuck = False
 
     def _apply_exposure(self) -> None:
         """대기 중에는 신호등용 저노출, 주행 중에는 **주행용 고정 노출**.
@@ -448,6 +589,7 @@ class RaceNode(Node):
 
         # policy 가 보고한 기동 종료를 FSM 에 넘겨준다.
         self.fsm.maneuver_done = self.policy.maneuver_done
+        self.fsm.maneuver_aborted = self.policy.maneuver_aborted
 
         transition = self.fsm.step(obs, self.ctx, decision)
         if transition.changed:
@@ -464,6 +606,7 @@ class RaceNode(Node):
         cmd = self.policy.update(self.fsm.state, obs, self.ctx, decision)
         # speed_scale 은 최종 명령에만 곱한다 — 조향은 그대로 (동일 곡률 유지).
         # last_speed(→ego_speed_mps 추정)는 스케일된 실제 명령을 반영한다.
+        self._last_cmd_speed = float(cmd.speed) * self.speed_scale
         self.motor.publish(cmd.steer, cmd.speed * self.speed_scale)
 
         if self.fsm.state is Mode.FINISH and self._last_mode is not Mode.FINISH:
@@ -492,7 +635,8 @@ class RaceNode(Node):
         # 랩·지름길 완료 판정이 전부 무력해진다. 출발 대기 중에 크게 알린다
         # (차를 들고 옮기는 중이면 조용한 3s 창이 안 나온다 — 내려놓고 기다릴 것).
         if (
-            self.fsm.state is Mode.WAIT_GREEN
+            self.imu_enabled
+            and self.fsm.state is Mode.WAIT_GREEN
             and not self._heading.calibrated
             and now - self._calib_warn_t >= 3.0
         ):
@@ -518,8 +662,16 @@ class RaceNode(Node):
                 f"steer={cmd.steer:+6.1f} v={cmd.speed:5.1f} "
                 f"lane={lane_flags} off={ln.offset_px:+5.0f} "
                 f"sig={obs.signal.state.value:<10} "
+                # ★ 랩 마커 진단 (0820 밤). 이번 주행에서 lap 이 1/3 에 고정
+                #   됐는데, 상태줄에 state 만 있어서 '구조는 풀렸는데 점등
+                #   검증에서 잘렸다' 와 '구조 자체가 안 풀렸다' 를 사후에
+                #   구분할 수 없었다. 그 둘은 조치가 완전히 다르다.
+                #   mk = 랩 마커(구조+점등), hs = 하우징 폭(구조만)
+                f"mk={obs.signal.lap_marker_px:<3d} hs={obs.signal.housing_span_px:<3d} "
+                f"{('rj=' + obs.signal.reject_reason[:22]) if obs.signal.reject_reason else '':<26}"
                 f"front={obs.lidar.front_dist:4.2f}m "
                 f"{'LG' if obs.cone.lidar_gate_valid else ''}"
+                f"{' ⛔STUCK' if self._stuck else ''}"
                 f"{'SHORTCUT-USED' if self.ctx.shortcut_used else ''}"
             )
 
@@ -527,6 +679,10 @@ class RaceNode(Node):
         el = self.ctx.elapsed(self._now())
         self.get_logger().warning("=" * 52)
         self.get_logger().warning(f"  경주 종료  주행시간 {el:.2f}s / 240s 제한")
+        self.get_logger().warning(
+            f"  랩 출처 — 목격 {self.ctx.lap.sightings}회 "
+            f"(요 보충 {self.ctx.lap.yaw_filled} / 콘 보충 {self.ctx.lap.cone_filled})"
+        )
         self.get_logger().warning(
             f"  지름길 {'사용' if self.ctx.shortcut_used else '미사용'}"
             + (

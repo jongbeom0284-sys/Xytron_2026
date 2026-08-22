@@ -565,3 +565,253 @@ def test_half_road_constants_match_measured_geometry():
     assert c.half_road_max_px >= 400, "max 330 은 진짜 표본의 절반을 기각한다"
     assert 600 <= c.default_lane_width_px <= 740
     assert c.pair_width_min_px > c.default_lane_width_px * 0.7
+
+
+# ──────────────────────────────────────────────────────────────────
+# 직좌 페어 기하 — detector 경로 회귀 (0819)
+# 이 페어는 gantry_span_px 로도 흘러가므로(detect() 참조), 느슨한 창은
+# 가짜 GREEN_LEFT 뿐 아니라 **유령 랩 목격** 경로이기도 했다.
+# ──────────────────────────────────────────────────────────────────
+def _blob(cx, w=8, cy=200, unlit_ok=True):
+    return dict(x=int(cx - w // 2), y=cy - w // 2, bw=w, bh=w,
+                cx=cx, cy=cy, unlit_ok=unlit_ok)
+
+
+def test_detector_pairs_adjacent_lamps_at_measured_pitch():
+    """실측 피치 1.25 (폭 8 → 간격 10) 인접 쌍은 직좌로 인정."""
+    det = SignalDetector()
+    assert det._washed_pair([_blob(300), _blob(310)]) is not None
+
+
+def test_detector_rejects_two_pitch_pair():
+    """한 칸 건너뛴 쌍 기각 — 구 창 `1.2w ≤ gap ≤ 4.5w` 는 통과시켰다."""
+    det = SignalDetector()
+    assert det._washed_pair([_blob(300), _blob(320)]) is None
+
+
+def test_detector_rejects_far_apart_cores():
+    """멀리 떨어진 흰 심 두 개(책상 위 물건)는 페어가 아니다 → span 오염 없음."""
+    det = SignalDetector()
+    assert det._washed_pair([_blob(300), _blob(335)]) is None
+
+
+def test_detector_rejects_row_of_three_cores():
+    """등간격 점등체 3열은 신호등이 아니다 (양옆 여백 게이트)."""
+    det = SignalDetector()
+    assert det._washed_pair([_blob(300), _blob(310), _blob(320)]) is None
+
+
+def test_detector_pair_still_requires_unlit_left_housing():
+    """왼쪽 소등 검사는 그대로 — 기하만으로는 직좌가 되지 않는다."""
+    det = SignalDetector()
+    assert det._washed_pair(
+        [_blob(300, unlit_ok=False), _blob(310)]
+    ) is None
+
+
+def test_near_cone_excludes_forward_cones_but_reports_lateral():
+    """근접 콘 판정: '옆인가' 는 실제 거리로, '여유' 는 횡거리로.
+
+    0821 실측(cone_0821_0037): 반발이 걸린 콘 116개 중 58%가 전방 45cm
+    초과였다 — 앞에 있는 콘을 '옆 20cm' 로 세고 있었다.
+    """
+    import math
+    from kmu_race.perception.lidar_cones import find_cone_gate, LidarConeConfig
+
+    cfg = LidarConeConfig()
+
+    def scan_with(points):
+        """(x, y) 콘들을 라이다 ranges 로 되돌린다."""
+        n = 360
+        rng = [0.0] * n
+        inc = 2.0 * math.pi / n
+        for (px, py) in points:
+            d = math.hypot(px, py)
+            a = math.atan2(py, px)
+            i0 = int(round((a - (-math.pi)) / inc)) % n
+            # 클러스터가 되도록 인접 빔 몇 개를 같이 채운다
+            for k in range(-cfg.min_points, cfg.min_points + 1):
+                rng[(i0 + k) % n] = d
+        return rng, -math.pi, inc
+
+    # 좌우 게이트 콘 + '앞쪽' 좌측 콘(x=0.62, y=0.20)
+    pts = [(0.80, 0.41), (0.80, -0.41), (0.62, 0.20)]
+    rng, amin, inc = scan_with(pts)
+    g = find_cone_gate(rng, amin, inc, angle_offset=0.0, config=cfg)
+    assert g is not None
+    assert not math.isfinite(g.near_left_m), (
+        f"전방 62cm 콘이 '옆'으로 잡혔다 (near_left={g.near_left_m:.2f})")
+
+    # 진짜 옆에 있는 콘(x=0.30, y=0.15) → 횡거리 0.15 로 보고돼야 한다
+    # (라이다 min_range 0.30 이라 이보다 더 붙은 콘은 애초에 안 보인다)
+    pts = [(0.80, 0.41), (0.80, -0.41), (0.30, 0.15)]
+    rng, amin, inc = scan_with(pts)
+    g = find_cone_gate(rng, amin, inc, angle_offset=0.0, config=cfg)
+    assert g is not None
+    assert abs(g.near_left_m - 0.15) < 0.04, (
+        f"옆 콘 여유가 횡거리(0.15)가 아니라 {g.near_left_m:.2f} 로 나왔다 "
+        "— 대각선 거리를 보고하면 임박 충돌에 반발이 안 걸린다")
+
+
+def test_near_cone_survives_invalid_gate():
+    """★ 게이트가 안 서도 '차 옆 콘까지 거리'는 정책까지 가야 한다.
+
+    policy 의 마지막 폴백(게이트도 콘 픽셀도 없을 때)은 오직 이 값으로만
+    밀어내기를 한다. 노드가 lg.valid 일 때만 합류시키면 그 경로는 영원히
+    inf 를 보므로 **밀어내기가 통째로 죽는다**.
+    실측(cone_0821_0037) 라바콘 스캔의 16.5% 가 게이트 미성립이다.
+    """
+    from dataclasses import replace
+
+    from kmu_race.core.types import ConeReading
+    from kmu_race.perception.lidar_cones import LidarGate
+
+    # 노드가 하는 합류를 그대로 흉내낸다 (race_node.py 의 replace 블록)
+    lg = LidarGate(valid=False, near_left_m=0.08, near_right_m=float("inf"))
+    merged = replace(
+        ConeReading(),
+        lidar_gate_valid=bool(lg.valid),
+        lidar_near_left_m=lg.near_left_m,
+        lidar_near_right_m=lg.near_right_m,
+    )
+    assert merged.lidar_gate_valid is False
+    assert merged.lidar_near_left_m == 0.08, (
+        "게이트가 안 섰다고 옆 콘 거리까지 버리면 폴백 밀어내기가 죽는다")
+
+    from kmu_race.core.policy import DrivePolicy
+
+    pol = DrivePolicy()
+    steer = pol._cone_repel(merged, 0.0)
+    assert steer < -0.01, (
+        f"왼쪽 8cm 에 콘이 있는데 밀어내기가 {steer:+.3f} — 오른쪽(−)으로 밀어야 한다")
+
+
+def _scan_from(points, n=500):
+    """(x, y) 콘들을 라이다 ranges 로 되돌린다 (실차와 같은 500빔)."""
+    import math
+    inc = 2.0 * math.pi / n
+    rng = [0.0] * n
+    for (px, py) in points:
+        d = math.hypot(px, py)
+        a = math.atan2(py, px)
+        i0 = int(round((a + math.pi) / inc)) % n
+        half = max(1, int(math.asin(min(0.99, 0.075 / max(0.075, d))) / inc))
+        for k in range(-half, half + 1):
+            j = (i0 + k) % n
+            if rng[j] <= 0.0 or d < rng[j]:
+                rng[j] = d
+    return rng, -math.pi, inc
+
+
+def test_gate_rejects_same_row_pair():
+    """★ 한 열의 콘 두 개를 게이트로 세면 안 된다.
+
+    실주행 cone_0821_0220 실측: 고른 게이트의 **50.2%가 같은 열**이었다.
+    통로가 굽으면 한 열이 y=0 을 가로질러 두 콘의 y 부호가 갈리고,
+    한 칸 걸러 두 개는 0.80m 라 폭 창(65~98cm)에 그대로 들어온다.
+    그러면 차는 그 틈을 통로로 알고 빠져나가면서 콘을 친다
+    (사용자 목격: "라바콘 사이 틈으로 빠져나오고 그러면서 부딪혀").
+    """
+    import math
+
+    from kmu_race.perception.lidar_cones import LidarConeConfig, find_cone_gate
+
+    cfg = LidarConeConfig()
+    # y=0 을 가로지르며 굽은 **한 줄** — 진짜 통로가 아니다
+    row = []
+    R = 1.2
+    for k in range(7):
+        s = 0.30 + k * 0.40
+        th = s / R
+        row.append((R * math.sin(th), R * (1.0 - math.cos(th)) - 0.55))
+    rng, amin, inc = _scan_from(row)
+    g = find_cone_gate(rng, amin, inc, angle_offset=0.0, config=cfg)
+    # 0821 밤부터는 '게이트 없음' 대신 가상 게이트를 낸다. 다만 그 폭은
+    # 반드시 통로 폭(2×반폭)이어야 한다 — 줄 사이 틈(0.8m)이면 오인이다.
+    assert g.valid, "가상 게이트조차 안 난다"
+    assert abs(g.width_m - 2 * cfg.corridor_half_m) < 0.05, (
+        f"폭 {g.width_m*100:.0f}cm — 한 줄의 틈을 게이트로 세고 있다")
+
+    # 방어를 **다 끄면** 실제로 줄 사이 틈이 게이트가 된다 = 회귀 감지 유효.
+    # 방어가 셋이다: 수직성 검사(pair_perp_max) · 줄 소속 판정(_row_sides) ·
+    # 통로 밴드 제한(virtual_side_margin_m).
+    # 줄 판정은 row_anchor_x_m=0 이면 모든 기준 콘이 '너무 멀다'가 되어 꺼진다.
+    loose = LidarConeConfig()
+    loose.pair_perp_max = 1.0
+    loose.row_anchor_x_m = 0.0
+    loose.virtual_side_margin_m = 5.0   # 통로 밴드 제한도 끈다 (방어 3번째)
+    g2 = find_cone_gate(rng, amin, inc, angle_offset=0.0, config=loose)
+    assert g2 and g2.valid and abs(g2.width_m - 2 * cfg.corridor_half_m) > 0.05, (
+        "검사를 꺼도 줄 사이 틈이 안 잡힌다 — 이 장면은 회귀를 못 잡는다")
+
+
+def test_gate_still_found_on_real_corridor():
+    """진짜 좌우 통로는 굽어 있어도 게이트가 서야 한다 (검사가 과하면 안 된다)."""
+    import math
+
+    from kmu_race.perception.lidar_cones import LidarConeConfig, find_cone_gate
+
+    cfg = LidarConeConfig()
+    for radius in (1.5, 2.5, 99.0):
+        pts = []
+        for k in range(6):
+            s = 0.35 + k * 0.40
+            th = s / radius
+            cx, cy = radius * math.sin(th), radius * (1.0 - math.cos(th))
+            nx, ny = -math.sin(th), math.cos(th)
+            for side in (+1.0, -1.0):
+                pts.append((cx + side * 0.41 * nx, cy + side * 0.41 * ny))
+        rng, amin, inc = _scan_from(pts)
+        g = find_cone_gate(rng, amin, inc, angle_offset=0.0, config=cfg)
+        assert g and g.valid, f"R{radius} 진짜 통로인데 게이트가 안 선다"
+        assert 0.70 <= g.width_m <= 0.95, (
+            f"R{radius} 게이트 폭이 {g.width_m*100:.0f}cm — 통로(82cm)가 아니다")
+
+
+def test_virtual_gate_steers_away_from_the_close_cone():
+    """★ 옆 콘이 붙었는데 게이트 쌍이 없을 때, 목표는 **반대쪽**이어야 한다.
+
+    실주행 cone_0821_0307 t=15.0~15.2: 오른쪽 콘이 6.8 → 2.0 → 1.4cm 로
+    붙는데 조향이 −8.8 / +0.7 / −19.5 였다. 게이트 쌍이 없으면 통로를
+    아예 안 따라갔고, 카메라 단측 추정이 라이다 반발과 반대로 밀어
+    상쇄됐기 때문이다. 라바콘 이탈 14회 중 10회가 이런 프레임이었다.
+    """
+    import math
+
+    from kmu_race.perception.lidar_cones import LidarConeConfig, find_cone_gate
+
+    cfg = LidarConeConfig()
+    # 왼쪽 줄만 보인다 (차가 왼쪽 콘에 붙었다)
+    left_only = [(0.35 + 0.40 * k, 0.12) for k in range(4)]
+    rng, amin, inc = _scan_from(left_only)
+    g = find_cone_gate(rng, amin, inc, angle_offset=0.0, config=cfg)
+    assert g.valid, "게이트가 없다 — 통로를 안 따라간다"
+    assert g.lateral_m < -0.15, (
+        f"왼쪽 12cm 에 콘이 있는데 목표가 {g.lateral_m*100:+.0f}cm — "
+        "콘 쪽으로 간다")
+    assert abs(g.width_m - 2 * cfg.corridor_half_m) < 0.05
+
+    # 오른쪽만 — 대칭
+    right_only = [(0.35 + 0.40 * k, -0.12) for k in range(4)]
+    rng, amin, inc = _scan_from(right_only)
+    g = find_cone_gate(rng, amin, inc, angle_offset=0.0, config=cfg)
+    assert g.valid and g.lateral_m > 0.15, (
+        f"오른쪽 콘인데 목표가 {g.lateral_m*100:+.0f}cm")
+
+
+def test_virtual_gate_ignores_cones_outside_the_corridor():
+    """통로 폭 밖의 콘을 기준 삼으면 목표가 통로 밖으로 나간다.
+
+    실측에서 y=+0.95m 짜리 콘을 잡아 목표가 +54cm 로 나왔다 — 정작 왼쪽
+    7.4cm 에 콘이 붙어 있던 프레임이다.
+    """
+    from kmu_race.perception.lidar_cones import LidarConeConfig, find_cone_gate
+
+    cfg = LidarConeConfig()
+    pts = ([(0.40 + 0.40 * k, 0.10) for k in range(3)]      # 붙은 왼쪽 줄
+           + [(0.50 + 0.40 * k, 0.95) for k in range(3)])   # 통로 밖 잡물
+    rng, amin, inc = _scan_from(pts)
+    g = find_cone_gate(rng, amin, inc, angle_offset=0.0, config=cfg)
+    assert g.valid
+    assert g.lateral_m < 0.0, (
+        f"통로 밖 콘(y=0.95)을 기준 삼아 목표가 {g.lateral_m*100:+.0f}cm 로 나갔다")

@@ -56,6 +56,12 @@ class PassConfig:
     center_deadzone_m: float = 0.14
     # 진입/이탈 히스테리시스 (Apollo lane_borrow 패턴)
     clear_frames_to_return: int = 5
+    # ★ 프레임 수만으로는 부족하다 (0820 감사). 제어는 50Hz 인데 라이다는
+    #   실측 8.8Hz(스캔 주기 0.114s) 다 — 5틱은 0.10s 라 **한 스캔도 안 되는**
+    #   시간이고, 연관이 한 번만 끊겨도(lidar_tracker 는 missed==0 만 내보낸다)
+    #   같은 '타겟 없음' 관측이 5틱 연속 반복돼 즉시 복귀 조건이 선다.
+    #   장애물 바로 앞에서 차선으로 돌아오는 경로다. 최소 3스캔을 요구한다.
+    clear_seconds_to_return: float = 0.35
     switch_frames: int = 3
     # 횡이동 수렴 계수
     lateral_alpha_out: float = 0.22
@@ -80,6 +86,10 @@ class PassResult:
     lateral_offset_px: float = 0.0
     speed: float = 0.0
     done: bool = False
+    # ★ 타임아웃 탈출은 '통과 완료'가 아니다 (0820 감사). 옛 코드는 둘 다
+    #   done=True 로 내서 FSM 이 'pass complete' 로 읽었고, 다음 틱에 타겟이
+    #   그대로 있으면 곧바로 재진입해 리밋사이클이 됐다.
+    aborted: bool = False
     status: str = "idle"     # idle / passing / blocked
     phase: PassPhase = PassPhase.IDLE
     side: int = 0
@@ -110,6 +120,7 @@ class TargetPassing:
         self.offset_px = 0.0
         self.target_offset_px = 0.0
         self._clear_cnt = 0
+        self._clear_since: Optional[float] = None
         self._conflict_cnt = 0
         self._started_at: Optional[float] = None
         self._passed_target_x: Optional[float] = None
@@ -205,7 +216,9 @@ class TargetPassing:
         ):
             # 교착. 규정 p.21 상 멈추는 게 가장 비싸므로 차선주행으로 돌려보낸다.
             self.reset()
-            return PassResult(0.0, cfg.return_speed, True, "idle", PassPhase.IDLE, 0)
+            return PassResult(
+                0.0, cfg.return_speed, True, True, "idle", PassPhase.IDLE, 0
+            )
 
         target_present = target is not None
         target_y = target.y if target else 0.0
@@ -263,10 +276,18 @@ class TargetPassing:
         elif self.phase is PassPhase.ALONGSIDE:
             if target_present and target_x > -0.1:
                 self._clear_cnt = 0
+                self._clear_since = None
             else:
                 self._clear_cnt += 1
-            if self._clear_cnt >= cfg.clear_frames_to_return:
+                if self._clear_since is None:
+                    self._clear_since = now
+            if (
+                self._clear_cnt >= cfg.clear_frames_to_return
+                and self._clear_since is not None
+                and (now - self._clear_since) >= cfg.clear_seconds_to_return
+            ):
                 self._clear_cnt = 0
+                self._clear_since = None
                 self._passed_target_x = target_x if target_present else -0.2
                 self.phase = PassPhase.RETURN
 

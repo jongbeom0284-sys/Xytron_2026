@@ -65,6 +65,18 @@ class SignalReading:
     # 장면(빨간불 대기 포함)은 0 — 판정 체인과 실측 근거는
     # perception/signal_detector.py 모듈 주석 참조.
     gantry_span_px: int = 0
+    # 랩 마커 2세대 (0820 저녁): **구조 검증된 4구 하우징의 가로폭**(px).
+    # 좌우 끝 램프 중심 간 거리이며, 4개가 등간격·등크기·같은 행이라는
+    # 배치 검증을 통과했을 때만 0 이 아니다. 하우징이 안 잡히면 0.
+    #
+    # 왜 gantry_span_px 를 못 쓰나 — 그 값은 '초록 블롭의 폭'이라 장면이
+    # 바뀌면 축척이 통째로 달라진다. 같은 트랙 같은 날 실측:
+    #     run_0820_0019 (오전, 청색편이) 가짜 블롭 최대 294px, ≥18 이 2125프레임
+    #     run_0820_1821 (저녁, 중성)     진짜 램프      20~22px
+    # 임계 163 은 진짜 램프를 못 넘고, 임계 18 은 오전 오검을 다 통과시킨다.
+    # 크기 하나로는 원리적으로 분리가 안 된다 — 그래서 '구조를 봤는가'로
+    # 지표를 바꾼다.
+    housing_span_px: int = 0
     # 출발 전용 초록 블롭 폭(px) — 출발선 원거리(8~10m)에서는 램프 프린지가
     # 사라져 gantry_span 경로(링 검증)가 0 이 되므로, 심의 '균형 초록 끼'
     # (G−R, G−B 동시 양수)로만 잡는 완화 경로. **랩 카운팅에는 절대 쓰지
@@ -81,6 +93,21 @@ class SignalReading:
     @property
     def valid(self) -> bool:
         return self.state is not SignalState.UNKNOWN
+
+    @property
+    def lap_marker_px(self) -> int:
+        """랩 카운팅에 쓰는 유일한 값 — '구조 검증된 하우징을 가까이서 봤다'.
+
+        gantry_span_px(초록 블롭 폭)를 쓰지 않는 이유는 housing_span_px 주석
+        참조: 장면이 바뀌면 블롭 축척이 통째로 달라져 임계가 이전되지 않는다.
+        여기서는 두 조건을 동시에 요구한다 —
+          · 4구가 등간격·등크기·같은 행으로 풀렸다 (housing_span_px > 0)
+          · 그 안에서 점등 램프가 색까지 검증됐다 (state ≠ UNKNOWN)
+        run_0820_1821 실측: 겐트리 접근·정지 구간 685프레임에서 폭 84~124px,
+        나머지 5669프레임의 오검은 43프레임뿐이고 **최장 연속이 2프레임**이라
+        LapTrackerConfig.confirm_s 가 흡수한다 (목격 1회, 오검 0회).
+        """
+        return self.housing_span_px if self.valid else 0
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -227,6 +254,15 @@ class ConeReading:
     lidar_gate_width_m: float = 0.0
     lidar_gate_lateral_m: float = 0.0   # 게이트 중앙 횡위치 (좌측 +)
     lidar_cones: int = 0
+    # 차 바로 옆 콘까지 횡거리 [m] (perception/lidar_cones.LidarGate 주석 참조).
+    # 게이트가 앞쪽을 조준하는 동안 옆을 스치는 콘을 보기 위한 값이다.
+    lidar_near_left_m: float = float("inf")
+    lidar_near_right_m: float = float("inf")
+    # 이번 스캔의 콘 위치 (x 전방, y 좌측) [m]. 충돌 방지 클램프가 쓴다.
+    lidar_cone_pts: Tuple[Tuple[float, float], ...] = ()
+    # 이 라이다 관측이 몇 초 전 것인가. 라이다는 ~9Hz 인데 제어는 50Hz 라
+    # 스캔 사이에 최대 110ms 낡는다 — 정책이 자차 운동으로 그만큼 앞당긴다.
+    lidar_gate_age_s: float = 0.0
 
 
 # ──────────────────────────────────────────────────────────────────────
