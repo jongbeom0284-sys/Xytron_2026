@@ -69,16 +69,28 @@ class ConePerception(Node):
 
     # ------------------------------------------------------------ 신호 게이트
     def _on_signal(self, msg):
-        if self.green_at is not None:
-            return
+        """직진(green) 상태일 때만 콘 인식을 켠다.
+
+        2026-08-23: 예전에는 초록을 한 번 보면 영구 래치라, 몇 분 전 신호
+        하나로 이후 전 구간에서 콘이 돌았다 (실주행 로그: traffic_state=none
+        인데 콘 게이트가 -40 을 냈고 그대로 코스 이탈). 이제 직진이 풀리면
+        (좌회전·빨강·신호없음) 콘도 함께 꺼진다.
+        """
         try:
             state = json.loads(msg.data).get('state', '')
-        except (ValueError, AttributeError):
-            state = msg.data
+        except (ValueError, AttributeError, TypeError):
+            state = msg.data or ''
         if state == 'green':
-            self.green_at = time.monotonic()
-            self.get_logger().info(
-                '직진 신호 — %.1f초 뒤 콘 인식을 켠다' % self.delay)
+            if self.green_at is None:
+                self.green_at = time.monotonic()
+                self.get_logger().info(
+                    '직진 신호 — %.1f초 뒤 콘 인식을 켠다' % self.delay)
+        elif state in ('left', 'red'):
+            # 직진이 아니면 즉시 끈다
+            if self.enabled or self.green_at is not None:
+                self.get_logger().info('직진 해제(%s) — 콘 인식 끔' % state)
+            self.green_at = None
+            self.enabled = self.force
 
     # ------------------------------------------------------------ 스캔 처리
     def _on_scan(self, msg):
