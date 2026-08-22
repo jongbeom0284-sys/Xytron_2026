@@ -86,9 +86,11 @@ CONE_TRIG_CONFIRM = 3          # 이만큼 연속이어야 진입으로 본다
 # ---- 앞차 회피. 거리·유지 값은 Lane_follow.py 원본 그대로 ----
 AVOID_ENTER_M = 1.30     # 이 거리 안이면 회피 시작
 AVOID_CLEAR_M = 1.80     # 이만큼 멀어지면 해제
-AVOID_HOLD_SEC = 1.0     # 인식이 꺼진 순간부터 이 시간은 회피 유지,
+AVOID_HOLD_SEC = 2.0     # 인식이 꺼진 순간부터 이 시간은 회피 유지,
                          # 지나면 차선 중앙으로 복귀 (0823 요구)
-CAR_CONFIRM = 5          # 같은 방향이 이만큼 연속이어야 차로 인정
+CAR_CONFIRM = 5          # 같은 방향이 이만큼 연속이어야 차로 인정 (첫 진입만)
+AVOID_REARM_SEC = 6.0    # 회피가 걸렸던 뒤 이 시간 안에는 한 프레임만 봐도
+                         # 바로 회피로 돌아간다. 인식이 깜빡여도 놓지 않는다
 CONE_FRESH_SEC = 0.6     # 콘 관측이 이보다 오래되면 없는 것으로 본다.
                          # 마지막 값을 붙들고 회피를 영구히 막던 문제 (0823)
                          # (0823: 3 -> 5, 순간 오검출로 회피가 서는 것 방지)
@@ -165,6 +167,7 @@ class YolopDriveNode(Node):
         self._car_recent = []        # 최근 car.dir. 연속 장수를 센다
         self._avoid_side = None      # 'right' | 'left' | None
         self._avoid_until = 0.0      # 이 시각까지 회피를 유지한다
+        self._avoid_rearm_until = 0.0  # 이 시각까지는 한 프레임만 봐도 재무장
         self._car_dist = None
 
         self.tracker = LaneTracker(self._lane_config())
@@ -660,8 +663,11 @@ class YolopDriveNode(Node):
                    and near and side in ('LEFT', 'RIGHT'))
         if holding:
             self._avoid_until = now + AVOID_HOLD_SEC
+        # 회피가 걸렸던 직후라면 5프레임 확정을 건너뛴다. 인식이 깜빡여도
+        # (실측 58% 프레임에서만 검출) 회피를 놓지 않기 위한 것 (0823).
+        rearm = now < self._avoid_rearm_until
 
-        if (steady or holding) and near and side in ('LEFT', 'RIGHT'):
+        if (steady or holding or rearm) and near and side in ('LEFT', 'RIGHT'):
             want = want_now
             if self._avoid_side != want:
                 self.get_logger().warning(
@@ -671,6 +677,7 @@ class YolopDriveNode(Node):
                        '우측' if want == 'right' else '좌측'))
             self._avoid_side = want
             self._avoid_until = now + AVOID_HOLD_SEC
+            self._avoid_rearm_until = now + AVOID_REARM_SEC
         elif far and self._avoid_side and now > self._avoid_until:
             self.get_logger().info('앞차 벗어남 — 회피 해제')
             self._avoid_side = None
