@@ -15,6 +15,7 @@ force_enabled:=true 면 신호 없이 즉시 켠다 — 콘 구간 단독 시험
 """
 import json
 import math
+import os
 import time
 
 import rclpy
@@ -61,6 +62,10 @@ class ConePerception(Node):
         self.get_logger().info(
             '콘 인식 대기. 직진 신호 +%.1f초 뒤 활성 (force_enabled=%s)'
             % (self.delay, self.force))
+
+        # 콘 인식 결과를 jsonl 로 남긴다 — 라이다 기반이라 카메라 녹화에는
+        # 안 남으므로, 재생 뷰어의 콘 미니맵은 이 파일로 그린다 (2026-08-22)
+        self._log_fh = None
 
     # ------------------------------------------------------------ 신호 게이트
     def _on_signal(self, msg):
@@ -125,6 +130,14 @@ class ConePerception(Node):
             pts=[[round(x, 3), round(y, 3)] for x, y in gate.points],
         )
         self.pub_reading.publish(String(data=json.dumps(payload)))
+
+        if self._log_fh is None:
+            os.makedirs('/home/xytron/cone_logs', exist_ok=True)
+            path = time.strftime('/home/xytron/cone_logs/conelog_%Y%m%d_%H%M%S.jsonl')
+            self._log_fh = open(path, 'w', buffering=1)
+            self.get_logger().info('콘 기록 시작: %s' % path)
+        payload['wall'] = time.time()
+        self._log_fh.write(json.dumps(payload) + chr(10))
 
 
 def main(args=None):
