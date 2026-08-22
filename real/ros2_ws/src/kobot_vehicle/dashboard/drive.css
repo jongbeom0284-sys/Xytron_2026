@@ -472,3 +472,9 @@
 .lane-row .signal-card, .lane-row .vehicle-card { flex: 1; margin: 0; }
 .lane-stats strong.steer-left  { color: #f0997b; }
 .lane-stats strong.steer-right { color: #10b981; }
+
+.signal-card { position: relative; }
+.signal-card .signal-lock { margin-left: auto; font-size: 12px; font-weight: 600;
+  color: #b3282b; background: rgba(216,31,34,.12); border: 1px solid rgba(216,31,34,.45);
+  border-radius: 6px; padding: 3px 8px; white-space: nowrap; }
+.signal-card.locked .signal-lamps { opacity: .35; }

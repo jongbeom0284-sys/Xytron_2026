@@ -122,6 +122,7 @@ function signalCardHtml(){
       <span class="lamp" data-lamp="left">←</span>
       <span class="lamp" data-lamp="green"></span>
     </div>
+    <span class="signal-lock" hidden>인식 꺼짐</span>
   </div>`;
 }
 
@@ -296,6 +297,12 @@ function renderSignalCards(){
       const on=(state==='left')?(which==='left'||which==='green'):(which===state);
       lamp.classList.toggle('on',on);
     });
+  });
+  const lock=Number(latestLane.signal_lock_s||0);
+  document.querySelectorAll('.signal-card').forEach(card=>{
+    const badge=card.querySelector('.signal-lock');
+    if(badge){badge.hidden=lock<=0;badge.textContent=`인식 꺼짐 ${Math.ceil(lock)}초`}
+    card.classList.toggle('locked',lock>0);
   });
   document.querySelectorAll('.signal-overlay').forEach(drawSignalOverlay);
 }

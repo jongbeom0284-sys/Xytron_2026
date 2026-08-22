@@ -57,7 +57,8 @@ STOP = (0.0, 0.0)
 STOP_RELEASE_SEC = 1.0   # red 를 이 시간 넘게 못 보면 정지를 푼다
 RED_CONFIRM = 3          # 빨간불 확정에 필요한 연속 장수 (약 0.2초)
 GO_CONFIRM = 7           # 초록·좌회전 확정에 필요한 연속 장수 (약 0.47초)
-GO_LOCK_SEC = 10.0       # 확정 뒤 신호등 인식을 통째로 쉬는 시간 (빨간불 포함)
+GO_LOCK_GREEN_SEC = 30.0  # 직진 확정 뒤 신호 인식을 쉬는 시간 (빨간불 포함)
+GO_LOCK_LEFT_SEC = 10.0   # 좌회전 확정 뒤 잠금
 STRAIGHT_HOLD_SEC = 3.0  # 직진 확정 직후 조향을 줄여 직진만 하는 시간
 STRAIGHT_HOLD_GAIN = 0.15  # 그동안 조향에 곱하는 값. 0 이면 완전 직진
 
@@ -419,7 +420,7 @@ class YolopDriveNode(Node):
         """신호등 상태를 받아 정지와 직진 트리거를 물린다.
 
         빨간불   RED_CONFIRM 장 연속이면 정지. 잠금과 무관하게 항상 읽는다
-        초록불   GO_CONFIRM 장 연속이면 직진 확정. 이후 GO_LOCK_SEC 간 안 읽는다
+        초록불   GO_CONFIRM 장 연속이면 직진 확정. 이후 30초(GO_LOCK_GREEN_SEC) 안 읽는다
         좌회전   GO_CONFIRM 장 연속이면 직진 해제. 오염을 그대로 두어 좌측을 따른다
         노란불   아무것도 바꾸지 않는다. 하던 대로 간다
         없음     아무것도 바꾸지 않는다. 신호등을 지난 뒤가 여기다
@@ -461,20 +462,21 @@ class YolopDriveNode(Node):
             return
 
         self._traffic_stop = False
-        self._go_locked_until = now + GO_LOCK_SEC
+        self._go_locked_until = now + (
+            GO_LOCK_GREEN_SEC if state == 'green' else GO_LOCK_LEFT_SEC)
         self._recent.clear()
         if state == 'green':
             self._straight = True
             self._straight_hold_until = now + STRAIGHT_HOLD_SEC
             self.get_logger().info(
                 '초록불 %d장 연속 — 직진 확정. %.0f초 조향 억제, %.0f초 신호 무시'
-                % (GO_CONFIRM, STRAIGHT_HOLD_SEC, GO_LOCK_SEC))
+                % (GO_CONFIRM, STRAIGHT_HOLD_SEC, GO_LOCK_GREEN_SEC))
         else:
             self._straight = False
             self._straight_hold_until = 0.0
             self.get_logger().info(
                 '좌회전 %d장 연속 — 직진 해제, %.0f초간 신호 무시'
-                % (GO_CONFIRM, GO_LOCK_SEC))
+                % (GO_CONFIRM, GO_LOCK_LEFT_SEC))
 
     def _on_vehicle(self, message: String) -> None:
         """앞차 위치를 받아 회피 방향을 정한다.
@@ -795,6 +797,8 @@ class YolopDriveNode(Node):
             'center_offset_px': round(
                 (result.error_far * 320.0) if result else 0.0, 1),
             'speed_mps': round(speed * self.mps_per_unit, 3),
+            'signal_lock_s': round(max(
+                0.0, self._go_locked_until - now), 1),
         }, ensure_ascii=False)))
 
     def _raise_fault(self, reason: str) -> None:
