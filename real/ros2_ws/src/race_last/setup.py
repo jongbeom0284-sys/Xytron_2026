@@ -32,6 +32,7 @@ setup(
             'race_console = race_last.race_console:main',
             'race_starter = race_last.race_starter:main',
             'motor_logger = race_last.motor_logger:main',
+            'drive_logger = race_last.drive_logger:main',
         ],
     },
 )

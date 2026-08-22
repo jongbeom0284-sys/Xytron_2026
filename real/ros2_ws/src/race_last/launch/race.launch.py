@@ -116,6 +116,9 @@ def generate_launch_description():
         # 모터 텔레메트리 상시 기록 (~/motor_logs/*.csv) — 주행 진단용
         Node(package='race_last', executable='motor_logger',
              name='motor_logger', output='log'),
+        # 주행 판단 전수 기록 (~/drive_logs/*.csv) — 사후 분석용
+        Node(package='race_last', executable='drive_logger',
+             name='drive_logger', output='log'),
 
         # ---- 콘솔 (이 터미널이 상황판이다) ----
         # 대시보드를 쓰면 콘솔은 중복이라 띄우지 않는다 (CPU 절약)

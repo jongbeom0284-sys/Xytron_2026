@@ -871,6 +871,21 @@ class YolopDriveNode(Node):
             #  · 회피 유지 중    -> 필요 (지나치는 중이라 계속 봐야 함)
             # 회피 유지가 풀리는 순간 이 값이 함께 내려간다.
             'vehicle_needed': bool(self._vehicle_needed(now)),
+            # 사후 분석용 판단 근거 (2026-08-22: 재생값과 실주행값이
+            # 달라 원인 추적이 불가능했던 문제. 이제 전부 남긴다)
+            'straight_only': bool(self._straight),
+            'straight_hold': round(max(
+                0.0, self._straight_hold_until - now), 2),
+            'avoid_side': self._avoid_side or '',
+            'avoid_offset_px': round(self._avoid_offset(now), 1),
+            'traffic_stop': bool(self._traffic_stop),
+            'traffic_state': self._traffic_state,
+            'cone_active': bool(
+                self._cone_link.active if self._cone_link else False),
+            'cone_approach': bool(
+                self._cone_link.approach if self._cone_link else False),
+            'raw_steer': round(
+                getattr(result, 'raw_steer', 0.0), 2) if result else 0.0,
         }, ensure_ascii=False)))
 
     def _raise_fault(self, reason: str) -> None:
