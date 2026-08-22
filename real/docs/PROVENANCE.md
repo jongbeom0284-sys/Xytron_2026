@@ -6,6 +6,11 @@
 소스에서 출발했다. import 시 `.git`, `build`, `install`, `log`, Python/pytest cache,
 `*.bak`, 임시 출력은 제외했다.
 
+> **현재 기준 (2026-08-22 갱신)**: 위 서술은 2026-08-13 시점의 이력이다.
+> 현재 실차에서 실행되는 기준 워크스페이스는 `/home/xytron/2026_Xytron/real/ros2_ws` 이며,
+> `xycar_ws` 에서는 최종 코드를 개발하지 않는다. `xycar_ws/src/kmu_race` 에만 있던
+> 2026-08-21 콘 주행 작업분은 `2026_Xytron` 으로 편입했다 (커밋 `da08996`).
+
 | 모듈 | 출처 | 기준 |
 |---|---|---|
 | `kobot_vehicle` | Kobot 차량용 자체 작성 ROS 2 패키지 | 2026-08-13 Jetson 실행본 |
@@ -40,7 +45,7 @@
 watchdog 은 차량 프로젝트 자체 코드다. `dashboard/roslib.min.js` 만 외부 원본이다.
 
 `dashboard/app.js` 의 최대속도 표시, input `max`, client validation 은 실제 상한
-`2.16 m/s` 와 일치한다.
+`4.87 m/s` 와 일치한다.
 
 ## vesc
 

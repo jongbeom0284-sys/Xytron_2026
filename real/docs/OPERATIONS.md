@@ -181,7 +181,7 @@ ros2 launch kobot_lane_drive twinmixing_center_record_drive.launch.py armed:=fal
 
 ## 9. 웹 확인 항목
 
-- 속도 안내 최대값과 input `max` 가 `2.16 m/s` 로 일치
+- 속도 안내 최대값과 input `max` 가 `4.87 m/s` 로 일치
 - WASD keydown 동안 `/xycar_motor` 20 Hz 지속 발행
 - keyup, window blur, 즉시 정지에서 0 명령 발행
 - 서버와 `motor_adapter` 가 각각 독립적으로 상한 검사

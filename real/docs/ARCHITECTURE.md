@@ -63,8 +63,9 @@ status_node → /kobot/status → dashboard 장치 상태
   → vesc_driver_node → /dev/ttyMOTOR
 ```
 
-`motor_adapter` 는 속도 상한 `2.16 m/s`, 가속도 상한 `2.5 m/s²`,
-명령 watchdog `0.5 s` 를 적용한다. 웹 WASD 는 누른 키 상태를 20 Hz 로 계속 발행하고,
+`motor_adapter` 는 속도 상한 `4.87 m/s`, 명령 watchdog `0.5 s` 를 적용한다.
+가속도 상한은 소스 기본값이 `4.0 m/s²` 이나 빌드 미반영이라 실행 중인 노드는 `2.5 m/s²` 다.
+속도 상한은 설정값이며 실측치는 이에 미달한다 (`HARDWARE_AND_VESC.md` 참조). 웹 WASD 는 누른 키 상태를 20 Hz 로 계속 발행하고,
 정지는 0 명령을 즉시 발행한다.
 
 ## 공개 인터페이스
