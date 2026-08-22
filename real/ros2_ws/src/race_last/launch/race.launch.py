@@ -102,7 +102,7 @@ def generate_launch_description():
              # 움직인다. 접근 전 구간을 덮는 띠 + 좌측 천장 주황등(x<0.35)·우측 창문
              # (x>0.64) 배제. 장소 바뀌면 param set 으로 즉석 조절 (대시보드 ROI 박스 참조).
              parameters=[{'debug_image': debug_images, 'max_hz': 20.0,
-                          'roi_top': 0.28, 'roi_bottom': 0.38,
+                          'roi_top': 0.28, 'roi_bottom': 0.36,
                           'roi_left': 0.36, 'roi_right': 0.64}],
              output='log'),
         # 차량: YOLOv8n(imgsz 640) + 라이다 퓨전. 좌/우와 거리만 낸다.
