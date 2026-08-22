@@ -56,7 +56,9 @@ class MotorLogger(Node):
             % (now - self._t0, erpm, erpm / ERPM_PER_MPS,
                float(s.duty_cycle), float(s.voltage_input),
                float(s.current_motor), float(s.current_input),
-               float(s.temperature_pcb), int(s.fault_code),
+               float(getattr(s, 'temp_fet',
+                             getattr(s, 'temperature_pcb', 0.0))),
+               int(s.fault_code),
                self._cmd[0], self._cmd[1]))
         self._rows += 1
         if self._rows % 3000 == 0:
