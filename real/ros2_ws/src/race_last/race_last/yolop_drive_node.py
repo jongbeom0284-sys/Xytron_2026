@@ -57,9 +57,12 @@ STOP = (0.0, 0.0)
 STOP_RELEASE_SEC = 1.0   # red 를 이 시간 넘게 못 보면 정지를 푼다
 RED_CONFIRM = 3          # 빨간불 확정에 필요한 연속 장수 (약 0.2초)
 GO_CONFIRM = 7           # 초록·좌회전 확정에 필요한 연속 장수 (약 0.47초)
-GO_LOCK_GREEN_SEC = 30.0  # 직진 확정 뒤 신호 인식을 쉬는 시간 (빨간불 포함)
-GO_LOCK_LEFT_SEC = 20.0   # 좌회전 확정 뒤 잠금 (0822 실험: 10에서 상향)
-STRAIGHT_HOLD_SEC = 3.0  # 직진 확정 직후 조향을 줄여 직진만 하는 시간
+# 아래 세 시간은 "확정한 신호가 시야에서 사라진 시점"부터 센다 (0823 요구).
+# 확정만으로 세면 신호등을 아직 지나지도 않았는데 억제가 풀린다.
+GO_LOCK_GREEN_SEC = 30.0  # 직진 신호가 사라진 뒤 신호 인식을 쉬는 시간
+GO_LOCK_LEFT_SEC = 20.0   # 좌회전 신호가 사라진 뒤 잠금 (0822 실험: 10에서 상향)
+GONE_CONFIRM = 5          # 확정한 신호가 이만큼 연속으로 안 보이면 사라진 것
+STRAIGHT_HOLD_SEC = 3.0  # 직진 신호가 사라진 뒤 조향을 줄여 직진만 하는 시간
 STRAIGHT_HOLD_GAIN = 0.15  # 그동안 조향에 곱하는 값. 0 이면 완전 직진
 
 # ---- 앞차 회피. 거리·유지 값은 Lane_follow.py 원본 그대로 ----
@@ -130,6 +133,8 @@ class YolopDriveNode(Node):
         self._last_red_at = 0.0       # 마지막으로 red 를 본 시각
         self._recent = []             # 최근 신호. 연속 장수를 센다
         self._go_locked_until = 0.0   # 이 시각까지 신호등을 아예 안 읽는다
+        self._lock_kind = None        # 확정했으나 아직 시야에 남아 있는 신호
+        self._gone = 0                # 그 신호를 연속으로 못 본 장수
         self._straight_hold_until = 0.0  # 이 시각까지 조향을 줄여 직진만 한다
 
         # 앞차 회피 상태
@@ -450,10 +455,14 @@ class YolopDriveNode(Node):
         """신호등 상태를 받아 정지와 직진 트리거를 물린다.
 
         빨간불   RED_CONFIRM 장 연속이면 정지. 잠금과 무관하게 항상 읽는다
-        초록불   GO_CONFIRM 장 연속이면 직진 확정. 이후 30초(GO_LOCK_GREEN_SEC) 안 읽는다
+        초록불   GO_CONFIRM 장 연속이면 직진 확정
         좌회전   GO_CONFIRM 장 연속이면 직진 해제. 오염을 그대로 두어 좌측을 따른다
         노란불   아무것도 바꾸지 않는다. 하던 대로 간다
-        없음     아무것도 바꾸지 않는다. 신호등을 지난 뒤가 여기다
+        없음     확정 대기 중이면 사라짐으로 센다. 아니면 하던 대로 간다
+
+        확정한 뒤에는 그 신호가 시야에 남아 있는 동안 조향 억제와 신호 잠금을
+        계속 앞으로 밀어 둔다. GONE_CONFIRM 장 연속으로 안 보이면 그때부터
+        시간이 흐른다. 즉 신호등을 지나친 직후부터 억제 구간이 시작된다.
         """
         try:
             state = str(json.loads(message.data).get('state', 'none'))
@@ -462,6 +471,31 @@ class YolopDriveNode(Node):
         now = time.monotonic()
         self._traffic_state = state
         self._traffic_at = now
+
+        # 확정했는데 그 신호가 아직 보인다 — 아직 신호등을 지나지 않았다.
+        # 억제·잠금 시각을 계속 밀어 사라질 때까지 유지한다. 여기서도
+        # 빨간불은 안 읽는다. 이미 확정한 판단을 흔들 것이 없다.
+        if self._lock_kind is not None:
+            if state == self._lock_kind:
+                self._gone = 0
+                self._go_locked_until = now + (
+                    GO_LOCK_GREEN_SEC if state == 'green'
+                    else GO_LOCK_LEFT_SEC)
+                if state == 'green':
+                    self._straight_hold_until = now + STRAIGHT_HOLD_SEC
+            else:
+                self._gone += 1
+                if self._gone >= GONE_CONFIRM:
+                    green = self._lock_kind == 'green'
+                    self.get_logger().info(
+                        '%s 신호가 시야에서 사라짐 — 지금부터 %.0f초 신호 무시%s'
+                        % (self._lock_kind,
+                           GO_LOCK_GREEN_SEC if green else GO_LOCK_LEFT_SEC,
+                           (', %.0f초 조향 억제' % STRAIGHT_HOLD_SEC)
+                           if green else ''))
+                    self._lock_kind = None
+                    self._gone = 0
+            return
 
         # 잠금 중에는 신호등 인식 자체를 쉰다. 빨간불도 안 읽는다.
         # 확정한 판단을 흔들 것이 없으니 그 사이 오검출에 면역이다.
@@ -494,19 +528,22 @@ class YolopDriveNode(Node):
         self._traffic_stop = False
         self._go_locked_until = now + (
             GO_LOCK_GREEN_SEC if state == 'green' else GO_LOCK_LEFT_SEC)
+        self._lock_kind = state   # 사라질 때까지 위에서 계속 밀어 준다
+        self._gone = 0
         self._recent.clear()
         if state == 'green':
             self._straight = True
             self._straight_hold_until = now + STRAIGHT_HOLD_SEC
             self.get_logger().info(
-                '초록불 %d장 연속 — 직진 확정. %.0f초 조향 억제, %.0f초 신호 무시'
+                '초록불 %d장 연속 — 직진 확정. 신호가 시야에서 사라지면'
+                ' 그때부터 %.0f초 조향 억제, %.0f초 신호 무시'
                 % (GO_CONFIRM, STRAIGHT_HOLD_SEC, GO_LOCK_GREEN_SEC))
         else:
             self._straight = False
             self._straight_hold_until = 0.0
             self.get_logger().info(
-                '좌회전 %d장 연속 — 직진 해제, %.0f초간 신호 무시'
-                % (GO_CONFIRM, GO_LOCK_LEFT_SEC))
+                '좌회전 %d장 연속 — 직진 해제. 신호가 사라지면 그때부터'
+                ' %.0f초간 신호 무시' % (GO_CONFIRM, GO_LOCK_LEFT_SEC))
 
     def _on_vehicle(self, message: String) -> None:
         """앞차 위치를 받아 회피 방향을 정한다.
