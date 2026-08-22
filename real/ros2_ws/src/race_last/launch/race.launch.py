@@ -113,6 +113,9 @@ def generate_launch_description():
         # 라바콘: 직진 신호 +1초 뒤 활성. kmu_race lidar_cones 그대로.
         Node(package='race_last', executable='cone_perception',
              name='cone_perception', output='log'),
+        # 모터 텔레메트리 상시 기록 (~/motor_logs/*.csv) — 주행 진단용
+        Node(package='race_last', executable='motor_logger',
+             name='motor_logger', output='log'),
 
         # ---- 콘솔 (이 터미널이 상황판이다) ----
         Node(package='race_last', executable='race_console',

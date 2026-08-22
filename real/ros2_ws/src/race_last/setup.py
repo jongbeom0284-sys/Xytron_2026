@@ -31,6 +31,7 @@ setup(
             'cone_perception = race_last.Cone_Perception:main',
             'race_console = race_last.race_console:main',
             'race_starter = race_last.race_starter:main',
+            'motor_logger = race_last.motor_logger:main',
         ],
     },
 )
