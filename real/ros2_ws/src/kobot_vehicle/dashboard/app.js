@@ -641,6 +641,9 @@ addEventListener('resize',renderVehicleCards);
 
 let latestCone = null;
 let latestConeAt = 0;
+new ROSLIB.Topic({ros,name:'/kobot_yolop/status',messageType:'std_msgs/String'}).subscribe(message=>{
+  try{latestLane=JSON.parse(message.data);refreshDynamicValues()}catch(error){}
+});
 new ROSLIB.Topic({ros,name:'/kobot_lane_drive/cone_corridor/status',messageType:'std_msgs/String'}).subscribe(message=>{
   try{latestCone=JSON.parse(message.data);latestConeAt=performance.now();refreshDynamicValues()}catch(error){}
 });
