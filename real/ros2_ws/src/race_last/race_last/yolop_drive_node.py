@@ -856,7 +856,12 @@ class YolopDriveNode(Node):
         result = payload[0] if payload else None
         if fault:
             mode = 'ERROR'
-        elif basis in ('yellow', 'white_center'):
+        # avoid_left/right 는 흰선을 정상 추종하는 상태다. 2026-08-23:
+        # 목록에 없어 LOST 로 떨어졌고, 대시보드가 READY_MODES
+        # (TRACKING/HOLD) 를 못 봐 '8초 안에 유효한 차선을 확인하지
+        # 못했습니다' 로 기록주행 시작이 거부됐다.
+        elif basis in ('yellow', 'white_center',
+                       'avoid_left', 'avoid_right'):
             mode = 'TRACKING'
         elif basis == 'hold':
             mode = 'HOLD'
