@@ -213,6 +213,14 @@ class TrafficLightPerception(Node):
         self.bridge = CvBridge()
         self.declare_parameter('debug_image', True)
         self.declare_parameter('max_hz', MAX_HZ)
+        # 탐색 띠(ROI)를 장소별로 즉시 조절할 수 있게 파라미터화 (2026-08-22).
+        # 새 연습장에서 겐트리 높이가 달라 램프(y=0.35)가 띠(0.373~) 위로 벗어났다.
+        self.declare_parameter('roi_top', ROI_TOP)
+        self.declare_parameter('roi_bottom', ROI_BOTTOM)
+        self.declare_parameter('roi_left', ROI_LEFT)
+        self.declare_parameter('roi_right', ROI_RIGHT)
+        self._apply_roi_params()
+        self.add_on_set_parameters_callback(self._on_roi_params)
         self.publish_debug = bool(self.get_parameter('debug_image').value)
         self.max_hz = float(self.get_parameter('max_hz').value)
 
@@ -232,6 +240,32 @@ class TrafficLightPerception(Node):
             '신호등 인식 시작 · 정규화 색도 + 원형성 · 좌표 하드코딩 없음')
 
     # ---------------------------------------------------------- 입력
+    def _apply_roi_params(self):
+        global ROI_TOP, ROI_BOTTOM, ROI_LEFT, ROI_RIGHT
+        ROI_TOP = float(self.get_parameter('roi_top').value)
+        ROI_BOTTOM = float(self.get_parameter('roi_bottom').value)
+        ROI_LEFT = float(self.get_parameter('roi_left').value)
+        ROI_RIGHT = float(self.get_parameter('roi_right').value)
+        _roi.clear()
+
+    def _on_roi_params(self, params):
+        from rcl_interfaces.msg import SetParametersResult
+        global ROI_TOP, ROI_BOTTOM, ROI_LEFT, ROI_RIGHT
+        for p in params:
+            if p.name == 'roi_top':
+                ROI_TOP = float(p.value)
+            elif p.name == 'roi_bottom':
+                ROI_BOTTOM = float(p.value)
+            elif p.name == 'roi_left':
+                ROI_LEFT = float(p.value)
+            elif p.name == 'roi_right':
+                ROI_RIGHT = float(p.value)
+        _roi.clear()
+        self.get_logger().info(
+            'ROI 갱신: top %.3f bottom %.3f left %.3f right %.3f'
+            % (ROI_TOP, ROI_BOTTOM, ROI_LEFT, ROI_RIGHT))
+        return SetParametersResult(successful=True)
+
     def on_compressed(self, msg):
         try:
             buf = np.frombuffer(msg.data, np.uint8)

@@ -98,7 +98,10 @@ def generate_launch_description():
         # 신호등: 정규화 색도 + 원형성. numpy + OpenCV 만 쓴다.
         Node(package='race_last', executable='traffic_perception',
              name='traffic_perception_node',
-             parameters=[{'debug_image': debug_images, 'max_hz': 20.0}],
+             # roi_top 0.32: 2026-08-22 연습장 실측 (겐트리 램프 y=0.35).
+             # 장소 바뀌면 ros2 param set /traffic_perception_node roi_top ... 로 즉석 조절.
+             parameters=[{'debug_image': debug_images, 'max_hz': 20.0,
+                          'roi_top': 0.32}],
              output='log'),
         # 차량: YOLOv8n(imgsz 640) + 라이다 퓨전. 좌/우와 거리만 낸다.
         Node(package='race_last', executable='vehicle_perception',
