@@ -146,7 +146,23 @@ class VehiclePerception(Node):
         if image is not None:
             self.process(image)
 
+        # 신호 잠금(직진 30s / 좌회전 20s) 동안은 판정이 확정돼 있어
+        # 인식이 무의미하다. 그 사이 CPU 를 조향 파이프라인에 넘긴다.
+        # (2026-08-22 실측: 주행 판단이 4.4Hz 까지 떨어져 커브 이탈)
+        self._skip_until = 0.0
+        self.create_subscription(
+            String, '/kobot_yolop/status', self._on_drive_status, 10)
+
+    def _on_drive_status(self, msg):
+        try:
+            lock = float(json.loads(msg.data).get('signal_lock_s', 0.0))
+        except (ValueError, AttributeError, TypeError):
+            return
+        self._skip_until = time.time() + lock if lock > 0.0 else 0.0
+
     def on_raw(self, msg):
+        if time.time() < self._skip_until:
+            return
         try:
             image = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
         except Exception as err:  # noqa: BLE001
