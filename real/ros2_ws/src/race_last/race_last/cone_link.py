@@ -34,6 +34,8 @@ class ConeLink:
         self._in = _Debouncer(self._fsm.cone_enter_frames)
         self._out = _Debouncer(self._fsm.cone_exit_frames)
         self._active = False
+        # 통로가 앞에 보이는 상태 (진입 전) — 노드가 접근 감속에 쓴다
+        self.approach = False
         self._entered_at = 0.0
         self._gate_last_valid = 0.0
         self._started = False
@@ -73,6 +75,9 @@ class ConeLink:
             # 출발 시각으로 잡는다. 콘 정책에서 이 값은 감속 보수성에만 쓰인다.
             self._ctx.race_started_at = now
         cone, age = self.reading_from(d, now)
+        self.approach = bool(
+            age < 0.6 and cone.lidar_cones >= 2
+            and (cone.lidar_gate_valid or cone.lidar_cones >= 4))
         obs = Observation(now=now, cone=cone, ego_speed_mps=max(0.0, ego_mps),
                           camera_ok=camera_ok, lidar_ok=age < 0.6)
         cfg = self._fsm

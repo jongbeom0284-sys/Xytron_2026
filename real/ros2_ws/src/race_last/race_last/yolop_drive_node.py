@@ -224,6 +224,9 @@ class YolopDriveNode(Node):
         # 라바콘 (kmu_race 이식 — cone_link.py)
         self.declare_parameter('cone_enabled', True)
         self.declare_parameter('cone_speed_scale', 0.7)
+        # 통로가 보이면 진입 전에 이 속도로 미리 감속 (0822 벽 충돌 재발 방지:
+        # 2.16 m/s 로 통로 돌진 -> 진입 후 감속으로는 늦다)
+        self.declare_parameter('cone_approach_speed_units', 9.0)
 
     def _value(self, name):
         return self.get_parameter(name).value
@@ -247,6 +250,8 @@ class YolopDriveNode(Node):
         self.max_steer = float(self._value('max_steer'))
         self.cone_enabled = bool(self._value('cone_enabled'))
         self.cone_speed_scale = float(self._value('cone_speed_scale'))
+        self.cone_approach_units = float(
+            self._value('cone_approach_speed_units'))
         # 61 단위 = 4.87 m/s. VESC 22500 ERPM 상한과 맞춘다.
         if not 0.0 <= self.speed_units <= 61.0:
             raise ValueError('speed_units 는 0~61 단위로 제한한다')
@@ -485,6 +490,14 @@ class YolopDriveNode(Node):
         한 프레임 오검출로 차선을 바꾸면 안 되므로 CAR_CONFIRM 장 연속을 본다.
         차가 사라져도 AVOID_HOLD_SEC 동안은 유지한다. 지나치는 중이니까.
         """
+        # 콘이 2개 이상 보이는 동안은 앞차 회피를 무시한다 — 콘 군집이
+        # 차량(suitcase)으로 오인돼 통로 입구에서 우측 회피 조향이 선
+        # 사고가 있었다 (2026-08-22 21:39 실주행 로그).
+        with self._lock:
+            _cone_d = self._cone_reading
+        if _cone_d and int(_cone_d.get('cones', 0)) >= 2:
+            self._avoid_side = None
+            return
         try:
             payload = json.loads(message.data)
             car = payload.get('car', {})
@@ -737,6 +750,11 @@ class YolopDriveNode(Node):
                                  self.speed_units)
                 speed = 0.0 if self._traffic_stop else cone_speed
                 basis = 'cone'
+            elif (self._cone_link.approach
+                    and speed > self.cone_approach_units):
+                # 통로가 보인다 — 진입 전에 미리 줄인다 (조향은 차선 그대로)
+                speed = self.cone_approach_units
+                basis = 'cone_approach'
 
         message = Float32MultiArray()
         message.data = [float(steer), float(speed)]
