@@ -537,8 +537,16 @@ class YolopDriveNode(Node):
         now = time.monotonic()
         self._car_dist = dist
 
-        near = (dist is not None) and (float(dist) <= AVOID_ENTER_M)
-        far = (dist is None) or (float(dist) >= AVOID_CLEAR_M)
+        # 2026-08-23: 라이다 융합이 실패하면 dist=None 이 되는데, 예전에는
+        # 그때 near=False·far=True 라 회피가 아예 안 걸리고 즉시 해제됐다.
+        # 실측: YOLO 는 dir=LEFT conf 0.73 으로 차를 정확히 잡는데 거리만 없었다.
+        # 거리를 몰라도 좌/우가 나오면 반대 차선으로 붙는다.
+        if dist is None:
+            near = bool(boxes)          # 차가 보이면 회피 대상으로 본다
+            far = not boxes             # 안 보이면 해제
+        else:
+            near = float(dist) <= AVOID_ENTER_M
+            far = float(dist) >= AVOID_CLEAR_M
 
         self._car_recent.append(side if near else 'NONE')
         if len(self._car_recent) > CAR_CONFIRM:
@@ -550,8 +558,10 @@ class YolopDriveNode(Node):
             want = 'right' if side == 'LEFT' else 'left'
             if self._avoid_side != want:
                 self.get_logger().warning(
-                    '앞차 %s %.2fm — %s 흰선으로 회피'
-                    % (side, float(dist), '우측' if want == 'right' else '좌측'))
+                    '앞차 %s %s — %s 흰선으로 회피'
+                    % (side,
+                       ('%.2fm' % float(dist)) if dist is not None else '거리없음',
+                       '우측' if want == 'right' else '좌측'))
             self._avoid_side = want
             self._avoid_until = now + AVOID_HOLD_SEC
         elif far and self._avoid_side and now > self._avoid_until:
