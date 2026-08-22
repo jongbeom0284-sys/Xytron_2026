@@ -170,7 +170,8 @@ class YolopDriveNode(Node):
                                  self._on_enable, dashboard_qos)
 
         self._cone_reading = None
-        self._cone_link = (ConeLink(self.get_logger())
+        self._cone_link = (ConeLink(self.get_logger(),
+                                    float(self._value('cone_approach_depth_m')))
                            if self.cone_enabled else None)
         self._worker = threading.Thread(target=self._infer_loop, daemon=True,
                                         name='yolop-infer')
@@ -227,6 +228,7 @@ class YolopDriveNode(Node):
         # 통로가 보이면 진입 전에 이 속도로 미리 감속 (0822 벽 충돌 재발 방지:
         # 2.16 m/s 로 통로 돌진 -> 진입 후 감속으로는 늦다)
         self.declare_parameter('cone_approach_speed_units', 9.0)
+        self.declare_parameter('cone_approach_depth_m', 1.2)
 
     def _value(self, name):
         return self.get_parameter(name).value

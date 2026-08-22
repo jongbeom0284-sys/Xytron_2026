@@ -26,7 +26,8 @@ READY = SafetyDecision(SafetyLevel.OK, "", True)
 
 
 class ConeLink:
-    def __init__(self, logger):
+    def __init__(self, logger, approach_depth_m=1.2):
+        self.approach_depth_m = float(approach_depth_m)
         self._log = logger
         self._policy = DrivePolicy()
         self._ctx = RaceContext()
@@ -75,9 +76,12 @@ class ConeLink:
             # 출발 시각으로 잡는다. 콘 정책에서 이 값은 감속 보수성에만 쓰인다.
             self._ctx.race_started_at = now
         cone, age = self.reading_from(d, now)
+        # 게이트가 '가까울 때만' 접근 감속 — 멀리 보이는 콘만으로 출발
+        # 가속을 끊던 오발동 수정 (0822 motorlog: 명령이 2.16↔0.72 왕복)
         self.approach = bool(
             age < 0.6 and cone.lidar_cones >= 2
-            and (cone.lidar_gate_valid or cone.lidar_cones >= 4))
+            and cone.lidar_gate_valid
+            and cone.lidar_gate_depth_m <= self.approach_depth_m)
         obs = Observation(now=now, cone=cone, ego_speed_mps=max(0.0, ego_mps),
                           camera_ok=camera_ok, lidar_ok=age < 0.6)
         cfg = self._fsm
