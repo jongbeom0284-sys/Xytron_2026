@@ -478,3 +478,7 @@
   color: #b3282b; background: rgba(216,31,34,.12); border: 1px solid rgba(216,31,34,.45);
   border-radius: 6px; padding: 3px 8px; white-space: nowrap; }
 .signal-card.locked .signal-lamps { opacity: .35; }
+.signal-overlay .roi-box { position: absolute; border: 1.5px dashed #22d3ee;
+  border-radius: 4px; pointer-events: none; }
+.signal-overlay .roi-box b { position: absolute; top: -16px; left: 0;
+  font-size: 11px; font-weight: 600; color: #22d3ee; }
