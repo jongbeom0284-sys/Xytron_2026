@@ -982,7 +982,11 @@ class YolopDriveNode(Node):
         # (TRACKING/HOLD) 를 못 봐 '8초 안에 유효한 차선을 확인하지
         # 못했습니다' 로 기록주행 시작이 거부됐다.
         elif basis in ('yellow', 'white_center',
-                       'avoid_left', 'avoid_right'):
+                       'avoid_left', 'avoid_right',
+                       'cone', 'cone_approach'):
+            # 콘 구간은 라이다 벽을 정상 추종하는 상태다. 차선을 놓친 게
+            # 아니므로 LOST 로 떨어지면 안 된다 (0823: 대시보드가 기록주행을
+            # 끊었다 — avoid 와 같은 원인이었다).
             mode = 'TRACKING'
         elif basis == 'hold':
             mode = 'HOLD'
