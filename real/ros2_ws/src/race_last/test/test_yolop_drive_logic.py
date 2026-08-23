@@ -169,6 +169,9 @@ def test_left_turn_does_not_count_cone_trigger(node):
 
 # ------------------------------------------------------------ 3) 추월 후 앞차 인식 끔
 def test_vehicle_perception_off_after_pass_until_cone_exit(node):
+    # 기본은 False 다 (코너 뒤 이동차량을 욜로로 봐야 하므로). 이 테스트는
+    # 켰을 때의 동작을 지킨다 — 대시보드에서 다시 켤 수 있는 선택지다.
+    node.vehicle_off_after_pass = True
     c = node.clock
     open_vehicle_window(node)
     assert node._vehicle_needed(c.now) is True

@@ -35,6 +35,7 @@ class Fake:
         self._obs = None
         self._obs_recent = []
         self._obs_hold_until = 0.0
+        self._obs_armed = True        # 정지차량 구간(콘 탈출 직후)을 전제
         self._avoid_side = None
         self._avoid_until = 0.0
         self._avoid_rearm_until = 0.0

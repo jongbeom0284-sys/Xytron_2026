@@ -223,6 +223,8 @@ class YolopDriveNode(Node):
         self._obs = None              # 마지막 /lidar/obstacle 관측
         self._obs_recent = []         # 최근 좌/우. 연속 장수를 센다
         self._obs_hold_until = 0.0    # 라이다 회피를 유지하기로 한 시각
+        self._obs_armed = False       # 정지차량(4번) 구간인가. 콘 탈출에 켜고
+                                      # 한 번 지나가면 끈다 — 코너 벽 오검출 방지
 
         self.tracker = LaneTracker(self._lane_config())
         self._load_model()
@@ -393,7 +395,7 @@ class YolopDriveNode(Node):
         self.declare_parameter('straight_hold_gain', STRAIGHT_HOLD_GAIN)
         # 추월을 마치면 다음 콘 탈출까지 앞차 인식을 끈다. False 면 예전처럼
         # 콘 구간 밖에서는 항상 본다.
-        self.declare_parameter('vehicle_off_after_pass', True)
+        self.declare_parameter('vehicle_off_after_pass', False)
 
     # 실행 중 바꿀 수 있는 직진 억제 값과 허용 범위
     HOLD_LIMITS = {
@@ -963,9 +965,17 @@ class YolopDriveNode(Node):
             if now < self._obs_hold_until:
                 return          # 라이다가 계산한 통과 시간이 아직 남았다
             self._avoid_side = None
+            if self._obs_armed:
+                # 정지차량(4번)을 지났다. 라이다는 여기서 끈다 — 다음이 코너라
+                # 벽이 정면 밴드에 들어온다. 이동차량(6번)은 욜로가 이어받는다.
+                self._obs_armed = False
+                self._obs_recent = []
+                self._obs_hold_until = 0.0
+                self.get_logger().warning(
+                    '정지차량 통과 — 라이다 회피 끔. 이동차량은 욜로로 계속 본다')
             if self.vehicle_off_after_pass:
                 # 이 바퀴 추월은 끝났다. 다음 콘 구간을 빠져나올 때까지 앞차
-                # 인식을 끈다 (0823 요구). 대시보드 vehicle_force / reset 로 풀 수 있다.
+                # 인식을 끈다. 코스에 추월이 두 번(정지·이동) 있으므로 기본은 끈다.
                 self._vehicle_passed = True
                 self.get_logger().info(
                     '앞차 벗어남 — 회피 해제. 추월 완료로 보고 다음 콘 탈출까지 앞차 인식 끔')
@@ -1275,6 +1285,7 @@ class YolopDriveNode(Node):
         self._obs = None
         self._obs_recent = []
         self._obs_hold_until = 0.0
+        self._obs_armed = False
         self._fault = None
         link = self._cone_link
         if link is not None:
@@ -1300,6 +1311,8 @@ class YolopDriveNode(Node):
             self._lock_kind = None      # 사라짐 대기는 여기서 끝낸다
             # 새 추월 구간이 온다 — 지난 바퀴의 '추월 완료'를 푼다
             self._vehicle_passed = False
+            # 정지차량 구간 시작 — 라이다 회피를 여기서만 켠다
+            self._obs_armed = True
             # 여기서부터 vehicle_window_sec 동안만 앞차를 본다 (0823 밤 요구)
             self._vehicle_window_until = (
                 now + self.vehicle_window_sec
@@ -1386,6 +1399,11 @@ class YolopDriveNode(Node):
         if not self.lidar_avoid_enabled:
             return
         now = time.monotonic()
+        # 정지차량 구간(콘 탈출 ~ 첫 추월 완료)에서만 쓴다. 그 뒤 코너에서는
+        # 벽이 차 정면 밴드에 들어와 오검출이 난다. 이동차량은 욜로가 본다.
+        if not self._obs_armed:
+            self._obs_recent = []
+            return
         # 콘 모드에서는 콘 자체가 잡히므로 쓰지 않는다.
         link = self._cone_link
         if link is not None and link.active:
@@ -1603,6 +1621,7 @@ class YolopDriveNode(Node):
             'obs_dist': (self._obs or {}).get('dist'),
             'obs_n': (self._obs or {}).get('n', 0),
             'obs_hold_s': round(max(0.0, self._obs_hold_until - now), 2),
+            'obs_armed': bool(self._obs_armed),
             'cone_trig_px': int(self._cone_trig_px),
             'cone_exited': bool(self._cone_exited),
             'vehicle_force_s': round(max(
