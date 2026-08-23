@@ -66,6 +66,9 @@ def open_vehicle_window(n, sec=30.0):
     """
     n._vehicle_window_until = n.clock.now + sec
     n.vehicle_inside_lane_only = False
+    # 라이다 구간이 끝난 뒤를 전제한다 (라이다가 켜져 있으면 욜로는 꺼진다).
+    n._obs_armed = False
+    n._obs_hold_until = 0.0
 
 
 def vehicle(n, side=None, dist=1.0):
@@ -188,11 +191,14 @@ def test_vehicle_perception_off_after_pass_until_cone_exit(node):
     node._vehicle_force_until = c.now + 5.0
     assert node._vehicle_needed(c.now) is True
     node._vehicle_force_until = 0.0
-    # 다음 콘 구간 탈출 → 다시 켠다
+    # 다음 콘 구간 탈출 → 추월 완료가 풀린다. 다만 그 직후는 라이다 구간이라
+    # 욜로는 라이다가 접은 뒤에 켜진다.
     node._cone_was_active = True
     node._cone_link._active = False
     node._check_cone_exit(c.now)
     assert node._vehicle_passed is False
+    assert node._vehicle_needed(c.now) is False, '라이다 구간'
+    node._obs_armed = False
     assert node._vehicle_needed(c.now) is True
 
 
@@ -264,6 +270,11 @@ def test_cone_exit_opens_vehicle_window(node):
     node._cone_link._active = False
     node._check_cone_exit(c.now)                 # 콘 탈출
     assert node._vehicle_window_until == pytest.approx(c.now + 30.0)
+    # 콘 탈출 직후는 라이다(정지차량) 구간이다 — 욜로는 아직 안 켠다
+    assert node._obs_armed is True
+    assert node._vehicle_needed(c.now) is False, '라이다가 보는 동안은 욜로를 끈다'
+
+    node._obs_armed = False                       # 라이다가 접었다
     assert node._vehicle_needed(c.now) is True
 
     c.now += 29.0

@@ -135,6 +135,9 @@ OBS_FRESH_SEC = 0.4      # 관측이 이보다 오래되면 없는 것으로 본
 OBS_PASS_MARGIN_M = 0.8  # 차체 길이 0.6 + 여유. 유지 시간 계산에 쓴다
 OBS_HOLD_MIN_SEC = 0.6   # 유지 시간 하한 (조향이 실제로 먹을 시간)
 OBS_HOLD_MAX_SEC = 3.0   # 상한 (오검출이 오래 붙잡지 못하게)
+# 콘 탈출 뒤 이만큼 안에 정지물체를 못 보면 그 바퀴는 없던 것으로 본다.
+# 실측 214410: 콘 탈출 +2.7초에 잡혔다. 여유를 크게 준 값이다.
+OBS_ARM_SEC = 10.0
 
 
 class YolopDriveNode(Node):
@@ -223,8 +226,9 @@ class YolopDriveNode(Node):
         self._obs = None              # 마지막 /lidar/obstacle 관측
         self._obs_recent = []         # 최근 좌/우. 연속 장수를 센다
         self._obs_hold_until = 0.0    # 라이다 회피를 유지하기로 한 시각
-        self._obs_armed = False       # 정지차량(4번) 구간인가. 콘 탈출에 켜고
-                                      # 한 번 지나가면 끈다 — 코너 벽 오검출 방지
+        self._obs_armed = False       # 라이다가 지금 보고 있는가.
+                                      # 콘 탈출에 켜고 **확정하는 순간 끈다**.
+        self._obs_arm_until = 0.0     # 이때까지 못 보면 정지차량이 없던 것으로
 
         self.tracker = LaneTracker(self._lane_config())
         self._load_model()
@@ -387,6 +391,7 @@ class YolopDriveNode(Node):
         # 라이다로 잡은 차로 안 정지물체로 회피한다. 끄면 카메라(YOLO)만 쓴다.
         self.declare_parameter('lidar_avoid_enabled', True)
         self.declare_parameter('obs_confirm', OBS_CONFIRM)
+        self.declare_parameter('obs_arm_sec', OBS_ARM_SEC)
         # 앞차 확정에 필요한 /vehicle/state 연속 메시지 수 (위 CAR_CONFIRM 주석)
         self.declare_parameter('car_confirm', CAR_CONFIRM)
         # 직진 조향 억제 (상단 상수 주석). 주행 중 ros2 param set 으로 조절.
@@ -439,6 +444,7 @@ class YolopDriveNode(Node):
             self._value('vehicle_inside_lane_only'))
         self.lidar_avoid_enabled = bool(self._value('lidar_avoid_enabled'))
         self.obs_confirm = max(1, int(self._value('obs_confirm')))
+        self.obs_arm_sec = float(self._value('obs_arm_sec'))
         self.cone_trigger_delay_sec = float(self._value('cone_trigger_delay_sec'))
         self.cone_entry_speed_mps = float(self._value('cone_entry_speed_mps'))
         self.hold_delay_sec = float(self._value('straight_hold_delay_sec'))
@@ -606,6 +612,13 @@ class YolopDriveNode(Node):
                 self._obs_recent = []
                 self.get_logger().warning(
                     '라이다 정지물체 회피 = %s' % self.lidar_avoid_enabled)
+            elif param.name == 'obs_arm_sec':
+                value = float(param.value)
+                if not 0.0 <= value <= 60.0:
+                    return SetParametersResult(
+                        successful=False, reason='0~60초 범위여야 한다')
+                self.obs_arm_sec = value
+                self.get_logger().warning('라이다 대기 %.0f초로 변경' % value)
             elif param.name == 'obs_confirm':
                 value = int(param.value)
                 if not 1 <= value <= 20:
@@ -965,14 +978,11 @@ class YolopDriveNode(Node):
             if now < self._obs_hold_until:
                 return          # 라이다가 계산한 통과 시간이 아직 남았다
             self._avoid_side = None
-            if self._obs_armed:
-                # 정지차량(4번)을 지났다. 라이다는 여기서 끈다 — 다음이 코너라
-                # 벽이 정면 밴드에 들어온다. 이동차량(6번)은 욜로가 이어받는다.
-                self._obs_armed = False
-                self._obs_recent = []
+            if self._obs_hold_until > 0.0:
+                # 라이다가 잡은 정지차량을 지났다. 라이다는 확정할 때 이미 껐다.
                 self._obs_hold_until = 0.0
                 self.get_logger().warning(
-                    '정지차량 통과 — 라이다 회피 끔. 이동차량은 욜로로 계속 본다')
+                    '정지차량 통과 — 이동차량은 욜로로 계속 본다')
             if self.vehicle_off_after_pass:
                 # 이 바퀴 추월은 끝났다. 다음 콘 구간을 빠져나올 때까지 앞차
                 # 인식을 끈다. 코스에 추월이 두 번(정지·이동) 있으므로 기본은 끈다.
@@ -1286,6 +1296,7 @@ class YolopDriveNode(Node):
         self._obs_recent = []
         self._obs_hold_until = 0.0
         self._obs_armed = False
+        self._obs_arm_until = 0.0
         self._fault = None
         link = self._cone_link
         if link is not None:
@@ -1311,8 +1322,9 @@ class YolopDriveNode(Node):
             self._lock_kind = None      # 사라짐 대기는 여기서 끝낸다
             # 새 추월 구간이 온다 — 지난 바퀴의 '추월 완료'를 푼다
             self._vehicle_passed = False
-            # 정지차량 구간 시작 — 라이다 회피를 여기서만 켠다
+            # 정지차량 구간 시작 — 라이다만 켠다 (욜로는 이 동안 끈다)
             self._obs_armed = True
+            self._obs_arm_until = now + self.obs_arm_sec
             # 여기서부터 vehicle_window_sec 동안만 앞차를 본다 (0823 밤 요구)
             self._vehicle_window_until = (
                 now + self.vehicle_window_sec
@@ -1329,6 +1341,11 @@ class YolopDriveNode(Node):
         # 대시보드에서 강제로 켠 동안은 무조건 본다
         if now < self._vehicle_force_until:
             return True
+        # 정지차량 구간이다 — 여기는 라이다가 본다. 욜로를 같이 켜면 둘이
+        # 서로 다른 방향을 내고 매 프레임 뒤집힌다 (223056 실측).
+        # 라이다가 보는 중이거나, 계산한 유지 시간이 남아 있는 동안 끈다.
+        if self._obs_armed or now < self._obs_hold_until:
+            return False
         # 이 바퀴 추월을 마쳤다 — 다음 콘 탈출까지 끈다 (vehicle_off_after_pass)
         if self._vehicle_passed:
             return False
@@ -1404,6 +1421,14 @@ class YolopDriveNode(Node):
         if not self._obs_armed:
             self._obs_recent = []
             return
+        if now >= self._obs_arm_until:
+            # 이 바퀴엔 정지차량이 없었다. 라이다를 접고 욜로에 넘긴다.
+            self._obs_armed = False
+            self._obs_recent = []
+            self.get_logger().warning(
+                '정지물체 %.0f초간 못 봄 — 라이다 접고 앞차 인식(욜로) 켬'
+                % self.obs_arm_sec)
+            return
         # 콘 모드에서는 콘 자체가 잡히므로 쓰지 않는다.
         link = self._cone_link
         if link is not None and link.active:
@@ -1438,6 +1463,12 @@ class YolopDriveNode(Node):
         self._obs_hold_until = now + hold
         self._avoid_until = max(self._avoid_until, self._obs_hold_until)
         self._avoid_rearm_until = now + AVOID_REARM_SEC
+        # 여기서 라이다를 끈다. 다시 보지 않는다.
+        # 회피를 시작하면 차가 옆으로 비켜서 밴드 안 풍경이 통째로 바뀐다.
+        # 계속 보면 지나치는 콘·벽이 번갈아 잡혀 방향이 매 프레임 뒤집힌다
+        # (223056 실측: 20Hz 로 좌<->우 왕복, 차선 상실).
+        self._obs_armed = False
+        self._obs_recent = []
 
     def _on_cone_reading(self, message: String) -> None:
         try:
@@ -1622,6 +1653,7 @@ class YolopDriveNode(Node):
             'obs_n': (self._obs or {}).get('n', 0),
             'obs_hold_s': round(max(0.0, self._obs_hold_until - now), 2),
             'obs_armed': bool(self._obs_armed),
+            'obs_arm_s': round(max(0.0, self._obs_arm_until - now), 1),
             'cone_trig_px': int(self._cone_trig_px),
             'cone_exited': bool(self._cone_exited),
             'vehicle_force_s': round(max(

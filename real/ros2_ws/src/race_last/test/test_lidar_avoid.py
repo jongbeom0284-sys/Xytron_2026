@@ -36,6 +36,8 @@ class Fake:
         self._obs_recent = []
         self._obs_hold_until = 0.0
         self._obs_armed = True        # 정지차량 구간(콘 탈출 직후)을 전제
+        self._obs_arm_until = 1e9     # 무장 시한은 이 테스트의 관심사가 아니다
+        self.obs_arm_sec = 10.0
         self._avoid_side = None
         self._avoid_until = 0.0
         self._avoid_rearm_until = 0.0
