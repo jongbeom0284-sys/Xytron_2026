@@ -1,6 +1,6 @@
 """본선 한 줄 실행 — 뇌 + 근육 + 자동 잠금해제.
 
-    ros2 launch race_last race_day.launch.py                # 속도 2.0 m/s
+    ros2 launch race_last race_day.launch.py                # 속도 2.05 m/s
     ros2 launch race_last race_day.launch.py speed:=1.0     # 속도 지정
 
 이 한 줄로: 인식 전체(race.launch.py) + 모터(motor.launch.py armed) 가 뜨고,
@@ -29,8 +29,10 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument(
-            'speed', default_value='2.0',
-            description='차선 주행 최고 속도 [m/s] (콘 구간은 별도 정책)'),
+            'speed', default_value='2.05',
+            description='차선 주행 최고 속도 [m/s] (콘 구간은 별도 정책). '
+                        '직진 구간은 straight_speed_mps(1.9), 최대 조향에서는 '
+                        'curve_min_speed_mps(1.8) 로 따로 내려간다.'),
 
         # 뇌: 인식 전체 + 터미널 상황판 (dashboard 기본 꺼짐 그대로)
         IncludeLaunchDescription(PythonLaunchDescriptionSource(
@@ -42,7 +44,12 @@ def generate_launch_description():
                 os.path.join(kv_share, 'launch', 'motor.launch.py')),
             launch_arguments={
                 'armed': 'true',
-                'acceleration_limit_mps2': '4.0',
+                # 0824: 4.0 -> 8.0. 실측(motorlog 015354)에서 0 -> 1.9 m/s
+                # 90% 도달에 0.49초가 걸렸는데 그게 정확히 1.9/4.0 이다.
+                # 그때 duty 는 16% 뿐이라 모터·배터리는 여유가 있었다 —
+                # 순수하게 이 램프가 잡고 있었다. 출발선에서만 0 부터
+                # 올리므로(콘 직후는 1.05 에서 시작) 출발이 유독 굼떴다.
+                'acceleration_limit_mps2': '8.0',
             }.items()),
 
         # 잠금해제: 준비 확인 후 enabled+armed — 이후는 신호등이 지배
