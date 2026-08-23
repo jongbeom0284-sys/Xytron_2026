@@ -136,6 +136,16 @@ class VehiclePerception(Node):
             self.on_compressed, qos_profile_sensor_data)
         self.create_subscription(LaserScan, TOPIC_SCAN,
                                  self.on_scan, qos_profile_sensor_data)
+        # 주행 노드가 '지금 차량 인식이 필요한가' 를 status 로 알려준다
+        # (vehicle_needed). 콘 구간이면 쉬고, 벗어나면 즉시 다시 본다.
+        # ★ 2026-08-23: 이 구독이 on_compressed() 본문 끝에 들여쓰기 실수로
+        #   들어가 있어 **매 프레임(30Hz)마다 구독이 하나씩 늘었다**. 84분
+        #   뒤 632개 — status 한 건에 콜백 632회, CPU 233%, 앞차 발행
+        #   30Hz → 0.5Hz, 발행측(yolop_drive)도 구독자 634개를 상대하느라
+        #   지연. "점점 느려지고 구독이 안 지워지는" 증상의 원인이었다.
+        #   구독은 __init__ 에서 한 번만 만든다 (test_node_structure.py 가 지킨다).
+        self.create_subscription(
+            String, '/kobot_yolop/status', self._on_drive_status, 10)
 
         self.model_path = str(self.get_parameter('model_path').value)
         self.model = YOLO(self.model_path)
@@ -149,10 +159,21 @@ class VehiclePerception(Node):
         self.scan_at = time.time()
 
     def on_compressed(self, msg):
-        # 신호 잠금(직진 30s / 좌회전 20s) 동안은 판정이 확정돼 있어
-        # 인식이 무의미하다. CPU 를 조향에 넘긴다. (0822: 가드가
-        # on_raw 에만 있어 압축 전환 후 무력화됐던 것을 바로잡음)
+        # 주행 노드가 '차량 인식 불필요'(콘 구간) 라고 하면 쉰다.
+        # CPU 를 조향에 넘긴다. (0822: 가드가 on_raw 에만 있어 압축 전환 후
+        # 무력화됐던 것을 바로잡음)
         if self._paused:
+            return
+
+        # 프레임 번호는 여기서 센다. 추론은 interval 프레임마다 한 번이고,
+        # 디버그 영상을 안 만들 때는 나머지 프레임에서 JPEG 를 풀 이유가 없다
+        # — 직전 결과를 그대로 다시 낸다 (발행 주기 30Hz 는 그대로 유지.
+        # yolop_drive 의 CAR_CONFIRM 연속 장수 계산이 이 주기에 맞춰져 있다).
+        # 2026-08-23: 30회/초 중 20회의 디코드(~3ms)를 없앤다.
+        self.frames += 1
+        need_detect = (self.frames % self.interval == 0)
+        if not need_detect and self.pub_debug is None:
+            self.publish(None)
             return
 
         try:
@@ -162,13 +183,7 @@ class VehiclePerception(Node):
             self.get_logger().warn('압축 영상 디코드 실패: %s' % err)
             return
         if image is not None:
-            self.process(image)
-
-        # 신호 잠금(직진 30s / 좌회전 20s) 동안은 판정이 확정돼 있어
-        # 인식이 무의미하다. 그 사이 CPU 를 조향 파이프라인에 넘긴다.
-        # (2026-08-22 실측: 주행 판단이 4.4Hz 까지 떨어져 커브 이탈)
-        self.create_subscription(
-            String, '/kobot_yolop/status', self._on_drive_status, 10)
+            self.process(image, need_detect)
 
     def _on_drive_status(self, msg):
         try:
@@ -185,6 +200,7 @@ class VehiclePerception(Node):
         self._paused = lock > 0.0
 
     def on_raw(self, msg):
+        """원본 영상 경로. 지금은 구독하지 않는다 (압축만 쓴다) — 도구용으로 남긴다."""
         if self._paused:
             return
         try:
@@ -192,7 +208,8 @@ class VehiclePerception(Node):
         except Exception as err:  # noqa: BLE001
             self.get_logger().warn('원본 영상 변환 실패: %s' % err)
             return
-        self.process(image)
+        self.frames += 1
+        self.process(image, self.frames % self.interval == 0)
 
     # ------------------------------------------------------- 라이다 퓨전
     def distance_from_bbox(self, x1, x2, width):
@@ -231,12 +248,11 @@ class VehiclePerception(Node):
         return float(np.percentile(good, 10))
 
     # ---------------------------------------------------------------- 처리
-    def process(self, image):
-        self.frames += 1
+    def process(self, image, need_detect=True):
         if image.shape[1] != IMAGE_WIDTH or image.shape[0] != IMAGE_HEIGHT:
             image = cv2.resize(image, (IMAGE_WIDTH, IMAGE_HEIGHT))
 
-        if self.frames % self.interval == 0:
+        if need_detect:
             self.detect(image)
         self.publish(image)
 
@@ -316,7 +332,7 @@ class VehiclePerception(Node):
         direction.data = last['dir']
         self.pub_dir.publish(direction)
 
-        if self.pub_debug is not None:
+        if self.pub_debug is not None and image is not None:
             self.pub_debug.publish(
                 self.bridge.cv2_to_imgmsg(self.render(image), 'bgr8'))
 

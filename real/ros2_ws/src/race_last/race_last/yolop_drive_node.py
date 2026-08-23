@@ -69,8 +69,16 @@ CONE_EXIT_LOCK_SEC = 20.0
 # 눌러앉아 억제가 1024초 동안 안 풀린 적이 있다 (0823 실측). 신호가 안
 # 사라져도 확정 시점부터 이만큼 지나면 그냥 사라진 것으로 친다.
 WAIT_GONE_MAX_SEC = 6.0
-STRAIGHT_HOLD_SEC = 3.0  # 직진 신호가 사라진 뒤 조향을 줄여 직진만 하는 시간
-STRAIGHT_HOLD_GAIN = 0.15  # 그동안 조향에 곱하는 값. 0 이면 완전 직진
+# ---- 직진 조향 억제 (0823 저녁 재설계) ----
+# 예전: 초록 확정 순간부터 조향×0.15, 신호가 보이는 동안 연장, 사라진 뒤 3초.
+#   → 확정 순간 차가 중앙에 안 잡혀 있으면 15% 조향으로 흘러 가끔 이탈했다.
+# 지금: 신호가 **사라진 뒤** 먼저 STRAIGHT_HOLD_DELAY 동안 정상 조향(노란선
+#   추종)으로 중앙을 잡고, 그 다음 STRAIGHT_HOLD_SEC 동안만 조향을 줄인다.
+#   확정~사라짐 사이는 정상 조향이다 (노랑 세로 전파 straight_only 는 그대로).
+# 아래 셋은 기본값이고 같은 이름의 파라미터로 주행 중 바꿀 수 있다.
+STRAIGHT_HOLD_DELAY_SEC = 1.0  # 사라진 뒤 정상 조향으로 중앙을 잡는 시간
+STRAIGHT_HOLD_SEC = 3.0        # 그 뒤 조향을 줄여 직진만 하는 시간
+STRAIGHT_HOLD_GAIN = 0.15      # 그동안 조향에 곱하는 값. 0 이면 완전 직진
 
 # ---- 콘 구간 진입 트리거 (0823) ----
 # 첫 라바콘만 차선 위에 놓인다 (실측). 그래서 차선 마스크와 주황이 겹치는
@@ -164,7 +172,9 @@ class YolopDriveNode(Node):
         self._lock_kind = None        # 확정했으나 아직 시야에 남아 있는 신호
         self._lock_since = 0.0        # 그 신호를 확정한 시각
         self._gone = 0                # 그 신호를 연속으로 못 본 장수
-        self._straight_hold_until = 0.0  # 이 시각까지 조향을 줄여 직진만 한다
+        # 직진 조향 억제 창 [from, until). 신호가 사라진 시점에 잡힌다.
+        self._straight_hold_from = 0.0
+        self._straight_hold_until = 0.0
 
         # 앞차 회피 상태
         self._car_recent = []        # 최근 car.dir. 연속 장수를 센다
@@ -172,6 +182,10 @@ class YolopDriveNode(Node):
         self._avoid_until = 0.0      # 이 시각까지 회피를 유지한다
         self._avoid_rearm_until = 0.0  # 이 시각까지는 한 프레임만 봐도 재무장
         self._car_dist = None
+        # 추월을 마쳤다 — 다음 콘 구간 탈출까지 앞차 인식을 끈다 (0823 요구).
+        # 이 바퀴 추월 구간은 끝났으므로 나머지 구간의 오검출을 없애고
+        # GPU 를 차선에 넘긴다. 콘 탈출(_check_cone_exit)에서 풀린다.
+        self._vehicle_passed = False
 
         self.tracker = LaneTracker(self._lane_config())
         self._load_model()
@@ -289,6 +303,20 @@ class YolopDriveNode(Node):
         # False 면 예전 policy 조향(짝지은 게이트)으로 돌아간다.
         self.declare_parameter('cone_wall_steer', True)
         self.declare_parameter('cone_wall_gain', 1.5)
+        # 직진 조향 억제 (상단 상수 주석). 주행 중 ros2 param set 으로 조절.
+        self.declare_parameter('straight_hold_delay_sec', STRAIGHT_HOLD_DELAY_SEC)
+        self.declare_parameter('straight_hold_sec', STRAIGHT_HOLD_SEC)
+        self.declare_parameter('straight_hold_gain', STRAIGHT_HOLD_GAIN)
+        # 추월을 마치면 다음 콘 탈출까지 앞차 인식을 끈다. False 면 예전처럼
+        # 콘 구간 밖에서는 항상 본다.
+        self.declare_parameter('vehicle_off_after_pass', True)
+
+    # 실행 중 바꿀 수 있는 직진 억제 값과 허용 범위
+    HOLD_LIMITS = {
+        'straight_hold_delay_sec': (0.0, 5.0),
+        'straight_hold_sec': (0.0, 10.0),
+        'straight_hold_gain': (0.0, 1.0),
+    }
 
     def _value(self, name):
         return self.get_parameter(name).value
@@ -314,6 +342,10 @@ class YolopDriveNode(Node):
         self.cone_speed_scale = float(self._value('cone_speed_scale'))
         self.cone_approach_units = float(
             self._value('cone_approach_speed_units'))
+        self.hold_delay_sec = float(self._value('straight_hold_delay_sec'))
+        self.hold_sec = float(self._value('straight_hold_sec'))
+        self.hold_gain = float(self._value('straight_hold_gain'))
+        self.vehicle_off_after_pass = bool(self._value('vehicle_off_after_pass'))
         # 61 단위 = 4.87 m/s. VESC 22500 ERPM 상한과 맞춘다.
         if not 0.0 <= self.speed_units <= 61.0:
             raise ValueError('speed_units 는 0~61 단위로 제한한다')
@@ -415,6 +447,25 @@ class YolopDriveNode(Node):
                     self.max_steer = value
                 self.get_logger().warning(
                     f'{param.name} = {value:g} 로 변경')
+            elif param.name in self.HOLD_LIMITS:
+                low, high = self.HOLD_LIMITS[param.name]
+                value = float(param.value)
+                if not low <= value <= high:
+                    return SetParametersResult(
+                        successful=False,
+                        reason=f'{param.name} 는 {low}~{high} 범위여야 한다')
+                attr = {'straight_hold_delay_sec': 'hold_delay_sec',
+                        'straight_hold_sec': 'hold_sec',
+                        'straight_hold_gain': 'hold_gain'}[param.name]
+                setattr(self, attr, value)
+                self.get_logger().warning(
+                    f'{param.name} = {value:g} 로 변경')
+            elif param.name == 'vehicle_off_after_pass':
+                self.vehicle_off_after_pass = bool(param.value)
+                if not self.vehicle_off_after_pass:
+                    self._vehicle_passed = False
+                self.get_logger().warning(
+                    '추월 후 앞차 인식 끄기 = %s' % self.vehicle_off_after_pass)
         return SetParametersResult(successful=True)
 
     # ------------------------------------------------------------ 모델
@@ -457,7 +508,8 @@ class YolopDriveNode(Node):
     # ------------------------------------------------------------ 콜백
     def _on_image_compressed(self, message) -> None:
         try:
-            buf = np.frombuffer(bytes(message.data), dtype=np.uint8)
+            # message.data 는 버퍼 프로토콜을 지원한다. bytes() 복사는 불필요.
+            buf = np.frombuffer(message.data, dtype=np.uint8)
             bgr = cv2.imdecode(buf, cv2.IMREAD_COLOR)
         except Exception as exc:  # noqa: BLE001
             self.get_logger().warning(f'압축 영상 디코드 실패: {exc}')
@@ -507,9 +559,16 @@ class YolopDriveNode(Node):
         노란불   아무것도 바꾸지 않는다. 하던 대로 간다
         없음     확정 대기 중이면 사라짐으로 센다. 아니면 하던 대로 간다
 
-        확정한 뒤에는 그 신호가 시야에 남아 있는 동안 조향 억제와 신호 잠금을
-        계속 앞으로 밀어 둔다. GONE_CONFIRM 장 연속으로 안 보이면 그때부터
-        시간이 흐른다. 즉 신호등을 지나친 직후부터 억제 구간이 시작된다.
+        확정한 뒤에는 그 신호가 시야에 남아 있는 동안 신호 잠금을 계속 앞으로
+        밀어 둔다. GONE_CONFIRM 장 연속으로 안 보이면 '사라진 것'이고, 그
+        시점에 직진 조향 억제 창을 잡는다: 먼저 straight_hold_delay_sec 동안
+        정상 조향으로 중앙을 잡고, 그 다음 straight_hold_sec 동안 조향을 줄인다
+        (상단 STRAIGHT_HOLD_* 주석, 0823 저녁). 신호가 안 사라지면
+        WAIT_GONE_MAX_SEC 에 사라진 것으로 친다.
+
+        초록을 확정할 때마다 콘 진입 트리거를 다시 무장한다 — 2·3바퀴에도
+        첫 콘에서 1바퀴와 똑같이 울리게 (0823 저녁 요구). 좌회전 확정은
+        _straight 를 내려 트리거가 세지 않게 한다 (지름길은 콘 구간을 건너뛴다).
         """
         try:
             state = str(json.loads(message.data).get('state', 'none'))
@@ -520,7 +579,7 @@ class YolopDriveNode(Node):
         self._traffic_at = now
 
         # 확정했는데 그 신호가 아직 보인다 — 아직 신호등을 지나지 않았다.
-        # 억제·잠금 시각을 계속 밀어 사라질 때까지 유지한다. 여기서도
+        # 잠금 시각을 계속 밀어 사라질 때까지 유지한다. 여기서도
         # 빨간불은 안 읽는다. 이미 확정한 판단을 흔들 것이 없다.
         if self._lock_kind is not None:
             if now - self._lock_since > WAIT_GONE_MAX_SEC:
@@ -528,16 +587,13 @@ class YolopDriveNode(Node):
                 self.get_logger().warning(
                     '%s 신호가 %.0f초째 안 사라짐 — 오검출로 보고 지금부터 카운트'
                     % (self._lock_kind, WAIT_GONE_MAX_SEC))
-                self._lock_kind = None
-                self._gone = 0
+                self._signal_gone(now)
                 return
             if state == self._lock_kind:
                 self._gone = 0
                 self._go_locked_until = now + (
                     GO_LOCK_GREEN_SEC if state == 'green'
                     else GO_LOCK_LEFT_SEC)
-                if state == 'green':
-                    self._straight_hold_until = now + STRAIGHT_HOLD_SEC
             else:
                 self._gone += 1
                 if self._gone >= GONE_CONFIRM:
@@ -546,10 +602,10 @@ class YolopDriveNode(Node):
                         '%s 신호가 시야에서 사라짐 — 지금부터 %.0f초 신호 무시%s'
                         % (self._lock_kind,
                            GO_LOCK_GREEN_SEC if green else GO_LOCK_LEFT_SEC,
-                           (', %.0f초 조향 억제' % STRAIGHT_HOLD_SEC)
+                           (', %.1f초 뒤 %.1f초 조향 억제'
+                            % (self.hold_delay_sec, self.hold_sec))
                            if green else ''))
-                    self._lock_kind = None
-                    self._gone = 0
+                    self._signal_gone(now)
             return
 
         # 잠금 중에는 신호등 인식 자체를 쉰다. 빨간불도 안 읽는다.
@@ -587,19 +643,48 @@ class YolopDriveNode(Node):
         self._lock_since = now    # 다만 WAIT_GONE_MAX_SEC 를 넘기지는 않는다
         self._gone = 0
         self._recent.clear()
+        # 새 확정 — 지난 억제 창은 지운다 (사라짐 시점에 다시 잡힌다)
+        self._straight_hold_from = 0.0
+        self._straight_hold_until = 0.0
         if state == 'green':
             self._straight = True
-            self._straight_hold_until = now + STRAIGHT_HOLD_SEC
+            # 콘 진입 트리거 재무장. 1바퀴 첫 확정에서는 이미 무장 상태라
+            # 아무 일도 없고, 2·3바퀴 신호등을 지나며 다시 확정되면 그 바퀴
+            # 첫 콘에서 다시 울린다. (Cone_Perception 은 트리거 뒤 15초 창이고
+            # 좌회전·빨강에서 꺼진다 — 거기는 그대로다.)
+            if self._cone_triggered:
+                self.get_logger().info('초록 재확정 — 콘 진입 트리거 재무장')
+            self._cone_triggered = False
+            self._cone_trig_run = 0
             self.get_logger().info(
                 '초록불 %d장 연속 — 직진 확정. 신호가 시야에서 사라지면'
-                ' 그때부터 %.0f초 조향 억제, %.0f초 신호 무시'
-                % (GO_CONFIRM, STRAIGHT_HOLD_SEC, GO_LOCK_GREEN_SEC))
+                ' %.1f초 정상 조향 뒤 %.1f초 조향 억제, %.0f초 신호 무시'
+                % (GO_CONFIRM, self.hold_delay_sec, self.hold_sec,
+                   GO_LOCK_GREEN_SEC))
         else:
             self._straight = False
-            self._straight_hold_until = 0.0
             self.get_logger().info(
-                '좌회전 %d장 연속 — 직진 해제. 신호가 사라지면 그때부터'
-                ' %.0f초간 신호 무시' % (GO_CONFIRM, GO_LOCK_LEFT_SEC))
+                '좌회전 %d장 연속 — 직진 해제(콘 트리거도 안 센다). 신호가'
+                ' 사라지면 그때부터 %.0f초간 신호 무시'
+                % (GO_CONFIRM, GO_LOCK_LEFT_SEC))
+
+    def _signal_gone(self, now: float) -> None:
+        """확정한 신호가 시야에서 사라졌다(또는 사라진 것으로 친다).
+
+        초록이었으면 직진 조향 억제 창을 지금 기준으로 잡는다:
+            [now + delay, now + delay + hold)
+        delay 동안은 정상 조향으로 차선 중앙을 잡고, 그 뒤 hold 동안 줄인다.
+        """
+        if self._lock_kind == 'green':
+            self._straight_hold_from = now + max(0.0, self.hold_delay_sec)
+            self._straight_hold_until = (
+                self._straight_hold_from + max(0.0, self.hold_sec))
+        self._lock_kind = None
+        self._gone = 0
+
+    def _hold_active(self, now: float) -> bool:
+        """지금 직진 조향 억제 중인가."""
+        return self._straight_hold_from <= now < self._straight_hold_until
 
     def _on_vehicle(self, message: String) -> None:
         """앞차 위치를 받아 회피 방향을 정한다.
@@ -688,10 +773,18 @@ class YolopDriveNode(Node):
             self._lock_kind = None
             if self._straight_hold_until > now:
                 self.get_logger().info('앞차 확정 — 직진 조향억제 해제')
+            self._straight_hold_from = 0.0
             self._straight_hold_until = 0.0
         elif far and self._avoid_side and now > self._avoid_until:
-            self.get_logger().info('앞차 벗어남 — 회피 해제')
             self._avoid_side = None
+            if self.vehicle_off_after_pass:
+                # 이 바퀴 추월은 끝났다. 다음 콘 구간을 빠져나올 때까지 앞차
+                # 인식을 끈다 (0823 요구). 대시보드 vehicle_force / reset 로 풀 수 있다.
+                self._vehicle_passed = True
+                self.get_logger().info(
+                    '앞차 벗어남 — 회피 해제. 추월 완료로 보고 다음 콘 탈출까지 앞차 인식 끔')
+            else:
+                self.get_logger().info('앞차 벗어남 — 회피 해제')
 
     def _side_by_lane(self, boxes, payload) -> str:
         """가장 가까운 앞차가 노란 중앙선의 어느 쪽인지 본다.
@@ -722,7 +815,7 @@ class YolopDriveNode(Node):
     def _avoid_offset(self, now: float) -> float:
         """이 순간 흰선에서 띄울 거리. 0 이면 평소 주행."""
         # 직진 조향 억제 중에는 회피하지 않는다. 구간이 정해져 있어 억제가 이긴다.
-        if now < self._straight_hold_until:
+        if self._hold_active(now):
             return 0.0
         if not self._avoid_side or now > self._avoid_until:
             return 0.0
@@ -843,7 +936,12 @@ class YolopDriveNode(Node):
         노란 중앙선은 색상으로 빼고, 차체 앞범퍼 스티커는 띠로 뺀다.
         콘이 선을 덮으면 그 자리 흰 픽셀이 사라지므로 흰 마스크를 부풀린다.
         """
-        if white is None:
+        # 이미 한 번 울렸으면(1회성 래치, reset 으로만 풀린다) 셀 이유가 없다.
+        # 전체 프레임 HSV 변환 + 15x15 팽창을 그 뒤에도 매 추론마다 하고
+        # 있었다 (0823). 울리기 전에는 임계·초록불과 무관하게 계속 센다 —
+        # 콘 앞에 차를 두고 cone_trig_px 를 보며 임계를 맞추는 작업이 이
+        # 값에 기댄다.
+        if white is None or self._cone_triggered:
             self._cone_trig_px = 0
             self._cone_trig_run = 0
             return
@@ -859,9 +957,6 @@ class YolopDriveNode(Node):
         threshold = int(self._value('cone_trigger_px'))
         if threshold <= 0:
             return                     # 0 이면 트리거를 끈 것이다
-        if not self._straight:
-            self._cone_trig_run = 0    # 초록불 확정 전에는 세지 않는다
-            return
         if not self._straight:
             self._cone_trig_run = 0    # 초록불 확정 전에는 세지 않는다
             return
@@ -924,6 +1019,7 @@ class YolopDriveNode(Node):
         self._gone = 0
         self._recent.clear()
         self._straight = False
+        self._straight_hold_from = 0.0
         self._straight_hold_until = 0.0
         self._traffic_stop = False
         self._last_red_at = 0.0
@@ -931,6 +1027,7 @@ class YolopDriveNode(Node):
         self._avoid_side = None
         self._avoid_until = 0.0
         self._car_dist = None
+        self._vehicle_passed = False
         self._cone_reading = None
         self._cone_was_active = False
         self._cone_exited = False
@@ -960,6 +1057,8 @@ class YolopDriveNode(Node):
             self._go_locked_until = max(self._go_locked_until,
                                         now + CONE_EXIT_LOCK_SEC)
             self._lock_kind = None      # 사라짐 대기는 여기서 끝낸다
+            # 새 추월 구간이 온다 — 지난 바퀴의 '추월 완료'를 푼다
+            self._vehicle_passed = False
             self.get_logger().warning(
                 '라바콘 구간 이탈 — 앞차 인식 켬, 신호는 %.0f초 더 무시'
                 % CONE_EXIT_LOCK_SEC)
@@ -970,6 +1069,9 @@ class YolopDriveNode(Node):
         # 대시보드에서 강제로 켠 동안은 무조건 본다
         if now < self._vehicle_force_until:
             return True
+        # 이 바퀴 추월을 마쳤다 — 다음 콘 탈출까지 끈다 (vehicle_off_after_pass)
+        if self._vehicle_passed:
+            return False
         # 콘 구간(진입 또는 접근)에서는 콘을 차량으로 오인한다
         link = self._cone_link
         if link is not None and (link.active or link.approach):
@@ -986,6 +1088,12 @@ class YolopDriveNode(Node):
     def _maybe_publish_debug(self, bgr, result) -> None:
         now = time.monotonic()
         if now - self._last_overlay < 1.0 / max(self.debug_hz, 0.1):
+            return
+        # 아무도 안 보는 오버레이(마스크 칠하기 + 921KB 발행, 7Hz)는 만들지
+        # 않는다. 대시보드(web_video_server)가 붙거나 기록 중일 때만 그린다.
+        # 본선(dashboard:=false)에서는 구독자가 없다 (2026-08-23).
+        if (self.pub_debug.get_subscription_count() == 0
+                and self._recording is None):
             return
         self._last_overlay = now
         speed = self.speed_units if self._enabled else 0.0
@@ -1041,18 +1149,22 @@ class YolopDriveNode(Node):
                 if fault is None and enabled:
                     steer = float(np.clip(result.steer, -self.max_steer,
                                           self.max_steer))
-                    # 직진 확정 직후에는 조향을 줄여 사실상 직진만 한다.
+                    # 직진 신호가 사라진 뒤 (delay 동안 중앙을 잡고 나서)
+                    # hold 동안 조향을 줄여 사실상 직진만 한다.
                     # 삼거리에서 좌회전 차선으로 끌려가는 것을 막는다.
-                    if now < self._straight_hold_until:
-                        steer *= STRAIGHT_HOLD_GAIN
+                    if self._hold_active(now):
+                        steer *= self.hold_gain
                     # 빨간불이면 속도만 0 으로 떨군다. 조향은 그대로 둔다.
                     speed = 0.0 if self._traffic_stop else self.speed_units
         else:
             with self._lock:
                 self._stale = True
-            if self._recording is not None:
-                self._write_record(result, steer, speed,
-                                   getattr(self, '_last_overlay_image', None))
+        # 기록은 결과가 있는 틱에만 적는다. (원본은 이 호출이 위 else 안에
+        # 있어 — 결과가 **없는** 틱에만 불리고 그때 result 가 미정의라
+        # NameError 로 제어 타이머가 죽을 수 있었다. 0823 정리.)
+        if self._recording is not None and payload is not None:
+            self._write_record(result, steer, speed,
+                               getattr(self, '_last_overlay_image', None))
 
         # ── 라바콘 구간: kmu_race 이식 조향(cone_link)으로 대체 ──
         if self._cone_link is not None and fault is None and enabled:
@@ -1156,8 +1268,15 @@ class YolopDriveNode(Node):
             # 사후 분석용 판단 근거 (2026-08-22: 재생값과 실주행값이
             # 달라 원인 추적이 불가능했던 문제. 이제 전부 남긴다)
             'straight_only': bool(self._straight),
-            'straight_hold': round(max(
-                0.0, self._straight_hold_until - now), 2),
+            # straight_hold: 억제가 진행 중이면 남은 초, 아니면 0.
+            # straight_hold_in: 억제가 예약돼 있으면 시작까지 남은 초(중앙 잡는 중).
+            'straight_hold': round(
+                (self._straight_hold_until - now)
+                if self._hold_active(now) else 0.0, 2),
+            'straight_hold_in': round(max(
+                0.0, self._straight_hold_from - now)
+                if now < self._straight_hold_until else 0.0, 2),
+            'vehicle_passed': bool(self._vehicle_passed),
             'cone_trig_px': int(self._cone_trig_px),
             'cone_exited': bool(self._cone_exited),
             'vehicle_force_s': round(max(

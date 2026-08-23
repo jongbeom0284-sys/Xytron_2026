@@ -94,6 +94,15 @@ def classify(nr, ng, nb):
 
 _roi = {}
 
+# 탐색 띠 둘레의 여유 [px]. 띠 밖으로 나가 보는 계산은 둘뿐이다:
+#   · 3x3 가우시안 블러 — 이웃 1px
+#   · arrow_beside — 초록원 왼쪽으로 (ARROW_PITCH + 1.6)·반지름 = 5.2·r,
+#     위아래로 1.6·r. 램프 면적이 1000px(r≈18)이어도 가로 94px / 세로 29px.
+# 그래서 이 여유 안에서는 전체 프레임으로 계산한 것과 결과가 같다.
+# (기본 띠 0.28×0.06 + 여유 = 371×93px ≈ 전체 640×480 의 1/9)
+CROP_PAD_X = 96
+CROP_PAD_Y = 48
+
 
 def roi_box(shape):
     height, width = shape[:2]
@@ -101,12 +110,22 @@ def roi_box(shape):
             int(ROI_RIGHT * width), int(ROI_BOTTOM * height))
 
 
+def crop_box(shape):
+    """계산에 쓸 잘라낸 영역 (x0, y0, x1, y1). 띠 + 여유, 화면 안으로 자른다."""
+    height, width = shape[:2]
+    x0, y0, x1, y1 = roi_box(shape)
+    return (max(0, x0 - CROP_PAD_X), max(0, y0 - CROP_PAD_Y),
+            min(width, x1 + CROP_PAD_X), min(height, y1 + CROP_PAD_Y))
+
+
 def roi_mask(shape):
+    """잘라낸 영역(crop_box) 크기의 마스크. 탐색 띠 안만 True."""
+    cx0, cy0, cx1, cy1 = crop_box(shape)
     key = (shape[0], shape[1], ROI_TOP, ROI_BOTTOM, ROI_LEFT, ROI_RIGHT)
     if key not in _roi:
-        mask = np.zeros(shape[:2], dtype=bool)
+        mask = np.zeros((cy1 - cy0, cx1 - cx0), dtype=bool)
         x0, y0, x1, y1 = roi_box(shape)
-        mask[y0:y1, x0:x1] = True
+        mask[y0 - cy0:y1 - cy0, x0 - cx0:x1 - cx0] = True
         _roi.clear()
         _roi[key] = mask
     return _roi[key]
@@ -118,12 +137,15 @@ def arrow_beside(planes, main):
     화살표는 원이 아니다. 원형성 조건을 걸면 거리가 멀어질수록 놓친다.
     대신 위치로 찾는다. 램프 간격은 반지름의 3.6배(실측)이므로 초록원의
     면적에서 역산한다. 좌표를 알려주는 것이 아니라 검출된 램프에서 잰다.
+
+    planes 는 잘라낸 영역 좌표계이고 (ox, oy) 가 그 원점이다. 램프 좌표는
+    원본 좌표계이므로 여기서 옮겨 보고, 돌려주는 상자는 다시 원본 좌표다.
     """
-    nr, ng, nb, val = planes
+    nr, ng, nb, val, ox, oy = planes
     height, width = val.shape
     radius = max(1.0, (main['area'] / 3.14159) ** 0.5)
-    cx = main['x'] - ARROW_PITCH * radius
-    cy = main['y']
+    cx = main['x'] - ox - ARROW_PITCH * radius
+    cy = main['y'] - oy
     half = 1.6 * radius
     x0, x1 = int(round(cx - half)), int(round(cx + half)) + 1
     y0, y1 = int(round(cy - half)), int(round(cy + half)) + 1
@@ -135,17 +157,26 @@ def arrow_beside(planes, main):
     hit = ((val[sub] > ARROW_VALUE)
            & ((ng[sub] - nr[sub]) > CYAN_MARGIN)
            & (nb[sub] > MIN_BLUE))
-    return int(hit.sum()), (x0, y0, x1 - x0, y1 - y0)
+    return int(hit.sum()), (x0 + ox, y0 + oy, x1 - x0, y1 - y0)
 
 
 def find_lamps(image):
-    """켜진 램프 덩어리를 찾는다. 전체 프레임을 그대로 본다."""
-    nr, ng, nb, val = chroma_planes(image)
+    """켜진 램프 덩어리를 찾는다. 램프 좌표는 원본 프레임 기준이다.
+
+    2026-08-23: 탐색 띠는 화면의 약 2% (0.28×0.06) 인데 정규화 색도를 전체
+    640×480 에서 float32 로 계산하고 있었다 (노드 CPU 73%). 띠 + 여유만
+    잘라 계산한다. 마스크는 여전히 띠 안만 켜므로 검출 결과는 같고, 외부
+    도구(signal_grid/build_combined/overlay_frames)가 쓰는 반환 형식도
+    그대로다: 램프는 원본 좌표, planes 는 decide() 에만 넘기는 불투명 값.
+    """
+    cx0, cy0, cx1, cy1 = crop_box(image.shape)
+    crop = image[cy0:cy1, cx0:cx1]
+    nr, ng, nb, val = chroma_planes(crop)
     spread = (np.maximum(np.maximum(nr, ng), nb)
               - np.minimum(np.minimum(nr, ng), nb))
     lit = (val > MIN_VALUE) & (nb > MIN_BLUE) & (spread > MIN_SPREAD)
-    # 자르지 않고 마스크만 끈다. 좌표가 원본 그대로 유지된다.
-    lit &= roi_mask(val.shape)
+    # 띠 밖은 마스크로 끈다 (여유 영역은 계산에만 쓰고 검출하지 않는다).
+    lit &= roi_mask(image.shape)
     count, _, stats, cent = cv2.connectedComponentsWithStats(
         lit.astype(np.uint8), 8)
     lamps = []
@@ -167,11 +198,11 @@ def find_lamps(image):
         kind = classify(vr, vg, vb)
         if kind is None:
             continue
-        lamps.append(dict(x=float(cent[i][0]), y=float(cent[i][1]),
-                          rect=(int(x), int(y), int(w), int(h)),
+        lamps.append(dict(x=float(cent[i][0]) + cx0, y=float(cent[i][1]) + cy0,
+                          rect=(int(x) + cx0, int(y) + cy0, int(w), int(h)),
                           area=int(area), c=kind, nb=vb, ng=vg, nr=vr,
                           aspect=aspect, fill=fill))
-    return lamps, (nr, ng, nb, val)
+    return lamps, (nr, ng, nb, val, cx0, cy0)
 
 
 def decide(lamps, planes=None):
@@ -228,7 +259,6 @@ class TrafficLightPerception(Node):
         self.pub_state = self.create_publisher(String, TOPIC_STATE, 10)
         self.pub_debug = (self.create_publisher(Image, TOPIC_DEBUG, 1)
                           if self.publish_debug else None)
-        self._skip_until = 0.0
         # 압축 스트림 구독 제거 (2026-08-22): 원본과 중복 디코딩으로
         # 초당 ~50회 디코드가 CPU 를 포화시켜 주행 판단이 4Hz 로 떨어졌다.
         # 2026-08-22: 원본(900KB/장) 구독은 대역폭에 질식해 7.9Hz 까지
@@ -236,6 +266,16 @@ class TrafficLightPerception(Node):
         self.create_subscription(
             CompressedImage, TOPIC_IMAGE_COMPRESSED,
             self.on_compressed, qos_profile_sensor_data)
+        # ★ 신호 잠금 중 '인식 일시정지'(0822 perf 커밋)는 여기 없다 — 의도다.
+        #   그 커밋의 status 구독은 구독되지 않는 on_raw() 본문에 들어가 있어
+        #   한 번도 동작한 적이 없고, 0823 의 신호 로직(yolop_drive._on_traffic:
+        #   확정한 신호가 **시야에서 사라진 시점**부터 조향억제·잠금을 센다)은
+        #   확정 뒤에도 신호 판정이 계속 들어오는 것을 전제로 튜닝됐다. 지금
+        #   멈추면 직진 억제가 '확정 +3초'에 끝나 삼거리 좌회전 차선으로 끌린다.
+        #   CPU 는 대신 find_lamps 의 띠 크롭으로 줄였다 (73% → 한 자릿수).
+        #   정말 쉬게 하려면 yolop_drive 가 status 에 signal_needed 를 실어
+        #   '잠금 중 + 사라짐 확인 끝 + 직진억제 끝' 일 때만 False 를 주고
+        #   여기서 그 값만 보면 된다 (Vehicle_Perception 의 vehicle_needed 와 같은 꼴).
 
         self.last_run = 0.0
         self.history = []
@@ -271,13 +311,21 @@ class TrafficLightPerception(Node):
             % (ROI_TOP, ROI_BOTTOM, ROI_LEFT, ROI_RIGHT))
         return SetParametersResult(successful=True)
 
-    def on_compressed(self, msg):
-        # 신호 잠금(직진 30s / 좌회전 20s) 동안은 판정이 확정돼 있어
-        # 인식이 무의미하다. CPU 를 조향에 넘긴다. (0822: 가드가
-        # on_raw 에만 있어 압축 전환 후 무력화됐던 것을 바로잡음)
-        if time.time() < self._skip_until:
-            return
+    def _due(self):
+        """max_hz 제한. 디코드 **전에** 본다 — 버릴 프레임은 풀지 않는다.
 
+        (2026-08-23: 30Hz 로 들어오는 JPEG 를 전부 풀고 나서 20Hz 로 버리고
+        있었다. 초당 10장, ~3ms 씩 그냥 버린 셈이다.)
+        """
+        now = time.time()
+        if now - self.last_run < 1.0 / max(self.max_hz, 0.1):
+            return False
+        self.last_run = now
+        return True
+
+    def on_compressed(self, msg):
+        if not self._due():
+            return
         try:
             buf = np.frombuffer(msg.data, np.uint8)
             image = cv2.imdecode(buf, cv2.IMREAD_COLOR)
@@ -288,6 +336,9 @@ class TrafficLightPerception(Node):
             self.process(image, msg.header)
 
     def on_raw(self, msg):
+        """원본 영상 경로. 지금은 구독하지 않는다 (압축만 쓴다) — 도구용으로 남긴다."""
+        if not self._due():
+            return
         try:
             image = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
         except Exception as err:  # noqa: BLE001
@@ -296,26 +347,8 @@ class TrafficLightPerception(Node):
         self.process(image, msg.header)
 
     # ---------------------------------------------------------- 처리
-        # 신호 잠금(직진 30s / 좌회전 20s) 동안은 판정이 확정돼 있어
-        # 인식이 무의미하다. 그 사이 CPU 를 조향 파이프라인에 넘긴다.
-        # (2026-08-22 실측: 주행 판단이 4.4Hz 까지 떨어져 커브 이탈)
-        self.create_subscription(
-            String, '/kobot_yolop/status', self._on_drive_status, 10)
-
-    def _on_drive_status(self, msg):
-        try:
-            lock = float(json.loads(msg.data).get('signal_lock_s', 0.0))
-        except (ValueError, AttributeError, TypeError):
-            return
-        self._skip_until = time.time() + lock if lock > 0.0 else 0.0
-
     def process(self, image, header):
         now = time.time()
-        if now < self._skip_until:
-            return
-        if now - self.last_run < 1.0 / max(self.max_hz, 0.1):
-            return
-        self.last_run = now
         started = time.perf_counter()
 
         lamps, planes = find_lamps(image)

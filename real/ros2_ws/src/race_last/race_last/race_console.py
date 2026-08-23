@@ -11,7 +11,7 @@ import time
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from sensor_msgs.msg import Image, LaserScan
+from sensor_msgs.msg import CompressedImage, LaserScan
 from std_msgs.msg import Float32, String
 
 CLEAR = '\x1b[2J\x1b[H'
@@ -46,8 +46,12 @@ class RaceConsole(Node):
         self.cone_info = ''
         self.booted = False
 
-        self.create_subscription(Image, '/image_raw', self._on_image,
-                                 qos_profile_sensor_data)
+        # 카메라 생존만 본다. 원본(921KB×30Hz = 27MB/s 를 파이썬 메시지로
+        # 역직렬화)이 아니라 압축(~80KB)을 받는다 — 인식 노드 셋이 전부
+        # 압축을 쓰므로 이 구독 하나 때문에 usb_cam 이 원본을 따로 실어 나를
+        # 이유가 없다 (2026-08-23).
+        self.create_subscription(CompressedImage, '/image_raw/compressed',
+                                 self._on_image, qos_profile_sensor_data)
         self.create_subscription(LaserScan, '/scan', self._on_scan,
                                  qos_profile_sensor_data)
         self.create_subscription(String, '/traffic_light/state',
