@@ -112,7 +112,17 @@ def generate_launch_description():
              output='log'),
         # 라바콘: 차선 위 주황(첫 콘)이 잡히면 15초간 활성. 0823 합의.
         Node(package='race_last', executable='cone_perception',
-             name='cone_perception', output='log'),
+             name='cone_perception',
+             # 트리거는 기존값 그대로. 활성화 뒤 wall_aim만 실차에서 검증한
+             # 차량 중심 기준(전방 LiDAR 보정 15cm)으로 계산한다.
+             parameters=[{
+                 'vehicle_length_m': 0.60,
+                 'vehicle_width_m': 0.30,
+                 'lidar_to_vehicle_center_m': 0.15,
+                 'center_lookahead_m': 0.55,
+                 'boundary_clearance_m': 0.02,
+             }],
+             output='log'),
         # 모터 텔레메트리 상시 기록 (~/motor_logs/*.csv) — 주행 진단용
         Node(package='race_last', executable='motor_logger',
              name='motor_logger', output='log'),

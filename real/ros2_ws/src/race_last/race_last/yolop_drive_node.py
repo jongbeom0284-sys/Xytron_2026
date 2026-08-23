@@ -77,7 +77,10 @@ WAIT_GONE_MAX_SEC = 6.0
 #   확정~사라짐 사이는 정상 조향이다 (노랑 세로 전파 straight_only 는 그대로).
 # 아래 셋은 기본값이고 같은 이름의 파라미터로 주행 중 바꿀 수 있다.
 STRAIGHT_HOLD_DELAY_SEC = 1.0  # 사라진 뒤 정상 조향으로 중앙을 잡는 시간
-STRAIGHT_HOLD_SEC = 3.0        # 그 뒤 조향을 줄여 직진만 하는 시간
+# 0823 저녁: 3.0 -> 0.0 (억제 끔). 직진 구간에서 흰선 중앙을 따라가게 된
+# 뒤로는 조향을 따로 줄일 이유가 없다 — 목표가 이미 차로 중앙이다.
+# 되살리려면 straight_hold_sec 파라미터에 초를 넣으면 된다.
+STRAIGHT_HOLD_SEC = 0.0        # 그 뒤 조향을 줄여 직진만 하는 시간
 STRAIGHT_HOLD_GAIN = 0.15      # 그동안 조향에 곱하는 값. 0 이면 완전 직진
 
 # ---- 콘 구간 진입 트리거 (0823) ----
@@ -96,7 +99,16 @@ AVOID_ENTER_M = 1.30     # 이 거리 안이면 회피 시작
 AVOID_CLEAR_M = 1.80     # 이만큼 멀어지면 해제
 AVOID_HOLD_SEC = 3.0     # 인식이 꺼진 순간부터 이 시간은 회피 유지,
                          # 지나면 차선 중앙으로 복귀 (0823 요구)
-CAR_CONFIRM = 5          # 같은 방향이 이만큼 연속이어야 차로 인정 (첫 진입만)
+# 같은 방향이 이만큼 연속이어야 차로 인정 (첫 진입만). 단위는 /vehicle/state
+# **메시지 수**다 — 추론 횟수가 아니다.
+# 카메라 30Hz 로 발행하고 추론은 3프레임당 1회(10Hz)라 같은 판정이 3번씩
+# 실려 나간다. 그래서 환산은:
+#     3 = 검출 1회로 확정 (0.10초)   ← 0823 저녁 채택
+#     5 = 검출 2회 (0.17초)
+#     9 = 검출 3회 (0.30초)
+# 주의: 이 값은 발행 주기에 묶여 있다. 0823 오전 구독 누수로 발행이 0.5~2Hz
+# 였을 때는 5가 2.5초였다. 발행 주기를 바꾸면 이 값도 다시 봐야 한다.
+CAR_CONFIRM = 3          # 기본값. 주행 중에는 car_confirm 파라미터로 바꾼다
 AVOID_REARM_SEC = 6.0    # 회피가 걸렸던 뒤 이 시간 안에는 한 프레임만 봐도
                          # 바로 회피로 돌아간다. 인식이 깜빡여도 놓지 않는다
 VEHICLE_MUTE_SEC = 10.0  # 앞차를 확정하면 이 시간 동안 신호를 무시한다.
@@ -169,6 +181,7 @@ class YolopDriveNode(Node):
         self._cone_trig_px = 0        # 차선 위 주황 픽셀 수 (직전 프레임)
         self._cone_trig_run = 0       # 임계를 넘긴 연속 장수
         self._cone_triggered = False  # 콘 구간 진입을 이미 알렸는가
+        self._straight_at = 0.0       # 직진(초록)을 확정한 시각 — 주황 감시 지연 기준
         self._lock_kind = None        # 확정했으나 아직 시야에 남아 있는 신호
         self._lock_since = 0.0        # 그 신호를 확정한 시각
         self._gone = 0                # 그 신호를 연속으로 못 본 장수
@@ -239,8 +252,22 @@ class YolopDriveNode(Node):
             self.get_logger(),
             float(self._value('cone_approach_depth_m')),
             wall_steer=bool(self._value('cone_wall_steer')),
-            wall_gain=float(self._value('cone_wall_gain')))
+            wall_gain=float(self._value('cone_wall_gain')),
+            enter_frames=int(self._value('cone_enter_frames')),
+            entry_speed_units=self._cone_entry_units(),
+            entry_stable_frames=int(
+                self._value('cone_entry_stable_frames')),
+            entry_weak_timeout_sec=float(
+                self._value('cone_entry_weak_timeout_sec')))
             if self.cone_enabled else None)
+        if self._cone_link is not None:
+            # Standalone 실차 검증본과 같은 물리 가속도 램프. 트리거/FSM은
+            # 건드리지 않고 ConeLink가 활성화된 동안의 상승률만 맞춘다.
+            output_mps_per_policy_unit = max(
+                1e-6, self.mps_per_unit * self.cone_speed_scale)
+            self._cone_link._policy.speed.config.ramp_up_per_s = (
+                self.cone_acceleration_limit_mps2
+                / output_mps_per_policy_unit)
         self._worker = threading.Thread(target=self._infer_loop, daemon=True,
                                         name='yolop-infer')
         self._worker.start()
@@ -295,6 +322,8 @@ class YolopDriveNode(Node):
         # 차선 위 주황이 이 픽셀 수를 넘으면 콘 구간 진입. 0 이면 끈다.
         self.declare_parameter('cone_trigger_px', 0)
         self.declare_parameter('cone_speed_scale', 0.7)
+        self.declare_parameter('cone_max_speed_mps', 1.5)
+        self.declare_parameter('cone_acceleration_limit_mps2', 4.0)
         # 통로가 보이면 진입 전에 이 속도로 미리 감속 (0822 벽 충돌 재발 방지:
         # 2.16 m/s 로 통로 돌진 -> 진입 후 감속으로는 늦다)
         self.declare_parameter('cone_approach_speed_units', 9.0)
@@ -303,6 +332,25 @@ class YolopDriveNode(Node):
         # False 면 예전 policy 조향(짝지은 게이트)으로 돌아간다.
         self.declare_parameter('cone_wall_steer', True)
         self.declare_parameter('cone_wall_gain', 1.5)
+        # 초록 확정 뒤 이 시간이 지나야 주황(콘 진입 트리거)을 세기 시작한다.
+        # 신호등 바로 앞의 주황 물체로 콘 구간을 잘못 여는 것을 막는다 (0823 요구).
+        self.declare_parameter('cone_trigger_delay_sec', 2.0)
+        # 라이다가 콘을 본 뒤 콘 모드로 넘어가기까지 필요한 연속 프레임 수.
+        # 1 = 즉시 (0823 요구).
+        self.declare_parameter('cone_enter_frames', 1)
+        # 콘 모드 진입 시 속도 램프의 시작값 [m/s]. 0 이면 예전처럼 0 에서 시작.
+        self.declare_parameter('cone_entry_speed_mps', 0.5)
+        # 진입 첫 프레임의 단측/임시 경계를 곧바로 조향에 쓰지 않는다.
+        # 양쪽 벽의 서로 다른 라이다 프레임 수와 최대 대기시간이다.
+        # 시간 초과 뒤에도 정지하지 않고 직전 조향에서 제한 전환한다.
+        self.declare_parameter('cone_entry_stable_frames', 2)
+        self.declare_parameter('cone_entry_weak_timeout_sec', 0.25)
+        # 직진 구간(초록 확정 ~ 콘 트리거) 속도 상한 [m/s]. 0 이면 제한 없음.
+        # 0823 실측: 이 구간 끝에서 콘 통로에 2.16 m/s 로 조향 +33 인 채
+        # 들어가 우측으로 밀렸다. 통로 진입 속도를 낮춰 그 진입각 오차를 줄인다.
+        self.declare_parameter('straight_speed_mps', 1.6)
+        # 앞차 확정에 필요한 /vehicle/state 연속 메시지 수 (위 CAR_CONFIRM 주석)
+        self.declare_parameter('car_confirm', CAR_CONFIRM)
         # 직진 조향 억제 (상단 상수 주석). 주행 중 ros2 param set 으로 조절.
         self.declare_parameter('straight_hold_delay_sec', STRAIGHT_HOLD_DELAY_SEC)
         self.declare_parameter('straight_hold_sec', STRAIGHT_HOLD_SEC)
@@ -340,8 +388,16 @@ class YolopDriveNode(Node):
         self.max_steer = float(self._value('max_steer'))
         self.cone_enabled = bool(self._value('cone_enabled'))
         self.cone_speed_scale = float(self._value('cone_speed_scale'))
+        self.cone_max_speed_mps = float(
+            self._value('cone_max_speed_mps'))
+        self.cone_acceleration_limit_mps2 = float(
+            self._value('cone_acceleration_limit_mps2'))
         self.cone_approach_units = float(
             self._value('cone_approach_speed_units'))
+        self.car_confirm = max(1, int(self._value('car_confirm')))
+        self.straight_speed_mps = float(self._value('straight_speed_mps'))
+        self.cone_trigger_delay_sec = float(self._value('cone_trigger_delay_sec'))
+        self.cone_entry_speed_mps = float(self._value('cone_entry_speed_mps'))
         self.hold_delay_sec = float(self._value('straight_hold_delay_sec'))
         self.hold_sec = float(self._value('straight_hold_sec'))
         self.hold_gain = float(self._value('straight_hold_gain'))
@@ -351,6 +407,24 @@ class YolopDriveNode(Node):
             raise ValueError('speed_units 는 0~61 단위로 제한한다')
         if not 0.0 < self.max_steer <= 40.0:
             raise ValueError('max_steer 는 0~40 단위로 제한한다')
+        if (not math.isfinite(self.cone_speed_scale)
+                or self.cone_speed_scale < 0.0):
+            raise ValueError('cone_speed_scale 은 유한한 0 이상 값이어야 한다')
+        if (not math.isfinite(self.cone_max_speed_mps)
+                or self.cone_max_speed_mps <= 0.0):
+            raise ValueError('cone_max_speed_mps 는 유한한 양수여야 한다')
+        if (not math.isfinite(self.cone_acceleration_limit_mps2)
+                or self.cone_acceleration_limit_mps2 <= 0.0):
+            raise ValueError(
+                'cone_acceleration_limit_mps2 는 유한한 양수여야 한다')
+
+    def _cone_entry_units(self) -> float:
+        """콘 진입 속도 [m/s] → 정책 단위. 노드가 정책 출력에 곱하는
+        cone_speed_scale 을 미리 나눠, 실제 모터 명령이 이 m/s 가 되게 한다."""
+        if self.cone_entry_speed_mps <= 0.0:
+            return 0.0
+        return (self.cone_entry_speed_mps / max(self.mps_per_unit, 1e-6)
+                / max(self.cone_speed_scale, 1e-6))
 
     def _lane_config(self) -> LaneConfig:
         return LaneConfig(
@@ -460,6 +534,39 @@ class YolopDriveNode(Node):
                 setattr(self, attr, value)
                 self.get_logger().warning(
                     f'{param.name} = {value:g} 로 변경')
+            elif param.name == 'car_confirm':
+                value = int(param.value)
+                if not 1 <= value <= 30:
+                    return SetParametersResult(
+                        successful=False, reason='car_confirm 은 1~30 이어야 한다')
+                self.car_confirm = value
+                self._car_recent = []
+                self.get_logger().warning(
+                    '앞차 확정 연속 %d메시지(약 %.2f초)로 변경' % (value, value / 30.0))
+            elif param.name == 'cone_trigger_delay_sec':
+                value = float(param.value)
+                if not 0.0 <= value <= 10.0:
+                    return SetParametersResult(
+                        successful=False, reason='0~10초 범위여야 한다')
+                self.cone_trigger_delay_sec = value
+                self.get_logger().warning('주황 감시 지연 %.1f초로 변경' % value)
+            elif param.name == 'straight_speed_mps':
+                value = float(param.value)
+                if not 0.0 <= value <= 4.87:
+                    return SetParametersResult(
+                        successful=False, reason='0~4.87 m/s 범위여야 한다')
+                self.straight_speed_mps = value
+                self.get_logger().warning(
+                    '직진 구간 속도 상한 %.2f m/s 로 변경' % value)
+            elif param.name == 'cone_entry_speed_mps':
+                value = float(param.value)
+                if not 0.0 <= value <= 2.0:
+                    return SetParametersResult(
+                        successful=False, reason='0~2 m/s 범위여야 한다')
+                self.cone_entry_speed_mps = value
+                if self._cone_link is not None:
+                    self._cone_link.entry_speed_units = self._cone_entry_units()
+                self.get_logger().warning('콘 진입 속도 %.2f m/s 로 변경' % value)
             elif param.name == 'vehicle_off_after_pass':
                 self.vehicle_off_after_pass = bool(param.value)
                 if not self.vehicle_off_after_pass:
@@ -648,6 +755,7 @@ class YolopDriveNode(Node):
         self._straight_hold_until = 0.0
         if state == 'green':
             self._straight = True
+            self._straight_at = now      # 여기서부터 cone_trigger_delay_sec 를 센다
             # 콘 진입 트리거 재무장. 1바퀴 첫 확정에서는 이미 무장 상태라
             # 아무 일도 없고, 2·3바퀴 신호등을 지나며 다시 확정되면 그 바퀴
             # 첫 콘에서 다시 울린다. (Cone_Perception 은 트리거 뒤 15초 창이고
@@ -656,6 +764,12 @@ class YolopDriveNode(Node):
                 self.get_logger().info('초록 재확정 — 콘 진입 트리거 재무장')
             self._cone_triggered = False
             self._cone_trig_run = 0
+            # 새 바퀴 시작 — 지난 바퀴 '추월 완료' 도 푼다. 콘 탈출 이벤트가 안 오는
+            # 경우(트리거·게이트 실패, 대기 중 오검출 추월)에 앞차 인식이 경기 내내
+            # 꺼진 채 남지 않게 하는 안전망. 콘 접근/진입 중엔 어차피 꺼진다.
+            if self._vehicle_passed:
+                self.get_logger().info('초록 확정 — 앞차 인식 다시 켬 (지난 추월 완료 해제)')
+            self._vehicle_passed = False
             self.get_logger().info(
                 '초록불 %d장 연속 — 직진 확정. 신호가 시야에서 사라지면'
                 ' %.1f초 정상 조향 뒤 %.1f초 조향 억제, %.0f초 신호 무시'
@@ -736,14 +850,13 @@ class YolopDriveNode(Node):
         far = not boxes
 
         self._car_recent.append(side if near else 'NONE')
-        if len(self._car_recent) > CAR_CONFIRM:
+        while len(self._car_recent) > self.car_confirm:
             self._car_recent.pop(0)
-        steady = (len(self._car_recent) == CAR_CONFIRM
+        steady = (len(self._car_recent) == self.car_confirm
                   and len(set(self._car_recent)) == 1)
 
-        # 2026-08-23: 5프레임 연속은 '진입' 조건으로만 쓴다. /vehicle/state 가
-        # 2Hz 라 5프레임이면 2.5초인데, 그 사이 NONE 이 한 번만 끼면 카운트가
-        # 초기화돼 회피가 걸렸다 풀렸다를 반복했다.
+        # 2026-08-23: 연속 N메시지는 '진입' 조건으로만 쓴다. 한 번 회피 중이면
+        # 같은 쪽이 한 번만 보여도 유지 시간을 갱신한다 (아래 holding).
         # 이미 회피 중이면 같은 쪽이 한 번만 보여도 유지 시간을 갱신한다.
         want_now = 'right' if side == 'LEFT' else 'left'
         holding = (self._avoid_side is not None
@@ -904,8 +1017,16 @@ class YolopDriveNode(Node):
                         % (None if bgr is None else str(bgr.shape)))
                     continue
                 lane, road = self._infer(bgr)
-                # 직진 트리거. 꺼져 있으면 기존 동작 그대로다.
+                # 직진 구간(초록 확정 ~ 콘 트리거)에는 **둘 다** 켠다.
+                #  · straight_only      노랑 오염 방지 (세로 전파 + 흰색 되덮기)
+                #  · white_center_only  노란선을 목표에서 빼고 흰선 중앙만
+                # 오염 방지가 없으면 흰선이 노랑 덩이에 먹혀 white_mask 에서
+                # 빠지고, 그러면 흰선이 2줄로 안 잡혀 흰선 중앙 추종 자체가
+                # 성립하지 않는다 (0823 프레임309 실측: 흰 덩이 2개 -> 1개).
+                # 콘 트리거가 울리면 둘 다 꺼져 노란선 우선으로 돌아간다 —
+                # 그 구간은 오염된 노란선을 따라가는 것이 정상이다.
                 self.tracker.config.straight_only = self._straight
+                self.tracker.config.white_center_only = self._straight
                 # 앞차 회피. 0 이면 기존 동작 그대로다.
                 self.tracker.config.avoid_offset_px = self._avoid_offset(
                     time.monotonic())
@@ -960,6 +1081,11 @@ class YolopDriveNode(Node):
         if not self._straight:
             self._cone_trig_run = 0    # 초록불 확정 전에는 세지 않는다
             return
+        # 초록 확정 직후 잠깐은 세지 않는다. 신호등 앞에서 주황 물체를 보고
+        # 콘 구간을 여는 오발동을 막는다 (0823 요구).
+        if time.monotonic() - self._straight_at < self.cone_trigger_delay_sec:
+            self._cone_trig_run = 0
+            return
         if self._cone_trig_px >= threshold:
             self._cone_trig_run += 1
         else:
@@ -967,8 +1093,18 @@ class YolopDriveNode(Node):
         if self._cone_trig_run >= CONE_TRIG_CONFIRM and not self._cone_triggered:
             self._cone_triggered = True
             self._cone_trigger_pub.publish(Bool(data=True))
+            # 직진 구간은 여기서 끝난다 (0823 저녁 요구). 노란선 무시를 풀어
+            # 콘을 빠져나온 뒤 곧바로 노란선 추종으로 이어지게 한다 —
+            # 탈출 시점에 따로 켜 줄 필요가 없다.
+            self._straight = False
+            self._straight_hold_from = 0.0
+            self._straight_hold_until = 0.0
+            # 라이다 조건을 기다리지 않고 바로 콘 모드로 (0823 요구)
+            if self._cone_link is not None:
+                self._cone_link.request_enter()
             self.get_logger().warning(
-                '차선 위 주황 %d px 이 %d장 연속 — 콘 구간 진입'
+                '차선 위 주황 %d px 이 %d장 연속 — 콘 구간 진입, '
+                '직진(흰선 중앙) 종료 → 노란선 추종 복귀'
                 % (self._cone_trig_px, CONE_TRIG_CONFIRM))
 
     def _on_command(self, message: String) -> None:
@@ -1156,6 +1292,10 @@ class YolopDriveNode(Node):
                         steer *= self.hold_gain
                     # 빨간불이면 속도만 0 으로 떨군다. 조향은 그대로 둔다.
                     speed = 0.0 if self._traffic_stop else self.speed_units
+                    # 직진 구간은 상한을 따로 둔다 (콘 통로에 천천히 닿게)
+                    if self._straight and self.straight_speed_mps > 0.0:
+                        speed = min(speed, self.straight_speed_mps
+                                    / max(self.mps_per_unit, 1e-6))
         else:
             with self._lock:
                 self._stale = True
@@ -1175,12 +1315,15 @@ class YolopDriveNode(Node):
             cone_cmd = self._cone_link.tick(
                 now, cone_d,
                 ego_mps=speed * self.mps_per_unit,
-                camera_ok=cam_ok)
+                camera_ok=cam_ok,
+                handoff_steer=steer)
             if cone_cmd is not None:
                 steer = float(np.clip(cone_cmd[0], -self.max_steer,
                                       self.max_steer))
                 cone_speed = min(cone_cmd[1] * self.cone_speed_scale,
-                                 self.speed_units)
+                                 self.speed_units,
+                                 self.cone_max_speed_mps
+                                 / max(self.mps_per_unit, 1e-6))
                 speed = 0.0 if self._traffic_stop else cone_speed
                 basis = 'cone'
             elif (self._cone_link.approach
@@ -1268,6 +1411,7 @@ class YolopDriveNode(Node):
             # 사후 분석용 판단 근거 (2026-08-22: 재생값과 실주행값이
             # 달라 원인 추적이 불가능했던 문제. 이제 전부 남긴다)
             'straight_only': bool(self._straight),
+            'straight_speed_mps': round(self.straight_speed_mps, 2),
             # straight_hold: 억제가 진행 중이면 남은 초, 아니면 0.
             # straight_hold_in: 억제가 예약돼 있으면 시작까지 남은 초(중앙 잡는 중).
             'straight_hold': round(

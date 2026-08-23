@@ -59,9 +59,17 @@ ROI_TOP_RATIO = 0.5
 
 MODEL_PATH = '/home/xytron/2026_Xytron/models/yolov8n.pt'  # 모델은 전부 models/ 로 통일 (2026-08-22)
 INFER_INTERVAL = 3        # N프레임당 1회 추론
-# 0823: 0.15 → 0.12. 한계 거리에서 conf 0.157 로 임계를 겨우 넘어 절반쯤
-# 놓쳤다. 임계는 연산 비용이 0 이라 해상도보다 먼저 쓸 수단이다.
-CONF_THRES = 0.12
+# 0823: 0.15 → 0.12 (한계 거리 검출을 살리려고). 그러나 기록주행 3세션
+# 1218프레임 재분석에서 그 임계가 **오검출 통로**였다: 검출 639개 중
+# car 는 123개뿐이고 나머지는 대부분 suitcase 오검출이었다.
+# 0823 저녁: 0.12 → 0.50 → **0.30**. 0.50 은 오검출을 잘 잘랐지만 진짜
+# 앞차도 너무 놓쳤다 (실주행 체감). 같은 기록주행 1218프레임 기준:
+#     전체클래스 0.12  검출 639개, 회피 성립 가능 구간 52개  (오검출 범람)
+#     car만      0.50  검출  41개, 회피 성립 가능 구간  5개  (너무 적음)
+#     car만      0.30  검출  73개, 회피 성립 가능 구간 11개  ← 채택
+# ⚠ 되돌리려면 이 값을 0.12 로. 주행 중에는 파라미터로 바꿀 수 있다:
+#     ros2 param set /vehicle_perception_node conf 0.30
+CONF_THRES = 0.30
 # 320 은 RC카가 47x40px 로 뭉개져 conf 0.14, 640 이면 0.34 였다 (0822).
 # 0823: 960 을 시도했다가 되돌렸다. 혼자 재면 48ms 인데 실제 스택에서는
 # 차선(YOLOPv2)·신호등과 GPU 를 다투며 89ms 가 됐고, 앞차 발행이
@@ -82,7 +90,13 @@ CLASS_SUITCASE = 28       # COCO 'suitcase'
 # suitcase 0.519 가 1등이라 car 가 밀리는 프레임도 있다.
 # 클래스를 넓혀도 추론 시간은 그대로다. 모델은 어차피 80개를 전부 계산하고
 # 필터는 결과 목록을 거르는 if 한 줄이다. 트랙에 여행가방도 트럭도 없다.
-TARGET_CLASSES = [CLASS_CAR, CLASS_BUS, CLASS_TRUCK, CLASS_SUITCASE]
+# 0823 저녁: car 만 본다. 클래스를 넓혔던 근거(같은 차가 프레임마다 car/
+# truck/suitcase 로 흔들린다)는 conf 0.12 에서 관찰한 것인데, 그 낮은
+# 임계에서는 트랙 190개 중 169개가 suitcase 로 잡히는 오검출이었다.
+# conf 0.50 에서는 car 로도 충분히 잡힌다 (실측: car 검출 123개 중 43개가
+# 0.5 이상, 최장 16프레임 연속). 되돌리려면 아래 줄을 주석 해제한다.
+# TARGET_CLASSES = [CLASS_CAR, CLASS_BUS, CLASS_TRUCK, CLASS_SUITCASE]
+TARGET_CLASSES = [CLASS_CAR]
 PERSON_STOP_DIST = 2.0    # 보행자가 이 거리 안이면 정지 신호
 
 # bbox 하단이 이 y 위면 머리 위 구조물로 보고 버린다
@@ -147,6 +161,11 @@ class VehiclePerception(Node):
         self.create_subscription(
             String, '/kobot_yolop/status', self._on_drive_status, 10)
 
+        # 임계를 주행 중에 바꿀 수 있게 한다. 이 값은 트랙·조명마다 다시
+        # 맞춰야 하는데, 그때마다 빌드하고 스택을 내리면 시험이 느려진다.
+        #     ros2 param set /vehicle_perception_node conf 0.35
+        self.add_on_set_parameters_callback(self._on_params)
+
         self.model_path = str(self.get_parameter('model_path').value)
         self.model = YOLO(self.model_path)
         self.get_logger().info(
@@ -154,6 +173,25 @@ class VehiclePerception(Node):
             % (IMGSZ, self.conf, self.interval, self.model_path))
 
     # ---------------------------------------------------------------- 입력
+    def _on_params(self, params):
+        from rcl_interfaces.msg import SetParametersResult
+        for p in params:
+            if p.name == 'conf':
+                v = float(p.value)
+                if not 0.0 < v <= 1.0:
+                    return SetParametersResult(
+                        successful=False, reason='conf 는 0~1 범위여야 한다')
+                self.conf = v
+                self.get_logger().warning('검출 임계 conf = %.2f 로 변경' % v)
+            elif p.name == 'infer_interval':
+                v = int(p.value)
+                if v < 1:
+                    return SetParametersResult(
+                        successful=False, reason='infer_interval 은 1 이상')
+                self.interval = v
+                self.get_logger().warning('추론 주기 %d프레임당 1회로 변경' % v)
+        return SetParametersResult(successful=True)
+
     def on_scan(self, msg):
         self.scan = msg
         self.scan_at = time.time()

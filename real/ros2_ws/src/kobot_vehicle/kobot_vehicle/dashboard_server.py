@@ -855,6 +855,28 @@ class DriveToolsController:
 
         def work():
             time.sleep(1.0)
+            # ★ 0823 실측 버그: 이 스크립트는 첫 줄에서 kobot-race.service 를
+            #   멈추는데, 대시보드 자신이 **그 서비스의 cgroup 안에** 있다.
+            #   systemd 는 KillMode=control-group 으로 cgroup 전체를 죽이므로
+            #   스크립트도 같이 죽었고, 정지(1단계)까지만 되고 재기동(6~8단계)이
+            #   영영 오지 않았다 — 대시보드가 다시 안 뜨는 이유였다
+            #   (journal: 18:27:07 Stopped 뒤 Started 없음).
+            #   start_new_session 은 세션·프로세스그룹만 바꾼다. cgroup 은 그대로다.
+            #   그래서 사용자 systemd 매니저(user.slice)에 맡겨 cgroup 밖으로 낸다.
+            #   SSH 에서 손으로 돌릴 때 멀쩡했던 것도 같은 이유다(세션 cgroup).
+            env = dict(os.environ,
+                       XDG_RUNTIME_DIR='/run/user/%d' % os.getuid())
+            unit = 'kobot-clean-restart-%d' % int(time.time())
+            try:
+                subprocess.run(
+                    ['systemd-run', '--user', '--collect', '--unit=' + unit,
+                     '/bin/bash', script],
+                    env=env, capture_output=True, timeout=15, check=True)
+                return
+            except Exception as error:  # noqa: BLE001
+                self.node.get_logger().warning(
+                    'systemd-run 실패 (%s) — 직접 실행으로 대체한다. '
+                    '이 경로는 서비스 정지와 함께 죽을 수 있다' % error)
             try:
                 subprocess.Popen(['/bin/bash', script],
                                  stdout=subprocess.DEVNULL,

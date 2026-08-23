@@ -254,6 +254,18 @@ class SpeedPolicy:
             self._current = max(self._current - cfg.ramp_down_per_s * dt, target)
         return self._current
 
+    def prime(self, value: float, now: float) -> None:
+        """램프를 0 이 아니라 value 에서 시작시킨다.
+
+        reset() 직후 첫 step() 은 '정지 → 목표 급발진 방지' 때문에 현재값을
+        0 으로 강제한다. 모드 전환처럼 **이미 달리고 있는** 상황에서는 그것이
+        곤두박질이 된다 (0823 실측: 라바콘 진입마다 2.16 -> 0.29 m/s).
+        그 경우 이 함수로 시작값을 채운다. 첫 호출 분기를 건너뛰도록
+        _last_t 도 함께 채운다.
+        """
+        self._current = max(0.0, float(value))
+        self._last_t = now
+
     @property
     def current(self) -> float:
         return self._current

@@ -1,0 +1,8 @@
+/vehicle_perception_node:
+  ros__parameters:
+    conf: 0.5
+    debug_image: true
+    infer_interval: 3
+    model_path: /home/xytron/2026_Xytron/models/yolov8n.pt
+    use_sim_time: false
+

@@ -2,6 +2,9 @@
 
 from pathlib import Path
 
+import pytest
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -41,3 +44,33 @@ def test_force_enabled_cone_perception_ignores_traffic_gate():
     assert 'if self.force:' in signal
     assert 'self.enabled = True' in signal
     assert signal.index('if self.force:') < signal.index("if state == 'green':")
+
+
+def test_integrated_race_uses_validated_cone_motion_profile():
+    config = yaml.safe_load(
+        (ROOT / 'config' / 'yolop_drive.yaml').read_text(encoding='utf-8'))
+    params = config['yolop_drive']['ros__parameters']
+    assert params['cone_trigger_px'] == 300
+    assert params['cone_speed_scale'] == pytest.approx(1.05)
+    assert params['cone_max_speed_mps'] == pytest.approx(1.50)
+    assert params['cone_acceleration_limit_mps2'] == pytest.approx(4.0)
+
+
+def test_vehicle_center_correction_does_not_replace_trigger_contract():
+    text = (ROOT / 'race_last' / 'Cone_Perception.py').read_text(
+        encoding='utf-8')
+    assert "'/cone/trigger', self._on_trigger" in text
+    assert "self.declare_parameter('on_window_sec', 15.0)" in text
+    assert "self.declare_parameter('force_enabled', False)" in text
+    assert "self.declare_parameter('lidar_to_vehicle_center_m', 0.15)" in text
+    assert 'calculate_center_offset_target(' in text
+
+
+def test_integrated_cone_speed_is_separately_capped_and_ramped():
+    text = (ROOT / 'race_last' / 'yolop_drive_node.py').read_text(
+        encoding='utf-8')
+    assert "declare_parameter('cone_max_speed_mps', 1.5)" in text
+    assert "declare_parameter('cone_acceleration_limit_mps2', 4.0)" in text
+    assert 'self.cone_max_speed_mps' in text
+    assert 'self.cone_acceleration_limit_mps2' in text
+    assert 'self._cone_link._policy.speed.config.ramp_up_per_s' in text

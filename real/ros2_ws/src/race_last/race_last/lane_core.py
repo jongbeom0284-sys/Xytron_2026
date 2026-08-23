@@ -42,12 +42,34 @@ class LaneConfig:
     crosswalk_row_width: float = 32.0   # 행별 가로폭 중앙값이 이보다 크고
     crosswalk_aspect: float = 0.30      # 세로/가로가 이보다 작으면 횡단보도
     yellow_b: int = 20               # b* 중립 대비 초과량
+    # --- 라바콘 주황을 노란 씨앗에서 뺀다 (0823 저녁) ---
+    # 라바콘은 주황이라 LAB b* 축에서도 양수다. 그래서 차선 마스크와 겹친
+    # 콘 화소가 '노란 중앙선 씨앗'이 되어, 그 덩이에 붙은 흰선까지 노랑으로
+    # 물들인다 (실측 195303/f130: 콘 화소 14797개 중 50개가 씨앗이 되어
+    # 흰선 덩이 442화소를 노랑으로 만들었다).
+    # 노란 중앙선과 라바콘은 **색상(Hue)이 다르다** — 노랑 H≈25~35,
+    # 콘 주황 H 3~12 (OpenCV 0~179). 그 구간을 씨앗에서 제외한다.
+    # 콘 진입 트리거(cone_trigger_px)는 별도 경로라 영향받지 않는다.
+    exclude_cone_orange: bool = True
+    cone_hue_lo: int = 3
+    cone_hue_hi: int = 12
+    cone_sat_min: int = 110          # 채도가 낮으면 주황이 아니다 (그림자·노면)
     # --- 직진 모드: 노랑을 세로로만 전파 ---
     # 삼거리에서 좌회전 도로의 노란 중앙선이 직진 도로의 좌측 흰선과 마스크상
     # 붙어 있다. 덩이 전체에 노랑을 퍼뜨리면 흰선까지 물든다. 그 오염 덕분에
     # 트리거가 없을 때는 차가 좌측으로 따라간다. 그래서 기본값은 꺼짐이다.
     # 초록불(직진)일 때만 켜서, 노랑이 세로로만 번지게 한다.
-    straight_only: bool = False       # 노드가 신호등 상태에 따라 매 프레임 넣는다
+    straight_only: bool = False       # 노랑 오염 방지 (세로 전파 + 흰색 되덮기)
+    # --- 직진 구간: 노란선을 아예 보지 않고 흰선 중앙만 따라간다 ---
+    # 0823 저녁 요구. 삼거리에서 좌회전 도로의 노란 중앙선이 직진 도로 좌측
+    # 흰선과 붙어 있어, 노란선을 목표로 삼는 한 어떤 방식이든 좌측으로 끌린다.
+    # 그래서 직진 확정 구간에서는 노란선 자체를 목표에서 뺀다.
+    # 이 구간은 초록불 확정 ~ 콘 진입 트리거 사이이고, 노드가 매 프레임 넣는다.
+    # ★ 반드시 straight_only 와 **함께** 켠다. 오염 방지가 없으면 흰선이 노랑
+    #   덩이에 먹혀 white_mask 에서 빠지고, 흰선이 2줄로 안 잡혀 이 모드가
+    #   성립하지 않는다 (0823 프레임309 실측: 흰 덩이 2개 -> 1개).
+    # 꺼지면(콘 트리거) 노란선 우선 추종으로 돌아간다 — 그쪽이 정상 동작이다.
+    white_center_only: bool = False
     grow_height: int = 21             # 세로 커널 높이. 한 번에 10px 전진
     grow_width: int = 3               # 가로 커널 폭. 한 번에 1px 옆으로
     grow_iters: int = 40              # 최대 반복. 더 안 자라면 일찍 끝난다
@@ -306,8 +328,15 @@ class LaneTracker:
         fixed = self._white_balance(bgr, road, bgr[y0:])
         # 노랑은 b* 축(파랑-노랑)의 양수쪽이다. L 과 a* 는 쓰지 않는다.
         b_ch = cv2.cvtColor(fixed, cv2.COLOR_BGR2LAB)[:, :, 2].astype(np.int16)
+        seed = (b_ch - 128) >= cfg.yellow_b
+        if cfg.exclude_cone_orange:
+            # 라바콘 주황은 노란 중앙선이 아니다 (설정 주석의 실측 근거).
+            hsv = cv2.cvtColor(fixed, cv2.COLOR_BGR2HSV)
+            hue, sat = hsv[:, :, 0], hsv[:, :, 1]
+            seed &= ~((hue >= cfg.cone_hue_lo) & (hue <= cfg.cone_hue_hi)
+                      & (sat >= cfg.cone_sat_min))
         yellow_px = np.zeros_like(lane)
-        yellow_px[y0:] = lane[y0:] & ((b_ch - 128) >= cfg.yellow_b)
+        yellow_px[y0:] = lane[y0:] & seed
         return yellow_px, np.zeros_like(lane)
 
     def _split_blobs(self, lane, yellow_px):
@@ -388,6 +417,20 @@ class LaneTracker:
         """
         rows = list(range(y0, height - 2, 4))
         points, basis = [], 'none'
+
+        # 직진 구간: 노란선을 건너뛰고 흰선 중앙만 쓴다. 흰선이 부족하면
+        # 목표 없음('none')으로 두어 직전 조향을 유지하다 직진으로 푼다 —
+        # 여기서 노란선으로 폴백하면 애초에 피하려던 그 끌림이 되살아난다.
+        if self.config.white_center_only and float(self.config.avoid_offset_px) == 0.0:
+            white_only = []
+            for y in rows:
+                runs = self._row_runs(white_mask, y)
+                if len(runs) >= 2:
+                    white_only.append(
+                        (y, float((runs[0].mean() + runs[-1].mean()) / 2)))
+            if len(white_only) >= self.config.min_fit_rows:
+                return white_only, 'white_center'
+            return points, basis
 
         offset = float(self.config.avoid_offset_px)
         if offset != 0.0:

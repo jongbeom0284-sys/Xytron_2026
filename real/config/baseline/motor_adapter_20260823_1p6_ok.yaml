@@ -1,0 +1,10 @@
+/kobot_motor_adapter:
+  ros__parameters:
+    acceleration_limit_mps2: 4.0
+    angle_scale: 0.0068
+    command_timeout_sec: 0.5
+    enabled: true
+    speed_limit_mps: 4.87
+    speed_scale: 0.08
+    use_sim_time: false
+

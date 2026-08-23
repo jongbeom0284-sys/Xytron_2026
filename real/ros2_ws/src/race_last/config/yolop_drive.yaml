@@ -63,3 +63,13 @@ yolop_drive:
     #   일반 차선 0 px  /  콘 앞 744~979 px  → 300 이면 완전히 갈린다.
     # 0 으로 두면 트리거를 끄고 콘 인식이 아예 안 켜진다.
     cone_trigger_px: 300
+    # 라바콘 실차 단독 검증본(2026-08-23)과 동일한 주행 출력.
+    # 차선 최고속도와 별개이며 ConeLink가 활성화된 동안에만 적용된다.
+    cone_speed_scale: 1.05
+    cone_max_speed_mps: 1.50
+    cone_acceleration_limit_mps2: 4.0
+    # 라바콘 진입은 즉시 하되 첫 불완전 경계로 조향을 찍지 않는다.
+    # 0.5m/s로 직전 차선 조향을 유지하고, 양쪽 벽 2프레임 확인 뒤 인계한다.
+    cone_entry_speed_mps: 0.50
+    cone_entry_stable_frames: 2
+    cone_entry_weak_timeout_sec: 0.25

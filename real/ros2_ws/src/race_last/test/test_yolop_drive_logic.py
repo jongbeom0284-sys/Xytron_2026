@@ -67,35 +67,44 @@ def vehicle(n, side=None, dist=1.0):
 
 
 # ------------------------------------------------------------ 1) 직진 억제
-def test_hold_starts_after_signal_gone_with_delay(node):
+def test_hold_is_off_by_default(node):
+    """0823 저녁: 직진 구간은 흰선 중앙을 따라가므로 조향 억제를 기본으로 끈다.
+
+    (straight_hold_sec 기본 0.0 → 창 길이 0 → 억제 없음)
+    """
+    c = node.clock
+    assert node.hold_sec == 0.0
+    traffic(node, 'green', ydn.GO_CONFIRM)
+    traffic(node, 'none', ydn.GONE_CONFIRM)
+    for dt in (0.0, 0.5, 1.0, 1.5, 3.0, 5.0):
+        assert not node._hold_active(c.now + dt), dt
+
+
+def test_hold_window_returns_when_param_set(node):
+    """되살리고 싶으면 straight_hold_sec 에 초를 넣는다.
+
+    그때 창은 '신호가 사라진 시점 + delay' 부터 hold 초 동안이다.
+    """
+    from rclpy.parameter import Parameter
+    node._on_parameters([Parameter('straight_hold_sec', value=3.0)])
     c = node.clock
     traffic(node, 'green', ydn.GO_CONFIRM)
-    assert node._straight is True
-    assert node._lock_kind == 'green'
-    # 확정 직후·보이는 동안은 억제가 아니다 (정상 조향)
-    assert not node._hold_active(c.now)
+    assert not node._hold_active(c.now)          # 확정 직후는 정상 조향
     c.now += 2.0
-    traffic(node, 'green')            # 아직 보인다 — 잠금만 연장
+    traffic(node, 'green')                        # 아직 보인다
     assert not node._hold_active(c.now)
-
-    # 시야에서 사라짐 (GONE_CONFIRM 장)
     t_gone = c.now
-    traffic(node, 'none', ydn.GONE_CONFIRM)
-    assert node._lock_kind is None
+    traffic(node, 'none', ydn.GONE_CONFIRM)       # 사라짐
     assert node._straight_hold_from == pytest.approx(t_gone + node.hold_delay_sec)
     assert node._straight_hold_until == pytest.approx(
-        t_gone + node.hold_delay_sec + node.hold_sec)
-
-    # delay 동안: 정상 조향, 회피도 허용
+        t_gone + node.hold_delay_sec + 3.0)
     node._avoid_side, node._avoid_until = 'right', c.now + 100
-    c.now = t_gone + 0.5
+    c.now = t_gone + 0.5                          # delay 중 = 정상 조향, 회피 허용
     assert not node._hold_active(c.now)
     assert node._avoid_offset(c.now) == ydn.AVOID_OFFSET_PX
-    # hold 동안: 억제, 회피 금지
-    c.now = t_gone + 1.5
+    c.now = t_gone + 1.5                          # 억제 중 = 회피 금지
     assert node._hold_active(c.now)
     assert node._avoid_offset(c.now) == 0.0
-    # 끝난 뒤
     c.now = t_gone + 4.5
     assert not node._hold_active(c.now)
 
@@ -107,6 +116,7 @@ def test_hold_when_signal_never_disappears_uses_wait_gone_max(node):
     t = c.now
     traffic(node, 'green')            # 안 사라짐 → 여기서 사라진 것으로 친다
     assert node._lock_kind is None
+    # 억제를 껐어도 '사라진 시점' 기준은 그대로 잡힌다
     assert node._straight_hold_from == pytest.approx(t + node.hold_delay_sec)
 
 
@@ -187,3 +197,37 @@ def test_vehicle_off_after_pass_can_be_disabled(node):
 def test_status_json_builds_with_new_fields(node):
     node._last_status = -1e9
     node._publish_status('none', 0.0, 0.0, False)   # 예외 없이 JSON 이 만들어진다
+
+
+def test_green_confirm_clears_vehicle_passed(node):
+    node._vehicle_passed = True
+    assert node._vehicle_needed(node.clock.now) is False
+    traffic(node, 'green', ydn.GO_CONFIRM)
+    assert node._vehicle_passed is False
+    assert node._vehicle_needed(node.clock.now) is True
+
+
+def test_car_confirm_is_tunable(node):
+    """앞차 확정 메시지 수는 주행 중에 바꿀 수 있다 (기본 3 = 검출 1회)."""
+    from rclpy.parameter import Parameter
+    assert node.car_confirm == 3
+    c = node.clock
+    for _ in range(3):
+        vehicle(node, 'LEFT')
+    assert node._avoid_side == 'right', '3메시지면 확정돼야 한다'
+
+    node._on_parameters([Parameter('car_confirm', value=9)])
+    assert node.car_confirm == 9
+    assert node._car_recent == [], '값을 바꾸면 카운터를 비운다'
+    node._avoid_side, node._avoid_until, node._avoid_rearm_until = None, 0.0, 0.0
+    for _ in range(8):
+        vehicle(node, 'RIGHT')
+    assert node._avoid_side is None, '8메시지로는 아직 아니다'
+    vehicle(node, 'RIGHT')
+    assert node._avoid_side == 'left'
+
+
+def test_car_confirm_rejects_bad_value(node):
+    from rclpy.parameter import Parameter
+    assert not node._on_parameters([Parameter('car_confirm', value=0)]).successful
+    assert not node._on_parameters([Parameter('car_confirm', value=99)]).successful

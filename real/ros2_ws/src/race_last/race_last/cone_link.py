@@ -32,7 +32,10 @@ STALE_SEC = 0.6
 
 class ConeLink:
     def __init__(self, logger, approach_depth_m=1.2,
-                 wall_steer=True, wall_gain=1.5):
+                 wall_steer=True, wall_gain=1.5,
+                 enter_frames=1, entry_speed_units=0.0,
+                 entry_stable_frames=2,
+                 entry_weak_timeout_sec=0.25):
         self.approach_depth_m = float(approach_depth_m)
         # 조향 근거를 벽 추종으로 바꾼다 (0823). 끄면 예전 policy 조향.
         self.wall_steer = bool(wall_steer)
@@ -43,7 +46,27 @@ class ConeLink:
         self._policy = DrivePolicy()
         self._ctx = RaceContext()
         self._fsm = FSMConfig()
-        self._in = _Debouncer(self._fsm.cone_enter_frames)
+        # 진입 디바운스. 기본 1 = 라이다가 콘을 본 첫 프레임에 바로 넘어간다
+        # (0823 저녁 요구: "A 가 콘을 인식하면 바로 콘 모드"). 게이트 유효·
+        # 콘 개수 조건은 그대로라, 콘을 못 본 상태로 들어가지는 않는다.
+        self._in = _Debouncer(max(1, int(enter_frames)))
+        # 콘 모드로 넘어가는 순간 속도 램프를 0 이 아니라 이 값에서 시작한다.
+        # 0 이면 예전처럼 0 에서 램프 (실측: 2.16 -> 0.29 m/s 까지 곤두박질).
+        self.entry_speed_units = float(entry_speed_units)
+        # 콘 모드 진입 직후에는 한쪽 벽만 보이는 임시 목표가 자주 나온다.
+        # 직전 차선 조향을 유지한 채 양쪽 벽의 서로 다른 라이다 프레임을
+        # 확인하고, 확인이 늦어져도 정지하지 않고 기존 변화율 제한으로 넘긴다.
+        self.entry_stable_frames = max(1, int(entry_stable_frames))
+        self.entry_weak_timeout_sec = max(
+            0.0, float(entry_weak_timeout_sec))
+        self._entry_settling = False
+        self._entry_stable_count = 0
+        self._entry_last_stamp = None
+        # 카메라 주황 트리거(A)가 울리면 True. 그 뒤 라이다 관측이 오는 첫 틱에
+        # **콘 개수·게이트 유효를 따지지 않고** 콘 모드로 들어간다 (0823 요구).
+        # 그 조건들을 기다리다 0.7초를 흘려보낸 실측이 있었다
+        # (192730 세션 f262~f268: 콘 1~3개·게이트 무효로 대기, 5개에서야 진입).
+        self._force_enter = False
         self._out = _Debouncer(self._fsm.cone_exit_frames)
         self._active = False
         # 통로가 앞에 보이는 상태 (진입 전) — 노드가 접근 감속에 쓴다
@@ -55,6 +78,10 @@ class ConeLink:
     @property
     def active(self) -> bool:
         return self._active
+
+    def request_enter(self) -> None:
+        """다음 관측에서 조건 없이 콘 모드로 들어간다 (카메라 주황 트리거용)."""
+        self._force_enter = True
 
     @staticmethod
     def reading_from(d, now):
@@ -79,7 +106,24 @@ class ConeLink:
             lidar_gate_age_s=age,
         ), age
 
-    def tick(self, now, d, ego_mps, camera_ok):
+    def _start_entry_handoff(self, now, handoff_steer):
+        """직전 차선 조향에서 라바콘 조향으로 연속적으로 인계한다."""
+        steer = 0.0 if handoff_steer is None else float(handoff_steer)
+        if not math.isfinite(steer):
+            steer = 0.0
+        self._wall_prev = max(-cone_wall.MAX_STEER,
+                              min(cone_wall.MAX_STEER, steer))
+        self._entry_settling = self.wall_steer
+        self._entry_stable_count = 0
+        self._entry_last_stamp = None
+        self._entry_started_at = float(now)
+
+    def _reset_entry_handoff(self):
+        self._entry_settling = False
+        self._entry_stable_count = 0
+        self._entry_last_stamp = None
+
+    def tick(self, now, d, ego_mps, camera_ok, handoff_steer=None):
         """제어 틱마다 부른다. 콘 구간이면 (steer, speed_units), 아니면 None."""
         if not self._started:
             self._started = True
@@ -103,6 +147,7 @@ class ConeLink:
             if self._active:
                 self._active = False
                 self._wall_prev = None
+                self._reset_entry_handoff()
                 self._log.info('콘 관측 끊김 — 차선 주행 복귀')
             self._in.reset()
             self._out.reset()
@@ -110,6 +155,30 @@ class ConeLink:
             return None
 
         if not self._active:
+            # ── 카메라 주황 트리거로 들어온 강제 진입 (0823 요구) ──
+            # 라이다 조건을 보지 않는다. 관측이 신선하기만 하면(위 STALE_SEC
+            # 검사 통과) 바로 넘어간다. 콘을 못 보는 상태로 들어가면 policy 는
+            # 차선을 보지 않고 직진으로 풀리며, 게이트가
+            # cone_gate_lost_exit_s 동안 안 잡히면 스스로 빠져나온다.
+            if self._force_enter:
+                self._force_enter = False
+                self._out.reset()
+                self._in.reset()
+                self._active = True
+                self._entered_at = now
+                self._gate_last_valid = now
+                self._policy.reset()
+                self._policy._prev_mode = None
+                if self.entry_speed_units > 0.0:
+                    self._policy.speed.prime(self.entry_speed_units, now)
+                self._start_entry_handoff(now, handoff_steer)
+                self._log.info(
+                    '주황 트리거 — 조건 없이 라바콘 모드 시작 (콘 %d개, 게이트 %s)'
+                    % (cone.lidar_cones,
+                       '유효' if cone.lidar_gate_valid else '무효'))
+                cmd = self._policy.update(Mode.CONE_DRIVE, obs, self._ctx, READY)
+                return self._steer_speed(now, d, cone, age, cmd)
+
             # ── LANE→CONE 진입 (race_fsm.py 블록 그대로) ──
             cone_hit = cone.orange_px >= cfg.cone_min_orange_px
             gate_seen = cone.gate_valid or cone.lidar_gate_valid
@@ -132,6 +201,12 @@ class ConeLink:
             # CONE 진입 초기화 분기를 타도록 _prev_mode 를 비운다)
             self._policy.reset()
             self._policy._prev_mode = None
+            # reset 은 속도 램프를 0 으로 되돌린다. 그대로 두면 콘 진입마다
+            # 거의 정지 수준(실측 0.29~0.40 m/s)까지 떨어졌다 다시 올라온다.
+            # 진입 속도를 미리 채워 그 곤두박질을 없앤다 (0823 저녁 요구).
+            if self.entry_speed_units > 0.0:
+                self._policy.speed.prime(self.entry_speed_units, now)
+            self._start_entry_handoff(now, handoff_steer)
             self._log.info(
                 '라바콘 구간 진입 — 콘 %d개, 게이트 %s' %
                 (cone.lidar_cones, '유효' if cone.lidar_gate_valid else '무효'))
@@ -149,21 +224,74 @@ class ConeLink:
             self._in.reset()
             self._active = False
             self._wall_prev = None
+            self._reset_entry_handoff()
             self._log.info(
                 '라바콘 구간 이탈 (%s) — 차선 주행 복귀'
                 % ('gate lost' if gate_lost else 'cones gone'))
             return None
 
         cmd = self._policy.update(Mode.CONE_DRIVE, obs, self._ctx, READY)
+        return self._steer_speed(now, d, cone, age, cmd)
 
-        # 조향만 벽 추종으로 교체한다. 속도는 policy 가 낸 값을 그대로 쓴다 —
-        # 콘 구간 감속 로직이 거기 있고 실주행에서 문제가 없었다.
+    def _steer_speed(self, now, d, cone, age, cmd):
+        """조향만 벽 추종으로 교체한다. 속도는 policy 가 낸 값을 그대로 쓴다 —
+        콘 구간 감속 로직이 거기 있고 실주행에서 문제가 없었다."""
         aim = d.get('wall_aim') if d else None
         self.wall_basis = (d.get('wall_basis') or '') if d else ''
+        released_now = False
+
+        if self._entry_settling:
+            left_count = int(d.get('wall_left', 0) or 0) if d else 0
+            right_count = int(d.get('wall_right', 0) or 0) if d else 0
+            strong = bool(
+                aim is not None and age < STALE_SEC
+                and self.wall_basis in ('both', 'CENTER_OFFSET_both')
+                and left_count >= 2 and right_count >= 2)
+
+            # 제어는 20Hz, 라이다는 약 10Hz라 같은 관측을 두 번 받을 수 있다.
+            # stamp가 달라진 실제 라이다 프레임만 안정 프레임으로 센다.
+            stamp = d.get('stamp') if d else None
+            if stamp != self._entry_last_stamp:
+                self._entry_last_stamp = stamp
+                self._entry_stable_count = (
+                    self._entry_stable_count + 1 if strong else 0)
+
+            stable = self._entry_stable_count >= self.entry_stable_frames
+            timed_out = (
+                now - self._entry_started_at >= self.entry_weak_timeout_sec)
+            if not stable and not timed_out:
+                # 불완전한 첫 목표로 꺾지 않는다. 속도 정책도 진입 속도에서
+                # 얼려 두어 확인이 끝난 순간 내부 속도가 갑자기 뛰지 않게 한다.
+                speed = float(cmd.speed)
+                if self.entry_speed_units > 0.0:
+                    self._policy.speed.prime(self.entry_speed_units, now)
+                    speed = min(speed, self.entry_speed_units)
+                return float(self._wall_prev or 0.0), speed
+
+            self._entry_settling = False
+            released_now = True
+            if self.entry_speed_units > 0.0:
+                self._policy.speed.prime(self.entry_speed_units, now)
+            if stable:
+                self._log.info(
+                    '라바콘 양쪽 경계 %d프레임 확인 — 조향 인계 시작'
+                    % self._entry_stable_count)
+            else:
+                self._log.info(
+                    '라바콘 진입 %.2f초 — 불완전 경계를 '
+                    '변화율 제한으로 인계'
+                    % self.entry_weak_timeout_sec)
+
         if self.wall_steer and aim is not None and age < 0.6:
             steer = cone_wall.steer_for(float(aim), self.wall_gain,
                                         self._wall_prev)
             self._wall_prev = steer
-            return float(steer), float(cmd.speed)
+            speed = float(cmd.speed)
+            if released_now and self.entry_speed_units > 0.0:
+                speed = min(speed, self.entry_speed_units)
+            return float(steer), speed
         self._wall_prev = float(cmd.steer)
-        return float(cmd.steer), float(cmd.speed)
+        speed = float(cmd.speed)
+        if released_now and self.entry_speed_units > 0.0:
+            speed = min(speed, self.entry_speed_units)
+        return float(cmd.steer), speed

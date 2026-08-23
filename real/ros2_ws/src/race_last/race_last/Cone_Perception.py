@@ -25,6 +25,7 @@ from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Bool, Float32MultiArray, String
 
 from . import cone_wall
+from .center_offset import calculate_center_offset_target
 from .kmu_race.perception.lidar_cones import (
     LidarConeConfig,
     find_cone_gate,
@@ -50,6 +51,13 @@ class ConePerception(Node):
         self.config = LidarConeConfig()
         # 벽 추종 — 통로 중앙에서 오른쪽으로 미는 거리. 0 이면 정중앙.
         self.declare_parameter('wall_bias_cm', 0.0)
+        # 차량 중심 보정. 트리거/FSM과 무관하며, 인식이 켜진 뒤 wall_aim만
+        # 실차 검증본과 동일하게 바꾼다.
+        self.declare_parameter('vehicle_length_m', 0.60)
+        self.declare_parameter('vehicle_width_m', 0.30)
+        self.declare_parameter('lidar_to_vehicle_center_m', 0.15)
+        self.declare_parameter('center_lookahead_m', 0.55)
+        self.declare_parameter('boundary_clearance_m', 0.02)
         self.green_at = None          # 직진 신호를 처음 본 시각
         self.open_until = 0.0         # 이 시각까지 콘 인식을 연다
         self.enabled = self.force
@@ -158,8 +166,9 @@ class ConePerception(Node):
             return
         self.enabled = True
 
-        # 벽 추종 조준값. 짝지은 게이트와 별개로 매 스캔 계산해 함께 싣는다.
-        wall = cone_wall.solve(
+        # 기존 벽 조준은 차량 중심 보정을 만들 수 없는 프레임의 fallback으로
+        # 남긴다. 따라서 새 보정 때문에 추가 미검출/정지가 생기지 않는다.
+        original_wall = cone_wall.solve(
             msg.ranges, msg.angle_min, msg.angle_increment, self.offset,
             float(self.get_parameter('wall_bias_cm').value) / 100.0)
 
@@ -168,6 +177,44 @@ class ConePerception(Node):
             angle_offset=self.offset, config=self.config,
             prev_row_side=self.row_side)
         self.row_side = gate.near_row_side
+
+        center_result = calculate_center_offset_target(
+            gate.points,
+            vehicle_length_m=float(
+                self.get_parameter('vehicle_length_m').value),
+            vehicle_width_m=float(
+                self.get_parameter('vehicle_width_m').value),
+            lidar_to_vehicle_center_m=float(
+                self.get_parameter('lidar_to_vehicle_center_m').value),
+            lookahead_from_center_m=float(
+                self.get_parameter('center_lookahead_m').value),
+            boundary_clearance_m=float(
+                self.get_parameter('boundary_clearance_m').value),
+        )
+        if center_result is not None:
+            wall_aim = center_result.aim_y_m
+            wall_basis = center_result.basis
+            wall_left = center_result.left_count
+            wall_right = center_result.right_count
+            center_meta = {
+                'target_x_lidar_m': center_result.target_x_from_lidar_m,
+                'target_x_center_m': center_result.target_x_from_center_m,
+                'maximum_center_offset_m':
+                    center_result.maximum_center_offset_m,
+            }
+        elif original_wall is not None:
+            wall_aim = original_wall['aim_y']
+            wall_basis = ('CENTER_OFFSET_FALLBACK_'
+                          + str(original_wall['basis']))
+            wall_left = len(original_wall['left'])
+            wall_right = len(original_wall['right'])
+            center_meta = {'fallback': True}
+        else:
+            wall_aim = None
+            wall_basis = ''
+            wall_left = 0
+            wall_right = 0
+            center_meta = {'fallback': True}
 
         out = Float32MultiArray()
         out.data = [
@@ -181,10 +228,9 @@ class ConePerception(Node):
         ]
         self.pub_gate.publish(out)
 
-        if wall is not None:
+        if wall_aim is not None:
             text = 'O 벽 좌%d/우%d 조준%+.0fcm (%s)' % (
-                len(wall['left']), len(wall['right']),
-                wall['aim_y'] * 100, wall['basis'])
+                wall_left, wall_right, wall_aim * 100, wall_basis)
         elif gate.valid:
             text = 'O 깊이%.2f 폭%.2f 횡%+.2f' % (
                 gate.depth_m, gate.width_m, gate.lateral_m)
@@ -205,10 +251,11 @@ class ConePerception(Node):
                         else round(float(gate.near_right_m), 3)),
             pts=[[round(x, 3), round(y, 3)] for x, y in gate.points],
             # 벽 추종 결과 — ConeLink 가 조향 근거로 쓴다
-            wall_aim=(None if wall is None else round(wall['aim_y'], 3)),
-            wall_basis=('' if wall is None else wall['basis']),
-            wall_left=(0 if wall is None else len(wall['left'])),
-            wall_right=(0 if wall is None else len(wall['right'])),
+            wall_aim=(None if wall_aim is None else round(wall_aim, 3)),
+            wall_basis=wall_basis,
+            wall_left=wall_left,
+            wall_right=wall_right,
+            center_offset=center_meta,
         )
         self.pub_reading.publish(String(data=json.dumps(payload)))
 

@@ -40,7 +40,10 @@ def generate_launch_description():
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
                 os.path.join(kv_share, 'launch', 'motor.launch.py')),
-            launch_arguments={'armed': 'true'}.items()),
+            launch_arguments={
+                'armed': 'true',
+                'acceleration_limit_mps2': '4.0',
+            }.items()),
 
         # 잠금해제: 준비 확인 후 enabled+armed — 이후는 신호등이 지배
         Node(package='race_last', executable='race_starter',
