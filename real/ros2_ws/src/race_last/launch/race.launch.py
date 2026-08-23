@@ -98,11 +98,12 @@ def generate_launch_description():
         # 신호등: 정규화 색도 + 원형성. numpy + OpenCV 만 쓴다.
         Node(package='race_last', executable='traffic_perception',
              name='traffic_perception_node',
+             # 0823 밤: 하단 0.34 -> 0.42 (마지막 바퀴에서 신호를 놓쳐 띠를 넓혔다).
              # 2026-08-22 연습장 실측: 램프가 원거리 y0.35 -> 근거리 y0.29/x0.54 로
              # 움직인다. 접근 전 구간을 덮는 띠 + 좌측 천장 주황등(x<0.35)·우측 창문
              # (x>0.64) 배제. 장소 바뀌면 param set 으로 즉석 조절 (대시보드 ROI 박스 참조).
              parameters=[{'debug_image': debug_images, 'max_hz': 20.0,
-                          'roi_top': 0.28, 'roi_bottom': 0.34,
+                          'roi_top': 0.28, 'roi_bottom': 0.42,
                           'roi_left': 0.36, 'roi_right': 0.64}],
              output='log'),
         # 차량: YOLOv8n(imgsz 640) + 라이다 퓨전. 좌/우와 거리만 낸다.

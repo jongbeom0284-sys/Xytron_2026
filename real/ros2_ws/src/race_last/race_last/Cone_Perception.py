@@ -4,8 +4,10 @@
 작업분, 실측 튜닝 포함 — 이 노드에서 수정하지 않는다. 원본:
 /home/xytron/xycar_ws/src/kmu_race/kmu_race/perception/lidar_cones.py).
 
-켜지는 조건: 신호등이 직진(green)이 된 순간부터 signal_delay_sec(기본 1.0초)
-뒤에 켜지고, 한 번 켜지면 계속 켜져 있다 (래치).
+켜지는 조건: yolop_drive 가 '차선 위 주황' 을 확인하고 보내는 /cone/trigger.
+받으면 on_window_sec(기본 15초) 동안 열린다. 그 창은 시간으로만 닫힌다 —
+신호등 판정(red/left)으로는 끄지 않는다 (콘 구간엔 신호등이 없어서 그 판정은
+오검출이고, 실제로 그 오검출이 콘 주행을 반복해서 끊었다. 0823 밤).
 force_enabled:=true 면 신호 없이 즉시 켠다 — 콘 구간 단독 시험용.
 
 발행:
@@ -34,6 +36,16 @@ from .kmu_race.perception.lidar_cones import (
 # 8/17 실측: 차 전진축 = 라이다 +124°
 # (출처: xycar_ws/src/kmu_race/config/params.yaml — 콘 주행이 쓰던 값)
 DEFAULT_ANGLE_OFFSET = -2.164
+
+# ── 차로 안 정지물체 (앞차 자리에 놓인 차+라바콘) ──
+# 콘 게이트와 별개다. 게이트는 '좌우 쌍' 을 요구하지만 앞차 자리의 물체는
+# 한쪽에만 있고 라이다 점이 1개뿐일 때도 있다 (실측 f317: 1점, 1.19m).
+# 그래서 짝짓기·최소점수 없이 '차로 폭 안에 찍힌 점' 만 본다.
+OBS_X_MIN = 0.25        # 이보다 가까우면 차체·범퍼
+OBS_X_MAX = 2.5         # 이보다 멀면 아직 볼 필요 없다
+OBS_HALF_W = 0.45       # 차로 반폭 0.41 + 여유
+OBS_GAP = 0.15          # 이 이상 벌어지면 다른 물체
+TOPIC_OBSTACLE = '/lidar/obstacle'
 
 
 class ConePerception(Node):
@@ -69,6 +81,9 @@ class ConePerception(Node):
         # yolop_drive 의 cone_link 가 먹는 전체 관측 (JSON)
         self.pub_reading = self.create_publisher(
             String, '/cone/reading', 10)
+        # 차로 안 정지물체 — 콘 인식 창과 **무관하게 항상** 발행한다.
+        # 앞차 구간은 콘 창이 닫힌 뒤에도 오므로 여기 묶으면 안 된다.
+        self.pub_obstacle = self.create_publisher(String, TOPIC_OBSTACLE, 10)
         self.create_subscription(String, '/traffic_light/state',
                                  self._on_signal, 10)
         self.create_subscription(Bool, '/cone/trigger', self._on_trigger, 10)
@@ -145,18 +160,62 @@ class ConePerception(Node):
                 self.get_logger().info(
                     '직진 신호 — %.1f초 뒤 콘 인식을 켠다' % self.delay)
         elif state in ('left', 'red'):
-            # 직진이 아닌 '판정' 이 났을 때만 끈다.
-            # none(신호등이 시야 밖) 은 판정이 아니라 관측 부재이므로
-            # 직전 상태를 그대로 유지한다 (2026-08-23).
-            if self.enabled or self.open_until:
-                self.get_logger().info('직진 해제(%s) — 콘 인식 끔' % state)
+            # ★ 0823 밤: 여기서 콘 인식을 끄지 않는다.
+            #
+            # 콘 구간 안에는 신호등이 없다. 그런데 이 노드는 별도 프로세스라
+            # yolop_drive 의 신호 잠금(초록 확정 후 30초)을 모르고
+            # /traffic_light/state 원본을 그대로 믿는다. 그래서 콘 통로
+            # 한복판에서 나온 오검출 한 번에 창을 지워 버렸다:
+            #     19:57  진입 0.04초 뒤 성공 → 0.77초 뒤 '직진 해제(red)' → 이탈
+            #     21:29  진입 0.02초 뒤 성공 → 1.98초 뒤 '직진 해제(left)' → 이탈
+            #     21:30  같은 패턴 (2.6초 뒤 left)
+            # 창을 지우면 /cone/reading 이 끊기고, 0.6초 뒤 ConeLink 가
+            # STALE_SEC 로 콘 구간을 빠져나온다. 콘 주행이 계속 꺼진 원인이다.
+            #
+            # 창은 어차피 on_window_sec(15초) 로 스스로 닫히므로, 신호로
+            # 끊을 이유가 없다. 손으로 끊어야 하면 대시보드의 '콘 인식 끄기'
+            # (/cone/command cmd=off) 를 쓴다.
             self.green_at = None
-            self.open_until = 0.0
-            self.enabled = self.force
         # state == 'none' / 'yellow' : 아무것도 바꾸지 않는다
 
     # ------------------------------------------------------------ 스캔 처리
+    def _obstacle(self, msg):
+        """차로 폭 안에 찍힌 점을 덩어리로 묶어 가장 가까운 것을 낸다.
+
+        짝짓기도 최소 점수도 요구하지 않는다 — 라바콘은 원뿔이라 라이다
+        높이에서 1점만 맞는 일이 흔하다 (실측 10스캔 중 9번이 1~2점).
+        """
+        pts = []
+        for i, r in enumerate(msg.ranges):
+            if not math.isfinite(r) or r <= 0.05:
+                continue
+            a = msg.angle_min + i * msg.angle_increment + self.offset
+            x, y = r * math.cos(a), r * math.sin(a)
+            if OBS_X_MIN <= x <= OBS_X_MAX and abs(y) <= OBS_HALF_W:
+                pts.append((x, y))
+        if not pts:
+            return dict(side='', dist=None, y=None, n=0, groups=0)
+        pts.sort()
+        groups, cur = [], []
+        for q in pts:
+            if cur and math.hypot(q[0] - cur[-1][0], q[1] - cur[-1][1]) > OBS_GAP:
+                groups.append(cur)
+                cur = []
+            cur.append(q)
+        groups.append(cur)
+        near = min(groups, key=lambda g: min(q[0] for q in g))
+        cy = sum(q[1] for q in near) / len(near)
+        return dict(side=('L' if cy > 0 else 'R'),
+                    dist=round(min(q[0] for q in near), 3),
+                    y=round(cy, 3), n=len(near), groups=len(groups))
+
     def _on_scan(self, msg):
+        # 차로 안 정지물체는 콘 창과 무관하게 매 스캔 낸다 (아래 창 검사보다 먼저).
+        obs = self._obstacle(msg)
+        obs['stamp'] = time.monotonic()
+        obs['wall'] = round(time.time(), 3)
+        self.pub_obstacle.publish(String(data=json.dumps(obs)))
+
         # 켜짐은 진입 트리거가 연 창 안에서만 성립한다. 창이 닫히면 꺼진다.
         if not self.force and time.monotonic() >= self.open_until:
             if self.enabled:

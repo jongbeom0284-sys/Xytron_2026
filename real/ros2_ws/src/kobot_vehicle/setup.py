@@ -45,5 +45,6 @@ setup(
         'traffic_perception = kobot_vehicle.Traffic_Perception:main',
         'vehicle_perception = kobot_vehicle.Vehicle_Perception:main',
         'yolop_drive = kobot_vehicle.yolop_drive_node:main',
+        'object_detection = kobot_vehicle.object_detection_node:main',
     ]},
 )

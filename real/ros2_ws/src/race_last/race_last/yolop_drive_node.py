@@ -45,6 +45,7 @@ from .cone_link import ConeLink
 
 from .lane_core import (
     divider_x,
+    white_bounds,
     LaneConfig,
     LaneTracker,
     draw_overlay,
@@ -108,7 +109,11 @@ AVOID_HOLD_SEC = 3.0     # 인식이 꺼진 순간부터 이 시간은 회피 �
 #     9 = 검출 3회 (0.30초)
 # 주의: 이 값은 발행 주기에 묶여 있다. 0823 오전 구독 누수로 발행이 0.5~2Hz
 # 였을 때는 5가 2.5초였다. 발행 주기를 바꾸면 이 값도 다시 봐야 한다.
-CAR_CONFIRM = 3          # 기본값. 주행 중에는 car_confirm 파라미터로 바꾼다
+# 0823 밤: 3 → **1**. 앞차를 보는 구간 자체가 '콘 탈출 후 30초' 로 좁혀졌고
+# 그 안에서는 차로(좌·우 흰선) 안에 있는 물체만 올라온다. 그 두 조건을 통과한
+# 관측이면 한 번만 봐도 피한다 — 코스에 그것 말고 피할 것이 없다.
+# 대가: 오검출 한 번에 AVOID_HOLD_SEC(3초) 동안 흰선에 붙는다.
+CAR_CONFIRM = 1          # 기본값. 주행 중에는 car_confirm 파라미터로 바꾼다
 AVOID_REARM_SEC = 6.0    # 회피가 걸렸던 뒤 이 시간 안에는 한 프레임만 봐도
                          # 바로 회피로 돌아간다. 인식이 깜빡여도 놓지 않는다
 VEHICLE_MUTE_SEC = 10.0  # 앞차를 확정하면 이 시간 동안 신호를 무시한다.
@@ -118,6 +123,18 @@ CONE_FRESH_SEC = 0.6     # 콘 관측이 이보다 오래되면 없는 것으로
                          # 마지막 값을 붙들고 회피를 영구히 막던 문제 (0823)
                          # (0823: 3 -> 5, 순간 오검출로 회피가 서는 것 방지)
 AVOID_OFFSET_PX = 90.0   # 흰선에서 안쪽으로 띄울 거리. 실주행하며 맞춘다
+
+# ---- 라이다 정지물체 회피 (0823 밤) ----
+# 앞차 자리에는 차 뒤에 라바콘이 세워진다(대회 규칙). YOLOv8n 은 그 조합을
+# 코앞에서야 알아본다 — 실측 214410 세션: car 최초 검출이 f324 인데 그때
+# 박스가 이미 화면 아래까지 닿았고, conf 0.02 전 클래스로도 f303~323 은 빈손.
+# 같은 구간을 라이다로 보면 f317 부터 16프레임 연속 전부 '우측', 거리가
+# 1.19 → 0.25m 로 매끄럽게 줄어든다. YOLO 보다 0.8초(2.16 m/s 로 1.7m) 빠르다.
+OBS_CONFIRM = 2          # 같은 쪽이 이만큼 연속이면 확정 (실측 f318 에 확정)
+OBS_FRESH_SEC = 0.4      # 관측이 이보다 오래되면 없는 것으로 본다
+OBS_PASS_MARGIN_M = 0.8  # 차체 길이 0.6 + 여유. 유지 시간 계산에 쓴다
+OBS_HOLD_MIN_SEC = 0.6   # 유지 시간 하한 (조향이 실제로 먹을 시간)
+OBS_HOLD_MAX_SEC = 3.0   # 상한 (오검출이 오래 붙잡지 못하게)
 
 
 class YolopDriveNode(Node):
@@ -199,6 +216,13 @@ class YolopDriveNode(Node):
         # 이 바퀴 추월 구간은 끝났으므로 나머지 구간의 오검출을 없애고
         # GPU 를 차선에 넘긴다. 콘 탈출(_check_cone_exit)에서 풀린다.
         self._vehicle_passed = False
+        # 콘 구간을 빠져나온 뒤 이 시각까지만 앞차를 본다 (vehicle_window_sec)
+        self._vehicle_window_until = 0.0
+        self._car_inside = 0          # 직전 프레임에서 차로 안이던 물체 수
+        # 라이다 정지물체
+        self._obs = None              # 마지막 /lidar/obstacle 관측
+        self._obs_recent = []         # 최근 좌/우. 연속 장수를 센다
+        self._obs_hold_until = 0.0    # 라이다 회피를 유지하기로 한 시각
 
         self.tracker = LaneTracker(self._lane_config())
         self._load_model()
@@ -234,6 +258,8 @@ class YolopDriveNode(Node):
                                  self._on_vehicle, 10)
         self.create_subscription(String, '/cone/reading',
                                  self._on_cone_reading, 10)
+        self.create_subscription(String, '/lidar/obstacle',
+                                 self._on_obstacle, 10)
         # 대시보드 기록주행 카드가 쓰는 토픽. QoS 를 발행측과 맞춘다.
         dashboard_qos = QoSProfile(depth=1)
         dashboard_qos.reliability = ReliabilityPolicy.RELIABLE
@@ -349,6 +375,16 @@ class YolopDriveNode(Node):
         # 0823 실측: 이 구간 끝에서 콘 통로에 2.16 m/s 로 조향 +33 인 채
         # 들어가 우측으로 밀렸다. 통로 진입 속도를 낮춰 그 진입각 오차를 줄인다.
         self.declare_parameter('straight_speed_mps', 1.6)
+        # 콘 구간을 빠져나온 뒤 이 시간 동안만 앞차 인식을 켠다 (0823 밤 요구).
+        # 트랙 순서가 신호등 → 콘 → 추월이라 추월 구간이 여기 들어온다.
+        # 클래스를 넓힌 만큼 오검출에 노출되는 시간을 줄인다. 0 이면 제한 없음.
+        self.declare_parameter('vehicle_window_sec', 30.0)
+        # 앞차로 인정할 조건: 박스 하단 중심이 좌·우 흰선 **사이**에 있을 것.
+        # 흰선이 양쪽 다 안 보이면 그 프레임은 판정하지 않는다.
+        self.declare_parameter('vehicle_inside_lane_only', True)
+        # 라이다로 잡은 차로 안 정지물체로 회피한다. 끄면 카메라(YOLO)만 쓴다.
+        self.declare_parameter('lidar_avoid_enabled', True)
+        self.declare_parameter('obs_confirm', OBS_CONFIRM)
         # 앞차 확정에 필요한 /vehicle/state 연속 메시지 수 (위 CAR_CONFIRM 주석)
         self.declare_parameter('car_confirm', CAR_CONFIRM)
         # 직진 조향 억제 (상단 상수 주석). 주행 중 ros2 param set 으로 조절.
@@ -396,6 +432,11 @@ class YolopDriveNode(Node):
             self._value('cone_approach_speed_units'))
         self.car_confirm = max(1, int(self._value('car_confirm')))
         self.straight_speed_mps = float(self._value('straight_speed_mps'))
+        self.vehicle_window_sec = float(self._value('vehicle_window_sec'))
+        self.vehicle_inside_lane_only = bool(
+            self._value('vehicle_inside_lane_only'))
+        self.lidar_avoid_enabled = bool(self._value('lidar_avoid_enabled'))
+        self.obs_confirm = max(1, int(self._value('obs_confirm')))
         self.cone_trigger_delay_sec = float(self._value('cone_trigger_delay_sec'))
         self.cone_entry_speed_mps = float(self._value('cone_entry_speed_mps'))
         self.hold_delay_sec = float(self._value('straight_hold_delay_sec'))
@@ -550,6 +591,32 @@ class YolopDriveNode(Node):
                         successful=False, reason='0~10초 범위여야 한다')
                 self.cone_trigger_delay_sec = value
                 self.get_logger().warning('주황 감시 지연 %.1f초로 변경' % value)
+            elif param.name == 'vehicle_window_sec':
+                value = float(param.value)
+                if not 0.0 <= value <= 300.0:
+                    return SetParametersResult(
+                        successful=False, reason='0~300초 범위여야 한다')
+                self.vehicle_window_sec = value
+                self.get_logger().warning(
+                    '앞차 인식 창 %.0f초로 변경 (0=제한없음)' % value)
+            elif param.name == 'lidar_avoid_enabled':
+                self.lidar_avoid_enabled = bool(param.value)
+                self._obs_recent = []
+                self.get_logger().warning(
+                    '라이다 정지물체 회피 = %s' % self.lidar_avoid_enabled)
+            elif param.name == 'obs_confirm':
+                value = int(param.value)
+                if not 1 <= value <= 20:
+                    return SetParametersResult(
+                        successful=False, reason='1~20 이어야 한다')
+                self.obs_confirm = value
+                self._obs_recent = []
+                self.get_logger().warning('라이다 확정 %d프레임으로 변경' % value)
+            elif param.name == 'vehicle_inside_lane_only':
+                self.vehicle_inside_lane_only = bool(param.value)
+                self.get_logger().warning(
+                    '차로 안 물체만 앞차로 인정 = %s'
+                    % self.vehicle_inside_lane_only)
             elif param.name == 'straight_speed_mps':
                 value = float(param.value)
                 if not 0.0 <= value <= 4.87:
@@ -820,7 +887,10 @@ class YolopDriveNode(Node):
             if _age > CONE_FRESH_SEC:
                 _cone_d = None
         if _cone_d and int(_cone_d.get('cones', 0)) >= 2:
-            self._avoid_side = None
+            # 라이다가 계산한 통과 시간 중이면 놓지 않는다. 앞차 자리에는
+            # 차 뒤에 라바콘이 서 있어 여기 걸려 회피가 풀리면 그대로 박는다.
+            if time.monotonic() >= self._obs_hold_until:
+                self._avoid_side = None
             return
         try:
             payload = json.loads(message.data)
@@ -846,8 +916,9 @@ class YolopDriveNode(Node):
         # 를 못 넘겨 _avoid_until 이 갱신되지 않았고, avoid_side 는 'right' 인데
         # offset 이 0/90 을 깜빡이며 차가 중앙으로 돌아갔다.
         # 좌/우가 보이면 회피, 안 보이면 해제. 거리는 로그용으로만 남긴다.
-        near = bool(boxes)
-        far = not boxes
+        # 차로 안에 있는 물체가 있을 때만 앞차로 본다 (side 계산에서 걸렀다)
+        near = side in ('LEFT', 'RIGHT')
+        far = not near
 
         self._car_recent.append(side if near else 'NONE')
         while len(self._car_recent) > self.car_confirm:
@@ -889,6 +960,8 @@ class YolopDriveNode(Node):
             self._straight_hold_from = 0.0
             self._straight_hold_until = 0.0
         elif far and self._avoid_side and now > self._avoid_until:
+            if now < self._obs_hold_until:
+                return          # 라이다가 계산한 통과 시간이 아직 남았다
             self._avoid_side = None
             if self.vehicle_off_after_pass:
                 # 이 바퀴 추월은 끝났다. 다음 콘 구간을 빠져나올 때까지 앞차
@@ -915,14 +988,40 @@ class YolopDriveNode(Node):
 
         width = float(payload.get('w') or 640)
         height = float(payload.get('h') or 480)
-        # 가장 가까운 것 = 박스가 가장 큰 것
-        box = max(boxes, key=lambda b: float(b.get('w', 0)) * float(b.get('h', 0)))
-        cx = (float(box.get('x', 0)) + float(box.get('w', 0)) / 2.0) * width
-        y2 = (float(box.get('y', 0)) + float(box.get('h', 0))) * height
 
+        # 차로 안(좌·우 흰선 사이)에 있는 것만 남긴다 (0823 밤 요구).
+        # 클래스를 car/suitcase/handbag/vase 로 넓힌 대신, 피할 이유가 없는
+        # 차로 밖 물체를 여기서 버린다. RC카가 프레임마다 다른 클래스로 잡히는
+        # 문제를 **클래스가 아니라 위치**로 푸는 것이다.
+        # 흰선이 양쪽 다 안 보이면 차로 폭을 모르므로 그 프레임은 판정하지 않는다.
+        inside = []
+        for b in boxes:
+            cx = (float(b.get('x', 0)) + float(b.get('w', 0)) / 2.0) * width
+            y2 = (float(b.get('y', 0)) + float(b.get('h', 0))) * height
+            if self.vehicle_inside_lane_only:
+                bounds = white_bounds(result, int(round(y2)))
+                if bounds is None:
+                    continue
+                left, right = bounds
+                if not (left <= cx <= right):
+                    continue
+            inside.append((b, cx, y2))
+        self._car_inside = len(inside)
+        if not inside:
+            return 'NONE'
+
+        # 가장 가까운 것 = 박스가 가장 큰 것
+        box, cx, y2 = max(
+            inside,
+            key=lambda t: float(t[0].get('w', 0)) * float(t[0].get('h', 0)))
+        # 좌/우는 노란 중앙선 기준이 1순위 (카메라 장착 치우침이 상쇄된다).
+        # 노란선이 없으면 좌·우 흰선의 중앙을 기준으로 본다.
         edge = divider_x(result, int(round(y2)))
         if edge is None:
-            return 'NONE'
+            bounds = white_bounds(result, int(round(y2)))
+            if bounds is None:
+                return 'NONE'
+            edge = (bounds[0] + bounds[1]) / 2.0
         return 'LEFT' if cx < edge else 'RIGHT'
 
     def _avoid_offset(self, now: float) -> float:
@@ -1142,6 +1241,7 @@ class YolopDriveNode(Node):
             self.get_logger().warning('신호 잠금 해제 — 지금부터 다시 읽는다')
         elif cmd == 'vehicle_force':
             self._vehicle_force_until = now + max(0.0, sec)
+            self._vehicle_passed = False
             self.get_logger().warning('앞차 인식 %.0f초 강제 켬' % sec)
         else:
             self.get_logger().warning('모르는 명령: %s' % cmd)
@@ -1170,6 +1270,11 @@ class YolopDriveNode(Node):
         self._cone_triggered = False
         self._cone_trig_run = 0
         self._vehicle_force_until = 0.0
+        self._vehicle_window_until = 0.0
+        self._car_inside = 0
+        self._obs = None
+        self._obs_recent = []
+        self._obs_hold_until = 0.0
         self._fault = None
         link = self._cone_link
         if link is not None:
@@ -1195,9 +1300,15 @@ class YolopDriveNode(Node):
             self._lock_kind = None      # 사라짐 대기는 여기서 끝낸다
             # 새 추월 구간이 온다 — 지난 바퀴의 '추월 완료'를 푼다
             self._vehicle_passed = False
+            # 여기서부터 vehicle_window_sec 동안만 앞차를 본다 (0823 밤 요구)
+            self._vehicle_window_until = (
+                now + self.vehicle_window_sec
+                if self.vehicle_window_sec > 0.0 else 0.0)
             self.get_logger().warning(
-                '라바콘 구간 이탈 — 앞차 인식 켬, 신호는 %.0f초 더 무시'
-                % CONE_EXIT_LOCK_SEC)
+                '라바콘 구간 이탈 — 앞차 인식 %s, 신호는 %.0f초 더 무시'
+                % (('%.0f초간 켬' % self.vehicle_window_sec)
+                   if self.vehicle_window_sec > 0.0 else '켬',
+                   CONE_EXIT_LOCK_SEC))
         self._cone_was_active = bool(link.active)
 
     def _vehicle_needed(self, now: float) -> bool:
@@ -1208,10 +1319,22 @@ class YolopDriveNode(Node):
         # 이 바퀴 추월을 마쳤다 — 다음 콘 탈출까지 끈다 (vehicle_off_after_pass)
         if self._vehicle_passed:
             return False
-        # 콘 구간(진입 또는 접근)에서는 콘을 차량으로 오인한다
-        link = self._cone_link
-        if link is not None and (link.active or link.approach):
+        # 콘 구간을 빠져나온 뒤 vehicle_window_sec 동안만 본다 (0823 밤 요구).
+        # 클래스를 넓힌 만큼 오검출에 노출되는 시간을 줄인다. 0 이면 제한 없음.
+        if self.vehicle_window_sec > 0.0 and now >= self._vehicle_window_until:
             return False
+        # 콘 구간에서는 콘을 차량으로 오인한다 — 콘 모드일 때는 끈다.
+        link = self._cone_link
+        if link is not None:
+            if link.active:
+                return False
+            # approach(진입 전 감속)만으로는 끄지 않는다. 콘을 이미 지난 뒤에도
+            # 라이다에 콘 쌍이 보여 approach 가 되살아나고, 그때마다 추월 구간
+            # 한복판에서 앞차 인식이 끊겼다 (0823 실측: f319~324, f331~340 에서
+            # car 0.83 을 보고도 버렸다). 창이 닫혀 있을 때만 예전처럼 끈다.
+            if link.approach and not (self.vehicle_window_sec > 0.0
+                                      and now < self._vehicle_window_until):
+                return False
         # 신호 잠금은 앞차 인식을 끄지 않는다 (0823).
         #  · 코스상 앞차 구간이 초록불 잠금 30초 안에 들어가, 정작 필요한
         #    구간에서 앞차를 못 봤다 (실측: armed 289행 중 274행이 꺼짐)
@@ -1246,6 +1369,58 @@ class YolopDriveNode(Node):
         self._last_overlay_image = overlay
 
     # ------------------------------------------------------------ 제어
+    def _on_obstacle(self, message: String) -> None:
+        """라이다가 본 차로 안 정지물체 — 좌/우가 서면 반대쪽으로 붙는다.
+
+        정지물체이므로 상대속도가 곧 자차속도다. 그래서 '언제까지 붙어 있을까'
+        를 (거리 + 차체길이+여유) / 현재속도 로 계산할 수 있다. 회피 중에는
+        차가 옆으로 비켜서 물체가 차로 폭 밖으로 나가 관측이 끊기므로,
+        그 계산값만큼은 관측 없이도 유지한다.
+        """
+        try:
+            d = json.loads(message.data)
+        except (ValueError, TypeError):
+            return
+        with self._lock:
+            self._obs = d
+        if not self.lidar_avoid_enabled:
+            return
+        now = time.monotonic()
+        # 콘 모드에서는 콘 자체가 잡히므로 쓰지 않는다.
+        link = self._cone_link
+        if link is not None and link.active:
+            self._obs_recent = []
+            return
+        # 앞차를 볼 구간(콘 탈출 후 vehicle_window_sec)에서만 쓴다.
+        if self.vehicle_window_sec > 0.0 and now >= self._vehicle_window_until:
+            self._obs_recent = []
+            return
+
+        side = str(d.get('side') or '')
+        self._obs_recent.append(side)
+        while len(self._obs_recent) > self.obs_confirm:
+            self._obs_recent.pop(0)
+        steady = (len(self._obs_recent) == self.obs_confirm
+                  and len(set(self._obs_recent)) == 1 and side in ('L', 'R'))
+        if not steady:
+            return
+
+        dist = float(d.get('dist') or 0.0)
+        # 지금 나가고 있는 속도로 이 물체를 지나치는 데 걸리는 시간
+        mps = max(0.25, self.speed_units * self.mps_per_unit)
+        hold = (dist + OBS_PASS_MARGIN_M) / mps
+        hold = max(OBS_HOLD_MIN_SEC, min(OBS_HOLD_MAX_SEC, hold))
+        want = 'left' if side == 'R' else 'right'   # 물체 반대쪽 흰선으로
+        if self._avoid_side != want:
+            self.get_logger().warning(
+                '라이다 정지물체 %s %.2fm (점 %s) — %s 흰선으로 %.1f초 회피'
+                % ('우측' if side == 'R' else '좌측', dist, d.get('n'),
+                   '좌측' if want == 'left' else '우측', hold))
+        self._avoid_side = want
+        self._obs_hold_until = now + hold
+        self._avoid_until = max(self._avoid_until, self._obs_hold_until)
+        self._avoid_rearm_until = now + AVOID_REARM_SEC
+
     def _on_cone_reading(self, message: String) -> None:
         try:
             data = json.loads(message.data)
@@ -1421,6 +1596,13 @@ class YolopDriveNode(Node):
                 0.0, self._straight_hold_from - now)
                 if now < self._straight_hold_until else 0.0, 2),
             'vehicle_passed': bool(self._vehicle_passed),
+            'vehicle_window_s': round(max(
+                0.0, self._vehicle_window_until - now), 1),
+            'car_inside': int(self._car_inside),
+            'obs_side': (self._obs or {}).get('side', ''),
+            'obs_dist': (self._obs or {}).get('dist'),
+            'obs_n': (self._obs or {}).get('n', 0),
+            'obs_hold_s': round(max(0.0, self._obs_hold_until - now), 2),
             'cone_trig_px': int(self._cone_trig_px),
             'cone_exited': bool(self._cone_exited),
             'vehicle_force_s': round(max(

@@ -333,7 +333,11 @@ function drawVehicleOverlay(layer){
   layer.innerHTML=boxes.map(b=>{
     const left=ox+b.x*dw, top=oy+b.y*dh;
     const width=b.w*dw, height=b.h*dh;
-    const tag=`${b.ko||'차량'} ${CAR_SIDE[b.dir]||b.dir}`
+    // 무엇으로 잡았는지(cn)와 얼마나 확신하는지(conf)를 같이 보여준다.
+    // RC카가 car/suitcase/handbag/vase 로 흔들려서 임계를 맞추려면 둘 다 필요하다.
+    const kind=b.cn||b.ko||'차량';
+    const cf=(b.conf!=null)?` ${Number(b.conf).toFixed(2)}`:'';
+    const tag=`${kind}${cf} ${CAR_SIDE[b.dir]||b.dir}`
       + (b.dist!=null?` ${Number(b.dist).toFixed(2)}m`:'');
     return `<i class="vbox s-${(b.dir||'none').toLowerCase()}" style="left:${left.toFixed(1)}px;top:${top.toFixed(1)}px;width:${width.toFixed(1)}px;height:${height.toFixed(1)}px"><b>${tag}</b></i>`;
   }).join('');

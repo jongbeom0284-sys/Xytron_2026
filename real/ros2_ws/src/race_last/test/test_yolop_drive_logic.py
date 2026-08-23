@@ -58,6 +58,16 @@ def traffic(n, state, count=1):
         n._on_traffic(String(data=json.dumps({'state': state})))
 
 
+def open_vehicle_window(n, sec=30.0):
+    """콘 구간을 빠져나온 직후 상태로 만든다 — 앞차 인식이 켜지는 구간.
+
+    실제로는 _check_cone_exit 가 이 창을 연다. 회피 로직만 보는 테스트에서는
+    '차로 안 물체인가' 판정도 끈다 — 그건 test_vehicle_in_lane 이 따로 본다.
+    """
+    n._vehicle_window_until = n.clock.now + sec
+    n.vehicle_inside_lane_only = False
+
+
 def vehicle(n, side=None, dist=1.0):
     boxes = ([dict(x=0.1, y=0.5, w=0.2, h=0.2, dir=side, dist=dist)]
              if side else [])
@@ -160,6 +170,7 @@ def test_left_turn_does_not_count_cone_trigger(node):
 # ------------------------------------------------------------ 3) 추월 후 앞차 인식 끔
 def test_vehicle_perception_off_after_pass_until_cone_exit(node):
     c = node.clock
+    open_vehicle_window(node)
     assert node._vehicle_needed(c.now) is True
     for _ in range(ydn.CAR_CONFIRM):                # 앞차 확정
         vehicle(node, 'LEFT')
@@ -186,6 +197,7 @@ def test_vehicle_off_after_pass_can_be_disabled(node):
     from rclpy.parameter import Parameter
     node._on_parameters([Parameter('vehicle_off_after_pass', value=False)])
     c = node.clock
+    open_vehicle_window(node)
     for _ in range(ydn.CAR_CONFIRM):
         vehicle(node, 'RIGHT')
     c.now += ydn.AVOID_HOLD_SEC + 0.1
@@ -200,6 +212,7 @@ def test_status_json_builds_with_new_fields(node):
 
 
 def test_green_confirm_clears_vehicle_passed(node):
+    open_vehicle_window(node)
     node._vehicle_passed = True
     assert node._vehicle_needed(node.clock.now) is False
     traffic(node, 'green', ydn.GO_CONFIRM)
@@ -208,13 +221,17 @@ def test_green_confirm_clears_vehicle_passed(node):
 
 
 def test_car_confirm_is_tunable(node):
-    """앞차 확정 메시지 수는 주행 중에 바꿀 수 있다 (기본 3 = 검출 1회)."""
+    """앞차 확정 메시지 수는 주행 중에 바꿀 수 있다.
+
+    기본 1 — 콘 탈출 후 30초 창 안에서, 차로 안에 있는 물체만 올라오므로
+    한 번만 봐도 피한다 (0823 밤 요구).
+    """
     from rclpy.parameter import Parameter
-    assert node.car_confirm == 3
+    assert node.car_confirm == 1
+    open_vehicle_window(node)
     c = node.clock
-    for _ in range(3):
-        vehicle(node, 'LEFT')
-    assert node._avoid_side == 'right', '3메시지면 확정돼야 한다'
+    vehicle(node, 'LEFT')
+    assert node._avoid_side == 'right', '한 번 보면 바로 회피'
 
     node._on_parameters([Parameter('car_confirm', value=9)])
     assert node.car_confirm == 9
@@ -231,3 +248,44 @@ def test_car_confirm_rejects_bad_value(node):
     from rclpy.parameter import Parameter
     assert not node._on_parameters([Parameter('car_confirm', value=0)]).successful
     assert not node._on_parameters([Parameter('car_confirm', value=99)]).successful
+
+
+# ─────────────────── 앞차 인식 창 (콘 탈출 후 30초) ───────────────────
+def test_cone_exit_opens_vehicle_window(node):
+    """콘 구간을 빠져나오면 그때부터 vehicle_window_sec 동안만 앞차를 본다."""
+    c = node.clock
+    assert node.vehicle_window_sec == 30.0
+    assert node._vehicle_needed(c.now) is False, '창이 열리기 전에는 안 본다'
+
+    node._cone_was_active = True
+    node._cone_link._active = False
+    node._check_cone_exit(c.now)                 # 콘 탈출
+    assert node._vehicle_window_until == pytest.approx(c.now + 30.0)
+    assert node._vehicle_needed(c.now) is True
+
+    c.now += 29.0
+    assert node._vehicle_needed(c.now) is True
+    c.now += 2.0                                  # 창을 넘김
+    assert node._vehicle_needed(c.now) is False
+
+
+def test_vehicle_window_can_be_disabled(node):
+    """0 이면 제한 없음 — 콘 구간 밖에서 항상 본다."""
+    from rclpy.parameter import Parameter
+    node._on_parameters([Parameter('vehicle_window_sec', value=0.0)])
+    assert node.vehicle_window_sec == 0.0
+    assert node._vehicle_needed(node.clock.now) is True
+
+
+def test_vehicle_window_rejects_bad_value(node):
+    from rclpy.parameter import Parameter
+    bad = node._on_parameters([Parameter('vehicle_window_sec', value=-1.0)])
+    assert not bad.successful
+
+
+def test_dashboard_force_beats_window(node):
+    """대시보드 강제 켜기는 창과 무관하게 이긴다."""
+    c = node.clock
+    assert node._vehicle_needed(c.now) is False
+    node._vehicle_force_until = c.now + 5.0
+    assert node._vehicle_needed(c.now) is True

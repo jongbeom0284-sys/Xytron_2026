@@ -66,10 +66,15 @@ INFER_INTERVAL = 3        # N프레임당 1회 추론
 # 앞차도 너무 놓쳤다 (실주행 체감). 같은 기록주행 1218프레임 기준:
 #     전체클래스 0.12  검출 639개, 회피 성립 가능 구간 52개  (오검출 범람)
 #     car만      0.50  검출  41개, 회피 성립 가능 구간  5개  (너무 적음)
-#     car만      0.30  검출  73개, 회피 성립 가능 구간 11개  ← 채택
+#     car만      0.30  검출  73개, 회피 성립 가능 구간 11개
+# 0823 밤: 0.30 → **0.13**. 실제 코스에 놓인 빨간 라바콘/정지차량을 찍어
+# 돌려 보니 그 물체를 suitcase 0.177 / handbag 0.148 로만 잡는다 —
+# 0.30 은 물론 0.20 으로도 못 넘는다 (같은 화면에서 배경 의자는 chair 0.44).
+# 그래서 임계를 그 아래로 내린다. 대신 '좌·우 흰선 사이' 조건과
+# '콘 탈출 후 vehicle_window_sec 동안만' 조건이 오검출 노출을 막는다.
 # ⚠ 되돌리려면 이 값을 0.12 로. 주행 중에는 파라미터로 바꿀 수 있다:
 #     ros2 param set /vehicle_perception_node conf 0.30
-CONF_THRES = 0.30
+CONF_THRES = 0.13
 # 320 은 RC카가 47x40px 로 뭉개져 conf 0.14, 640 이면 0.34 였다 (0822).
 # 0823: 960 을 시도했다가 되돌렸다. 혼자 재면 48ms 인데 실제 스택에서는
 # 차선(YOLOPv2)·신호등과 GPU 를 다투며 89ms 가 됐고, 앞차 발행이
@@ -83,6 +88,8 @@ CLASS_CAR = 2             # COCO car
 CLASS_BUS = 5             # COCO 'bus'
 CLASS_TRUCK = 7           # COCO 'truck'
 CLASS_SUITCASE = 28       # COCO 'suitcase'
+CLASS_HANDBAG = 26        # COCO 'handbag'
+CLASS_VASE = 75           # COCO 'vase'
 # 트랙에 보행자가 없다. 사람 오검출로 비상정지가 걸리는 위험만 남아서 뺐다.
 #
 # RC카는 낮고 각져서 같은 물체가 프레임마다 car / truck / suitcase 로 흔들린다.
@@ -96,7 +103,13 @@ CLASS_SUITCASE = 28       # COCO 'suitcase'
 # conf 0.50 에서는 car 로도 충분히 잡힌다 (실측: car 검출 123개 중 43개가
 # 0.5 이상, 최장 16프레임 연속). 되돌리려면 아래 줄을 주석 해제한다.
 # TARGET_CLASSES = [CLASS_CAR, CLASS_BUS, CLASS_TRUCK, CLASS_SUITCASE]
-TARGET_CLASSES = [CLASS_CAR]
+# 0823 밤: RC카는 낮고 각져서 프레임마다 car / suitcase / handbag / vase 로
+# 흔들린다. 클래스를 좁히면 그 흔들림만큼 놓친다. 그래서 **클래스를 넓히고,
+# 대신 "좌·우 흰선 사이에 있는 물체" 만 앞차로 인정한다** (yolop_drive 가
+# 판정한다 — 거기에만 차선 마스크가 있다). 차로 밖 물체는 애초에 피할 대상이
+# 아니므로, 클래스를 넓혀 생기는 오검출을 이 기하 조건이 걸러낸다.
+# 클래스를 넓혀도 추론 시간은 그대로다 (모델은 80개를 전부 계산한다).
+TARGET_CLASSES = [CLASS_CAR, CLASS_SUITCASE, CLASS_HANDBAG, CLASS_VASE]
 PERSON_STOP_DIST = 2.0    # 보행자가 이 거리 안이면 정지 신호
 
 # bbox 하단이 이 y 위면 머리 위 구조물로 보고 버린다
@@ -109,10 +122,18 @@ LIDAR_ANGLE_OFFSET_RAD = -2.1217   # 라이다 장착각 보정
 LIDAR_MAX_AGE_SEC = 0.5
 
 CLASS_KO = {CLASS_PERSON: '사람', CLASS_CAR: '차량', CLASS_BUS: '차량',
-            CLASS_TRUCK: '차량', CLASS_SUITCASE: '차량'}
+            CLASS_TRUCK: '차량', CLASS_SUITCASE: '차량',
+            CLASS_HANDBAG: '차량', CLASS_VASE: '차량'}
+# 대시보드가 '무엇으로 잡았는지' 를 보여줄 수 있게 원래 이름도 싣는다.
+# ko 는 전부 '차량' 이라 클래스가 흔들리는 것을 볼 수 없다 (0823 밤).
+CLASS_NAME = {CLASS_PERSON: 'person', CLASS_CAR: 'car', CLASS_BUS: 'bus',
+              CLASS_TRUCK: 'truck', CLASS_SUITCASE: 'suitcase',
+              CLASS_HANDBAG: 'handbag', CLASS_VASE: 'vase'}
+
 CLASS_BGR = {CLASS_PERSON: (60, 60, 255), CLASS_CAR: (255, 200, 60),
              CLASS_BUS: (255, 200, 60), CLASS_TRUCK: (255, 200, 60),
-             CLASS_SUITCASE: (255, 200, 60)}
+             CLASS_SUITCASE: (255, 200, 60), CLASS_HANDBAG: (255, 200, 60),
+             CLASS_VASE: (255, 200, 60)}
 
 
 class VehiclePerception(Node):
@@ -325,7 +346,8 @@ class VehiclePerception(Node):
                 x=round(x1 / IMAGE_WIDTH, 4), y=round(y1 / IMAGE_HEIGHT, 4),
                 w=round((x2 - x1) / IMAGE_WIDTH, 4),
                 h=round((y2 - y1) / IMAGE_HEIGHT, 4),
-                cls=cls, ko=CLASS_KO.get(cls, str(cls)), dir=side,
+                cls=cls, ko=CLASS_KO.get(cls, str(cls)),
+                cn=CLASS_NAME.get(cls, str(cls)), dir=side,
                 dist=(None if math.isinf(dist) else round(dist, 3)),
                 conf=round(conf, 3), px=[x1, y1, x2, y2]))
             if cls == CLASS_PERSON:
@@ -385,8 +407,8 @@ class VehiclePerception(Node):
             x1, y1, x2, y2 = box['px']
             color = CLASS_BGR.get(box['cls'], (200, 200, 200))
             cv2.rectangle(canvas, (x1, y1), (x2, y2), color, 2)
-            tag = '%s %s %s' % (
-                box['ko'], box['dir'],
+            tag = '%s %.2f %s %s' % (
+                box.get('cn', box['ko']), box.get('conf', 0.0), box['dir'],
                 ('%.2fm' % box['dist']) if box['dist'] is not None else '거리없음')
             for col, th in (((0, 0, 0), 3), (color, 1)):
                 cv2.putText(canvas, tag, (x1, max(y1 - 6, 12)),

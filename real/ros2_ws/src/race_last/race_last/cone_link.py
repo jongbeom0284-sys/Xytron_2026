@@ -67,6 +67,11 @@ class ConeLink:
         # 그 조건들을 기다리다 0.7초를 흘려보낸 실측이 있었다
         # (192730 세션 f262~f268: 콘 1~3개·게이트 무효로 대기, 5개에서야 진입).
         self._force_enter = False
+        # 이 구간을 이미 빠져나왔는가. True 인 동안에는 approach(진입 전 감속)를
+        # 켜지 않는다 — 빠져나온 통로의 콘 쌍이 라이다에 계속 보여서 approach 가
+        # 되살아나고, 그때마다 속도가 27 -> 9 units 로 떨어졌다 (0823 실측:
+        # 214410 세션 f319~324, f331~340). 다음 주황 트리거나 재진입에서 풀린다.
+        self._exited = False
         self._out = _Debouncer(self._fsm.cone_exit_frames)
         self._active = False
         # 통로가 앞에 보이는 상태 (진입 전) — 노드가 접근 감속에 쓴다
@@ -82,6 +87,7 @@ class ConeLink:
     def request_enter(self) -> None:
         """다음 관측에서 조건 없이 콘 모드로 들어간다 (카메라 주황 트리거용)."""
         self._force_enter = True
+        self._exited = False        # 새 구간이다 — 접근 감속을 다시 허용한다
 
     @staticmethod
     def reading_from(d, now):
@@ -137,6 +143,9 @@ class ConeLink:
             age < 0.6 and cone.lidar_cones >= 2
             and cone.lidar_gate_valid
             and cone.lidar_gate_depth_m <= self.approach_depth_m)
+        # 이미 빠져나온 구간이면 접근 감속을 켜지 않는다 (위 _exited 주석의 근거).
+        if self._exited and not self._active:
+            self.approach = False
         obs = Observation(now=now, cone=cone, ego_speed_mps=max(0.0, ego_mps),
                           camera_ok=camera_ok, lidar_ok=age < STALE_SEC)
         cfg = self._fsm
@@ -147,6 +156,7 @@ class ConeLink:
             if self._active:
                 self._active = False
                 self._wall_prev = None
+                self._exited = True
                 self._reset_entry_handoff()
                 self._log.info('콘 관측 끊김 — 차선 주행 복귀')
             self._in.reset()
@@ -162,6 +172,7 @@ class ConeLink:
             # cone_gate_lost_exit_s 동안 안 잡히면 스스로 빠져나온다.
             if self._force_enter:
                 self._force_enter = False
+                self._exited = False
                 self._out.reset()
                 self._in.reset()
                 self._active = True
@@ -195,6 +206,7 @@ class ConeLink:
                 return None
             self._out.reset()
             self._active = True
+            self._exited = False
             self._entered_at = now
             self._gate_last_valid = now
             # 새 구간 — 지난 구간 상태를 물려받지 않는다 (policy.update 의
@@ -224,6 +236,7 @@ class ConeLink:
             self._in.reset()
             self._active = False
             self._wall_prev = None
+            self._exited = True
             self._reset_entry_handoff()
             self._log.info(
                 '라바콘 구간 이탈 (%s) — 차선 주행 복귀'

@@ -109,6 +109,17 @@ class LaneConfig:
     # --- 유지 ---
     hold_seconds: float = 0.8        # 목표를 놓쳤을 때 직전 값을 유지할 시간
     min_fit_rows: int = 6            # 피팅에 필요한 최소 행 수
+    # --- 노란 덩이가 여러 개면 가장 큰 것 하나만 목표로 쓴다 (0823 저녁) ---
+    # _target_points 는 행마다 '가장 넓은 run' 을 고른다. 노란 덩이가 둘이면
+    # 한 선을 따라가는 게 아니라 행별로 두 선을 섞어 뽑고, 그 점들에 2차
+    # 다항식을 맞추므로 목표가 휜다.
+    # 실측(203743/f130~154, 좌회전 구간): 왼쪽 덩이 A(좌회전 도로)와 오른쪽
+    # 덩이 B 가 공존하는 동안 B 를 고른 행이 0 → 9 → 12 개로 늘자 e_far 가
+    # -0.275 → +0.086 으로 뒤집혔고(부호 반전 4회), B 가 사라지자 -0.716 으로
+    # 돌아왔다. B 는 화면 위쪽(먼 거리)에만 있어 e_far 가 보는 행을 직격한다.
+    # 가장 큰 덩이만 쓰면 같은 구간에서 -0.275 → -0.716 으로 단조롭게
+    # 이어지고 부호 반전이 0 회가 된다.
+    single_yellow_blob: bool = True
 
 
 def cut_horizontal_bridges(lane_roi: np.ndarray,
@@ -199,6 +210,33 @@ def divider_x(result, y: int) -> float | None:
         if len(runs) >= 2:
             return float((runs[0].mean() + runs[-1].mean()) / 2.0)
     return None
+
+
+def largest_blob(mask: np.ndarray) -> np.ndarray:
+    """연결요소가 여러 개면 가장 넓은 것만 남긴다. 하나 이하면 그대로."""
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(
+        mask.astype(np.uint8), 8)
+    if count <= 2:
+        return mask
+    biggest = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+    return labels == biggest
+
+
+def white_bounds(result, y: int):
+    """그 행에서 좌·우 흰선의 x 를 돌려준다. 양쪽 다 안 보이면 None.
+
+    앞차 판정에 쓴다 — '차로 안에 있는 물체만 앞차로 친다' 는 조건이
+    클래스를 넓혀 생기는 오검출을 걸러 준다 (0823 밤 요구).
+    한쪽만 보이면 차로 폭을 모르므로 판정하지 않는다.
+    """
+    if result is None or result.white_mask is None:
+        return None
+    mask = result.white_mask
+    y = int(max(0, min(mask.shape[0] - 1, y)))
+    runs = LaneTracker._row_runs(mask, y)
+    if len(runs) < 2:
+        return None
+    return float(runs[0].mean()), float(runs[-1].mean())
 
 
 def reclaim_white(blob: np.ndarray, yellow: np.ndarray,
@@ -445,9 +483,14 @@ class LaneTracker:
                 return hug, ('avoid_right' if offset > 0 else 'avoid_left')
             # 흰선이 부족하면 아래 평소 경로로 떨어진다
 
+        # 노란 덩이가 여러 개면 가장 큰 것 하나만 따라간다 (설정 주석의 실측 근거).
+        # 목표 선정에서만 좁힌다 — yellow_mask 자체는 오버레이와 divider_x
+        # (앞차 좌/우 판정)가 그대로 쓴다.
+        target_yellow = (largest_blob(yellow_mask)
+                         if self.config.single_yellow_blob else yellow_mask)
         yellow_rows = []
         for y in rows:
-            runs = self._row_runs(yellow_mask, y, min_run=2)
+            runs = self._row_runs(target_yellow, y, min_run=2)
             if runs:
                 widest = max(runs, key=len)
                 yellow_rows.append((y, float(widest.mean())))
