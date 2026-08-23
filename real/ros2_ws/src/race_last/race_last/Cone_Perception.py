@@ -122,6 +122,11 @@ class ConePerception(Node):
         인데 콘 게이트가 -40 을 냈고 그대로 코스 이탈). 이제 직진이 풀리면
         (좌회전·빨강·신호없음) 콘도 함께 꺼진다.
         """
+        # 라바콘 단독 테스트(force_enabled=true)에서는 신호등 상태가
+        # 인식 게이트를 덮어쓰지 못하게 한다.
+        if self.force:
+            self.enabled = True
+            return
         try:
             state = json.loads(msg.data).get('state', '')
         except (ValueError, AttributeError, TypeError):
