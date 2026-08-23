@@ -45,6 +45,11 @@ OBS_X_MIN = 0.25        # 이보다 가까우면 차체·범퍼
 OBS_X_MAX = 2.5         # 이보다 멀면 아직 볼 필요 없다
 OBS_HALF_W = 0.45       # 차로 반폭 0.41 + 여유
 OBS_GAP = 0.15          # 이 이상 벌어지면 다른 물체
+# 덩어리의 횡폭 상한. 이보다 넓으면 물체가 아니라 벽·연석이다.
+# 실측 230555: 정지차량 0.008~0.077m, 곡선 바깥 벽 0.442~0.882m.
+# 겹치는 구간이 없어 0.25 로 자르면 벽 15프레임이 전부 떨어지고
+# 정지차량은 전부 남는다.
+OBS_MAX_WIDE = 0.25
 TOPIC_OBSTACLE = '/lidar/obstacle'
 
 
@@ -192,10 +197,13 @@ class ConePerception(Node):
             a = msg.angle_min + i * msg.angle_increment + self.offset
             x, y = r * math.cos(a), r * math.sin(a)
             if OBS_X_MIN <= x <= OBS_X_MAX and abs(y) <= OBS_HALF_W:
-                pts.append((x, y))
+                pts.append((a, x, y))
         if not pts:
-            return dict(side='', dist=None, y=None, n=0, groups=0)
+            return dict(side='', dist=None, y=None, n=0, groups=0, wide=None)
+        # 각도 순서로 묶는다. x 순서로 묶으면 정면에 걸친 벽에서 좌·우 점이
+        # 번갈아 나와 한 덩어리가 조각조각 난다 (위 주석의 근거).
         pts.sort()
+        pts = [(x, y) for _a, x, y in pts]
         groups, cur = [], []
         for q in pts:
             if cur and math.hypot(q[0] - cur[-1][0], q[1] - cur[-1][1]) > OBS_GAP:
@@ -203,11 +211,19 @@ class ConePerception(Node):
                 cur = []
             cur.append(q)
         groups.append(cur)
-        near = min(groups, key=lambda g: min(q[0] for q in g))
+        # 좌우로 넓게 뻗은 덩어리는 벽·연석이다. 물체는 좁다 (상단 주석).
+        narrow = [g for g in groups
+                  if max(q[1] for q in g) - min(q[1] for q in g) <= OBS_MAX_WIDE]
+        if not narrow:
+            return dict(side='', dist=None, y=None, n=0, groups=len(groups),
+                        wide=None)
+        near = min(narrow, key=lambda g: min(q[0] for q in g))
         cy = sum(q[1] for q in near) / len(near)
         return dict(side=('L' if cy > 0 else 'R'),
                     dist=round(min(q[0] for q in near), 3),
-                    y=round(cy, 3), n=len(near), groups=len(groups))
+                    y=round(cy, 3), n=len(near), groups=len(groups),
+                    wide=round(max(q[1] for q in near)
+                               - min(q[1] for q in near), 3))
 
     def _on_scan(self, msg):
         # 차로 안 정지물체는 콘 창과 무관하게 매 스캔 낸다 (아래 창 검사보다 먼저).

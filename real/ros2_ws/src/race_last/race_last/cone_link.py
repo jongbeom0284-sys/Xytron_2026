@@ -190,16 +190,30 @@ class ConeLink:
                 cmd = self._policy.update(Mode.CONE_DRIVE, obs, self._ctx, READY)
                 return self._steer_speed(now, d, cone, age, cmd)
 
+            # ── 한 번 빠져나온 뒤에는 라이다만 보고 다시 들어가지 않는다 ──
+            # 재진입 경로는 위 _force_enter 하나뿐이고, 그 트리거는 초록불
+            # 확정으로만 재무장된다. 즉 재진입 조건 = 초록불.
+            # 콘 구간 밖에서도 게이트는 성립한다: 230555 f293/f297 은 곡선
+            # 바깥 벽의 좌·우 반사가 '폭 0.82m 통로'로 잡혀 f299 에 콘 모드가
+            # 켜졌다 (신호등 램프 0개, 신호잠금은 줄기만 했다). 225657 은
+            # 정지차량 옆 라바콘으로 같은 일이 나 -40 풀락으로 이탈했다.
+            if self._exited:
+                self._in.reset()
+                return None
+
             # ── LANE→CONE 진입 (race_fsm.py 블록 그대로) ──
+            # 진입에는 **언제나** 주황이 있어야 한다 (0823 밤 요구).
+            # 예전에는 여기 `cone_hit = cone_hit or lidar_solid` 가 있어서
+            # 주황 0px 이어도 라이다가 콘 4개 + 유효 게이트만 보면 들어갔다.
+            # 그것이 위 두 사고의 경로다. 지웠다.
+            # 주의: orange_px 는 아직 미연결이라 항상 0 이다(파일 상단 주석).
+            #       따라서 지금 실제로 살아 있는 진입 경로는 _force_enter
+            #       (카메라 주황 트리거) 하나뿐이다. 이 블록은 orange_px 가
+            #       연결되면 그때 살아난다.
             cone_hit = cone.orange_px >= cfg.cone_min_orange_px
             gate_seen = cone.gate_valid or cone.lidar_gate_valid
             if cfg.cone_enter_requires_gate:
                 cone_hit = cone_hit and gate_seen
-            lidar_solid = (
-                cone.lidar_cones >= cfg.cone_enter_min_lidar
-                and cone.lidar_gate_valid
-            )
-            cone_hit = cone_hit or lidar_solid
             if cone.lidar_cones < cfg.cone_enter_require_lidar:
                 cone_hit = False
             if not self._in.update(cone_hit, now):

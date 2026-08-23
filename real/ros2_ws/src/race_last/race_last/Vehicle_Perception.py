@@ -74,7 +74,9 @@ INFER_INTERVAL = 3        # N프레임당 1회 추론
 # '콘 탈출 후 vehicle_window_sec 동안만' 조건이 오검출 노출을 막는다.
 # ⚠ 되돌리려면 이 값을 0.12 로. 주행 중에는 파라미터로 바꿀 수 있다:
 #     ros2 param set /vehicle_perception_node conf 0.30
-CONF_THRES = 0.13
+# 0824: 0.13 -> 0.20. 0.13 은 클래스를 넷으로 넓혔을 때 넓게 잡으려고
+# 내린 값이다. 이제 car 하나만 보므로 임계를 올려 오검출을 줄인다.
+CONF_THRES = 0.20
 # 320 은 RC카가 47x40px 로 뭉개져 conf 0.14, 640 이면 0.34 였다 (0822).
 # 0823: 960 을 시도했다가 되돌렸다. 혼자 재면 48ms 인데 실제 스택에서는
 # 차선(YOLOPv2)·신호등과 GPU 를 다투며 89ms 가 됐고, 앞차 발행이
@@ -109,7 +111,9 @@ CLASS_VASE = 75           # COCO 'vase'
 # 판정한다 — 거기에만 차선 마스크가 있다). 차로 밖 물체는 애초에 피할 대상이
 # 아니므로, 클래스를 넓혀 생기는 오검출을 이 기하 조건이 걸러낸다.
 # 클래스를 넓혀도 추론 시간은 그대로다 (모델은 80개를 전부 계산한다).
-TARGET_CLASSES = [CLASS_CAR, CLASS_SUITCASE, CLASS_HANDBAG, CLASS_VASE]
+# 0824: car 만 남긴다. suitcase/handbag/vase 는 라바콘·구조물을 물어
+# 엉뚱한 회피를 만들었다 (01:33 의 11초짜리 좌측 오검출).
+TARGET_CLASSES = [CLASS_CAR]
 PERSON_STOP_DIST = 2.0    # 보행자가 이 거리 안이면 정지 신호
 
 # bbox 하단이 이 y 위면 머리 위 구조물로 보고 버린다

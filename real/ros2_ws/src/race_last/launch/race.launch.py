@@ -79,6 +79,12 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'dashboard', default_value='false',
             description='웹 대시보드 + 영상 스트림. 주행 중에는 끈다.'),
+        DeclareLaunchArgument(
+            'record', default_value='true',
+            description='주행 프레임 저장 (~/recordings/camera). 10Hz, 디코드 없음.'),
+        DeclareLaunchArgument(
+            'imu', default_value='false',
+            description='IMU 노드. 주행에 안 쓴다 — 켜면 포트 없을 때 경고가 쏟아진다.'),
 
         # ---- 센서 ----
         Node(package='usb_cam', executable='usb_cam_node_exe', name='camera',
@@ -86,8 +92,12 @@ def generate_launch_description():
         Node(package='xycar_lidar', executable='xycar_lidar_node',
              name='xycar_lidar_node',
              parameters=[os.path.join(kv_config, 'lidar.yaml')], output='log'),
+        # /imu 를 구독하는 곳이 없다 — 주행은 카메라·라이다만 쓴다.
+        # /dev/ttyIMU 가 없으면 3초마다 경고가 터미널을 덮는데(rcl 로거라
+        # output='log' 로 안 막힌다), 안 쓰는 노드이므로 기본은 끈다.
         Node(package='kobot_vehicle', executable='imu_node',
-             parameters=[os.path.join(kv_config, 'imu.yaml')], output='log'),
+             parameters=[os.path.join(kv_config, 'imu.yaml')], output='log',
+             condition=IfCondition(LaunchConfiguration('imu'))),
         Node(package='kobot_vehicle', executable='status_node', output='log'),
 
         # ---- 인식 ----
@@ -103,7 +113,8 @@ def generate_launch_description():
              # 움직인다. 접근 전 구간을 덮는 띠 + 좌측 천장 주황등(x<0.35)·우측 창문
              # (x>0.64) 배제. 장소 바뀌면 param set 으로 즉석 조절 (대시보드 ROI 박스 참조).
              parameters=[{'debug_image': debug_images, 'max_hz': 20.0,
-                          'roi_top': 0.28, 'roi_bottom': 0.42,
+                          'roi_top': 0.28, 'roi_bottom': 0.34,
+                          'roi_bottom_started': 0.42,
                           'roi_left': 0.36, 'roi_right': 0.64}],
              output='log'),
         # 차량: YOLOv8n(imgsz 640) + 라이다 퓨전. 좌/우와 거리만 낸다.
@@ -128,6 +139,13 @@ def generate_launch_description():
         Node(package='race_last', executable='motor_logger',
              name='motor_logger', output='log'),
         # 주행 판단 전수 기록 (~/drive_logs/*.csv) — 사후 분석용
+        # 프레임을 통째로 남긴다 — 문제 생긴 시각으로 사진을 찾아보려고.
+        # 대시보드가 꺼져 있어도 남는다 (race_day 는 대시보드를 끈다).
+        Node(package='race_last', executable='frame_recorder',
+             name='frame_recorder',
+             parameters=[{'rate_hz': 10.0,
+                          'enabled': LaunchConfiguration('record')}],
+             output='log'),
         Node(package='race_last', executable='drive_logger',
              name='drive_logger', output='log'),
 

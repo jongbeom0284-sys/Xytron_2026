@@ -20,28 +20,35 @@ def reading(now, cones=6, valid=True, aim=0.0, *, stamp=None,
                 wall_left=left, wall_right=right)
 
 
-def test_enters_on_first_frame_by_default():
-    """디바운스 1 = 라이다가 콘을 본 첫 프레임에 바로 콘 모드."""
+def test_enters_on_first_frame_after_trigger():
+    """주황 트리거를 받으면 다음 프레임에 바로 콘 모드."""
     link = ConeLink(Log())
     assert link.active is False
+    link.request_enter()
     out = link.tick(10.0, reading(10.0), ego_mps=1.0, camera_ok=True)
-    assert link.active is True, '첫 프레임에 진입해야 한다'
+    assert link.active is True, '트리거 뒤 첫 프레임에 진입해야 한다'
     assert out is not None
 
 
-def test_enter_frames_can_be_raised():
-    link = ConeLink(Log(), enter_frames=3)
-    for k in range(2):
-        link.tick(10.0 + k * 0.1, reading(10.0 + k * 0.1), ego_mps=1.0, camera_ok=True)
-        assert link.active is False
-    link.tick(10.2, reading(10.2), ego_mps=1.0, camera_ok=True)
-    assert link.active is True
+def test_lidar_alone_never_enters():
+    """주황 없이는 라이다 게이트가 몇 프레임을 와도 안 들어간다.
+
+    콘 구간 밖에서도 게이트는 성립한다 — 230555 f293/f297 은 곡선 바깥 벽,
+    225657 은 정지차량 옆 라바콘이었다. 둘 다 이 경로로 콘 모드를 켰다.
+    """
+    link = ConeLink(Log())
+    t = 10.0
+    for _ in range(30):
+        t += 0.1
+        link.tick(t, reading(t), ego_mps=1.0, camera_ok=True)
+    assert link.active is False
 
 
 def test_entry_speed_seeds_ramp():
     """진입 순간 속도가 0 에서 시작하지 않는다."""
     seed = 8.0
     link = ConeLink(Log(), entry_speed_units=seed)
+    link.request_enter()
     out = link.tick(10.0, reading(10.0), ego_mps=1.0, camera_ok=True)
     assert link.active is True
     assert link._policy.speed._current >= seed * 0.9, link._policy.speed._current
@@ -50,19 +57,23 @@ def test_entry_speed_seeds_ramp():
 
 def test_zero_entry_speed_keeps_old_behaviour():
     link = ConeLink(Log(), entry_speed_units=0.0)
+    link.request_enter()
     link.tick(10.0, reading(10.0), ego_mps=1.0, camera_ok=True)
     assert link._policy.speed._current == 0.0 or link._policy.speed._current > 0.0
 
 
 def test_no_entry_without_lidar_cones():
-    """콘을 못 봤으면 진입하지 않는다 (게이트/개수 조건 유지)."""
+    """트리거가 있어도 관측이 없으면 들어가지 않는다."""
     link = ConeLink(Log())
-    link.tick(10.0, reading(10.0, cones=0, valid=False), ego_mps=1.0, camera_ok=True)
+    link.tick(10.0, reading(10.0, cones=0, valid=False), ego_mps=1.0,
+              camera_ok=True)
     assert link.active is False
 
 
 def test_stale_reading_does_not_enter():
+    """관측이 낡았으면 트리거가 있어도 들어가지 않는다."""
     link = ConeLink(Log())
+    link.request_enter()
     link.tick(10.0, reading(9.0), ego_mps=1.0, camera_ok=True)   # 1초 낡음
     assert link.active is False
 

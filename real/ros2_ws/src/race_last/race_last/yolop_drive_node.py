@@ -60,8 +60,15 @@ RED_CONFIRM = 3          # 빨간불 확정에 필요한 연속 장수 (약 0.2�
 GO_CONFIRM = 7           # 초록·좌회전 확정에 필요한 연속 장수 (약 0.47초)
 # 아래 세 시간은 "확정한 신호가 시야에서 사라진 시점"부터 센다 (0823 요구).
 # 확정만으로 세면 신호등을 아직 지나지도 않았는데 억제가 풀린다.
-GO_LOCK_GREEN_SEC = 30.0  # 직진 신호가 사라진 뒤 신호 인식을 쉬는 시간
-GO_LOCK_LEFT_SEC = 20.0   # 좌회전 신호가 사라진 뒤 잠금 (0822 실험: 10에서 상향)
+GO_LOCK_GREEN_SEC = 25.0  # 직진 신호가 사라진 뒤 신호 인식을 쉬는 시간.
+                          # 0824: 30 -> 25. 한 바퀴가 짧아 다음 신호등
+                          # 접근 구간을 잠금이 덮는 일이 있었다.
+GO_LOCK_LEFT_SEC = 15.0   # 좌회전 신호가 사라진 뒤 잠금.
+                          # 0823 밤: 20 -> 15. 코스가 좌회전 -> S자 -> 신호등
+                          # 이라 좌회전 확정에서 다음 신호등까지 19.2초다
+                          # (235009 세션 실측: rt 99.5 확정, rt 118.7 등장).
+                          # 20초면 잠금이 그 순간까지 덮어 초록 13장을
+                          # 통째로 버렸다. 15초면 4초 여유가 생긴다.
 GONE_CONFIRM = 5          # 확정한 신호가 이만큼 연속으로 안 보이면 사라진 것
 # 콘 구간을 빠져나온 뒤 신호를 더 무시하는 시간. 신호등은 이미 뒤에 있으므로
 # 다시 읽을 이유가 없고, 읽으면 오검출로 판단만 흔들린다 (0823 요구).
@@ -98,8 +105,9 @@ CONE_TRIG_CONFIRM = 3          # 이만큼 연속이어야 진입으로 본다
 # ---- 앞차 회피. 거리·유지 값은 Lane_follow.py 원본 그대로 ----
 AVOID_ENTER_M = 1.30     # 이 거리 안이면 회피 시작
 AVOID_CLEAR_M = 1.80     # 이만큼 멀어지면 해제
-AVOID_HOLD_SEC = 3.0     # 인식이 꺼진 순간부터 이 시간은 회피 유지,
-                         # 지나면 차선 중앙으로 복귀 (0823 요구)
+AVOID_HOLD_SEC = 2.0     # 인식이 꺼진 순간부터 이 시간은 회피 유지,
+                         # 지나면 차선 중앙으로 복귀.
+                         # 0823 밤: 3.0 -> 2.0 (실주행에서 너무 길었다)
 # 같은 방향이 이만큼 연속이어야 차로 인정 (첫 진입만). 단위는 /vehicle/state
 # **메시지 수**다 — 추론 횟수가 아니다.
 # 카메라 30Hz 로 발행하고 추론은 3프레임당 1회(10Hz)라 같은 판정이 3번씩
@@ -202,6 +210,12 @@ class YolopDriveNode(Node):
         self._cone_trig_run = 0       # 임계를 넘긴 연속 장수
         self._cone_triggered = False  # 콘 구간 진입을 이미 알렸는가
         self._straight_at = 0.0       # 직진(초록)을 확정한 시각 — 주황 감시 지연 기준
+        # 출발선 초록불을 한 번이라도 확정했는가. 신호 노드가 이 값을 보고
+        # 탐색 띠를 넓힌다 (출발 전에는 좁게 — 바닥 라바콘이 램프로 잡힌다).
+        self._started = False
+        # 마지막으로 확정한 신호 ('green' | 'left' | ''). 신호등을 지나 원시
+        # 판정이 none 이 되어도 이 값은 남는다 — 콘솔이 이걸 띄운다.
+        self._confirmed = ''
         self._lock_kind = None        # 확정했으나 아직 시야에 남아 있는 신호
         self._lock_since = 0.0        # 그 신호를 확정한 시각
         self._gone = 0                # 그 신호를 연속으로 못 본 장수
@@ -380,7 +394,18 @@ class YolopDriveNode(Node):
         # 직진 구간(초록 확정 ~ 콘 트리거) 속도 상한 [m/s]. 0 이면 제한 없음.
         # 0823 실측: 이 구간 끝에서 콘 통로에 2.16 m/s 로 조향 +33 인 채
         # 들어가 우측으로 밀렸다. 통로 진입 속도를 낮춰 그 진입각 오차를 줄인다.
-        self.declare_parameter('straight_speed_mps', 1.6)
+        # 0824: 1.6 -> 1.8 -> 1.9 -> 2.0. 곡선 감속(curve_min_speed_mps)이
+        # 들어가 통로 진입각 오차를 따로 잡아 주므로 직진 상한을 푼다.
+        # 1.9 는 곡선 하한(1.8)보다 높아서, 직진 구간에서도 조향이
+        # 커지면 1.8 까지 내려간다.
+        self.declare_parameter('straight_speed_mps', 1.9)
+        # 최대 조향일 때 내려갈 속도 [m/s]. 조향 0 에서 이 값까지 선형.
+        # 0 이면 끈다. 실측: 조향 풀락 10%, 그때 차선을 놓치고도 속도가
+        # 2.00 그대로여서 밀린 채 복구가 안 됐다 (0824 005242).
+        self.declare_parameter('curve_min_speed_mps', 1.8)
+        # 곡선 감속 곡선의 지수. 1 이면 선형, 클수록 큰 조향에만 몰린다.
+        # 작은 조향(직선에 가까운 흔들림)에서 속도를 깎지 않기 위한 값이다.
+        self.declare_parameter('curve_speed_power', 2.0)
         # 콘 구간을 빠져나온 뒤 이 시간 동안만 앞차 인식을 켠다 (0823 밤 요구).
         # 트랙 순서가 신호등 → 콘 → 추월이라 추월 구간이 여기 들어온다.
         # 클래스를 넓힌 만큼 오검출에 노출되는 시간을 줄인다. 0 이면 제한 없음.
@@ -439,6 +464,9 @@ class YolopDriveNode(Node):
             self._value('cone_approach_speed_units'))
         self.car_confirm = max(1, int(self._value('car_confirm')))
         self.straight_speed_mps = float(self._value('straight_speed_mps'))
+        self.curve_min_speed_mps = float(self._value('curve_min_speed_mps'))
+        self.curve_speed_power = max(
+            1.0, float(self._value('curve_speed_power')))
         self.vehicle_window_sec = float(self._value('vehicle_window_sec'))
         self.vehicle_inside_lane_only = bool(
             self._value('vehicle_inside_lane_only'))
@@ -466,6 +494,19 @@ class YolopDriveNode(Node):
                 or self.cone_acceleration_limit_mps2 <= 0.0):
             raise ValueError(
                 'cone_acceleration_limit_mps2 는 유한한 양수여야 한다')
+
+    def _curve_speed(self, speed: float, steer: float) -> float:
+        """조향 0 이면 그대로, 최대 조향이면 curve_min_speed_mps 까지 내린다."""
+        floor_mps = self.curve_min_speed_mps
+        if floor_mps <= 0.0 or speed <= 0.0:
+            return speed
+        floor_units = floor_mps / max(self.mps_per_unit, 1e-6)
+        if speed <= floor_units:
+            return speed          # 이미 그보다 느리면 건드리지 않는다
+        ratio = min(1.0, abs(steer) / max(self.max_steer, 1e-6))
+        # 지수를 주면 작은 조향에서는 거의 안 깎이고 큰 조향에서 확 깎인다.
+        ratio = ratio ** self.curve_speed_power
+        return speed - (speed - floor_units) * ratio
 
     def _cone_entry_units(self) -> float:
         """콘 진입 속도 [m/s] → 정책 단위. 노드가 정책 출력에 곱하는
@@ -632,6 +673,21 @@ class YolopDriveNode(Node):
                 self.get_logger().warning(
                     '차로 안 물체만 앞차로 인정 = %s'
                     % self.vehicle_inside_lane_only)
+            elif param.name == 'curve_speed_power':
+                value = float(param.value)
+                if not 1.0 <= value <= 6.0:
+                    return SetParametersResult(
+                        successful=False, reason='1~6 범위여야 한다')
+                self.curve_speed_power = value
+                self.get_logger().warning('곡선 감속 지수 %.1f 로 변경' % value)
+            elif param.name == 'curve_min_speed_mps':
+                value = float(param.value)
+                if not 0.0 <= value <= 4.87:
+                    return SetParametersResult(
+                        successful=False, reason='0~4.87 m/s 범위여야 한다')
+                self.curve_min_speed_mps = value
+                self.get_logger().warning(
+                    '최대 조향 시 속도 %.2f m/s 로 변경 (0=끔)' % value)
             elif param.name == 'straight_speed_mps':
                 value = float(param.value)
                 if not 0.0 <= value <= 4.87:
@@ -835,9 +891,14 @@ class YolopDriveNode(Node):
         # 새 확정 — 지난 억제 창은 지운다 (사라짐 시점에 다시 잡힌다)
         self._straight_hold_from = 0.0
         self._straight_hold_until = 0.0
+        self._confirmed = state
         if state == 'green':
             self._straight = True
             self._straight_at = now      # 여기서부터 cone_trigger_delay_sec 를 센다
+            if not self._started:
+                self._started = True
+                self.get_logger().warning(
+                    '첫 출발 확정 — 신호 탐색 띠를 넓힌다 (다음 바퀴는 멀리서 본다)')
             # 콘 진입 트리거 재무장. 1바퀴 첫 확정에서는 이미 무장 상태라
             # 아무 일도 없고, 2·3바퀴 신호등을 지나며 다시 확정되면 그 바퀴
             # 첫 콘에서 다시 울린다. (Cone_Perception 은 트리거 뒤 15초 창이고
@@ -1297,6 +1358,8 @@ class YolopDriveNode(Node):
         self._obs_hold_until = 0.0
         self._obs_armed = False
         self._obs_arm_until = 0.0
+        self._started = False         # 다시 출발선에 선 것으로 본다
+        self._confirmed = ''
         self._fault = None
         link = self._cone_link
         if link is not None:
@@ -1520,6 +1583,9 @@ class YolopDriveNode(Node):
                     if self._straight and self.straight_speed_mps > 0.0:
                         speed = min(speed, self.straight_speed_mps
                                     / max(self.mps_per_unit, 1e-6))
+                    # 조향이 클수록 줄인다. 조향은 이미 물리 한계(40)라
+                    # 더 못 꺾으므로, 속도로 반경을 줄인다 (상단 주석).
+                    speed = self._curve_speed(speed, steer)
         else:
             with self._lock:
                 self._stale = True
@@ -1636,6 +1702,8 @@ class YolopDriveNode(Node):
             # 달라 원인 추적이 불가능했던 문제. 이제 전부 남긴다)
             'straight_only': bool(self._straight),
             'straight_speed_mps': round(self.straight_speed_mps, 2),
+            'curve_min_speed_mps': round(self.curve_min_speed_mps, 2),
+            'curve_speed_power': round(self.curve_speed_power, 1),
             # straight_hold: 억제가 진행 중이면 남은 초, 아니면 0.
             # straight_hold_in: 억제가 예약돼 있으면 시작까지 남은 초(중앙 잡는 중).
             'straight_hold': round(
@@ -1651,9 +1719,12 @@ class YolopDriveNode(Node):
             'obs_side': (self._obs or {}).get('side', ''),
             'obs_dist': (self._obs or {}).get('dist'),
             'obs_n': (self._obs or {}).get('n', 0),
+            'obs_wide': (self._obs or {}).get('wide'),
             'obs_hold_s': round(max(0.0, self._obs_hold_until - now), 2),
             'obs_armed': bool(self._obs_armed),
             'obs_arm_s': round(max(0.0, self._obs_arm_until - now), 1),
+            'started': bool(self._started),
+            'confirmed': self._confirmed,
             'cone_trig_px': int(self._cone_trig_px),
             'cone_exited': bool(self._cone_exited),
             'vehicle_force_s': round(max(

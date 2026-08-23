@@ -57,6 +57,10 @@ ARROW_RATIO = 0.10   # 화살표로 인정할 화소 수 / 초록원 면적
 # 아래 값은 그 범위에 여유를 준 것이다.
 ROI_TOP = 0.373      # 179px. 위쪽 천장 형광등 배제
 ROI_BOTTOM = 0.444   # 213px. 아래쪽 바닥(라바콘·의자) 배제
+# 첫 출발 뒤에 쓰는 하단. 출발선에서는 신호등이 가까워 좁은 띠로 충분하고,
+# 넓으면 바닥의 라바콘·의자가 램프로 잡힌다. 2·3바퀴는 멀리서 접근하므로
+# 넓혀야 놓치지 않는다 (0823 밤 실측: 마지막 바퀴 미검출).
+ROI_BOTTOM_STARTED = 0.444
 ROI_LEFT = 0.302     # 193px
 ROI_RIGHT = 0.528    # 338px
 
@@ -247,8 +251,11 @@ class TrafficLightPerception(Node):
         # 탐색 띠(ROI)를 장소별로 즉시 조절할 수 있게 파라미터화 (2026-08-22).
         # 새 연습장에서 겐트리 높이가 달라 램프(y=0.35)가 띠(0.373~) 위로 벗어났다.
         # 띠는 주행 내내 고정이다 — 확장하면 비상구 유도등이 들어온다 (0823).
+        # _apply_roi_params 가 이 값을 보고 하단을 고른다. 먼저 잡아야 한다.
+        self._started = False
         self.declare_parameter('roi_top', ROI_TOP)
         self.declare_parameter('roi_bottom', ROI_BOTTOM)
+        self.declare_parameter('roi_bottom_started', ROI_BOTTOM_STARTED)
         self.declare_parameter('roi_left', ROI_LEFT)
         self.declare_parameter('roi_right', ROI_RIGHT)
         self._apply_roi_params()
@@ -277,6 +284,11 @@ class TrafficLightPerception(Node):
         #   '잠금 중 + 사라짐 확인 끝 + 직진억제 끝' 일 때만 False 를 주고
         #   여기서 그 값만 보면 된다 (Vehicle_Perception 의 vehicle_needed 와 같은 꼴).
 
+        # 첫 출발 뒤 띠를 넓힌다. yolop_drive 가 초록을 확정하면 status 의
+        # started 가 True 가 된다 (Vehicle_Perception 의 vehicle_needed 와 같은 꼴).
+        self.create_subscription(String, '/kobot_yolop/status',
+                                 self._on_drive_status, 10)
+
         self.last_run = 0.0
         self.history = []
         self.stable = 'none'
@@ -284,11 +296,26 @@ class TrafficLightPerception(Node):
         self.get_logger().info(
             '신호등 인식 시작 · 정규화 색도 + 원형성 · 좌표 하드코딩 없음')
 
+    def _on_drive_status(self, message):
+        """첫 출발 여부만 본다. 바뀔 때만 띠를 다시 잡는다."""
+        try:
+            started = bool(json.loads(message.data).get('started'))
+        except (ValueError, TypeError):
+            return
+        if started == self._started:
+            return
+        self._started = started
+        self._apply_roi_params()
+        self.get_logger().warning(
+            '%s — 신호 탐색 띠 하단 %.3f' % (
+                '첫 출발 확정' if started else '출발 전으로 되돌림', ROI_BOTTOM))
+
     # ---------------------------------------------------------- 입력
     def _apply_roi_params(self):
         global ROI_TOP, ROI_BOTTOM, ROI_LEFT, ROI_RIGHT
         ROI_TOP = float(self.get_parameter('roi_top').value)
-        ROI_BOTTOM = float(self.get_parameter('roi_bottom').value)
+        ROI_BOTTOM = float(self.get_parameter(
+            'roi_bottom_started' if self._started else 'roi_bottom').value)
         ROI_LEFT = float(self.get_parameter('roi_left').value)
         ROI_RIGHT = float(self.get_parameter('roi_right').value)
         _roi.clear()
@@ -297,10 +324,14 @@ class TrafficLightPerception(Node):
         from rcl_interfaces.msg import SetParametersResult
         global ROI_TOP, ROI_BOTTOM, ROI_LEFT, ROI_RIGHT
         for p in params:
-            if p.name == 'roi_top':
+            if p.name == 'roi_bottom_started':
+                if self._started:
+                    ROI_BOTTOM = float(p.value)
+            elif p.name == 'roi_top':
                 ROI_TOP = float(p.value)
             elif p.name == 'roi_bottom':
-                ROI_BOTTOM = float(p.value)
+                if not self._started:
+                    ROI_BOTTOM = float(p.value)
             elif p.name == 'roi_left':
                 ROI_LEFT = float(p.value)
             elif p.name == 'roi_right':

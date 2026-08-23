@@ -33,6 +33,7 @@ setup(
             'race_starter = race_last.race_starter:main',
             'motor_logger = race_last.motor_logger:main',
             'drive_logger = race_last.drive_logger:main',
+            'frame_recorder = race_last.frame_recorder:main',
             'integrated_cone_test = race_last.integrated_cone_test_node:main',
         ],
     },

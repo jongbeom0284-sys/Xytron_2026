@@ -92,10 +92,24 @@ def test_vehicle_perception_subscribes_status_once_in_init():
 
 
 def test_traffic_perception_keeps_running_during_signal_lock():
-    """신호등 노드는 잠금 중에도 멈추지 않는다 — yolop_drive 의 0823 신호 로직
-    (확정한 신호가 시야에서 사라진 시점부터 억제·잠금을 센다)이 확정 뒤에도
-    판정이 계속 들어오는 것을 전제로 튜닝됐기 때문이다. 일시정지를 다시 넣으려면
-    yolop_drive 가 status 에 signal_needed 를 실어 주는 설계가 먼저다
-    (Traffic_Perception.__init__ 의 주석). 그 전까지 status 구독은 없어야 한다."""
+    """신호등 노드는 잠금 중에도 **판정을** 멈추지 않는다.
+
+    0823 신호 로직(확정한 신호가 시야에서 사라진 시점부터 억제·잠금을 센다)이
+    확정 뒤에도 판정이 계속 들어오는 것을 전제로 튜닝됐다. 일시정지를 다시
+    넣으려면 yolop_drive 가 status 에 signal_needed 를 실어 주는 설계가 먼저다.
+
+    status 구독 자체는 이제 있다 — 첫 출발 뒤 탐색 띠를 넓히는 용도다
+    (test_roi_started.py). 그 핸들러가 띠만 만지고, 프레임 처리 경로에는
+    건너뛰기가 없다는 것을 지킨다."""
     path = os.path.join(PKG_DIR, 'Traffic_Perception.py')
-    assert '/kobot_yolop/status' not in _subscribed_topics(path, only_init=False)
+    src = open(path, encoding='utf-8').read()
+
+    handler = src[src.index('def _on_drive_status'):]
+    handler = handler[:handler.index('\n    def ', 1)]
+    assert '_apply_roi_params' in handler, '핸들러는 탐색 띠를 다시 잡는다'
+
+    body = src[src.index('def on_compressed'):]
+    body = body[:body.index('\n    def ', 1)]
+    for token in ('signal_needed', 'go_locked', 'signal_lock', '_started'):
+        assert token not in body, (
+            '프레임 처리 경로에서 판정을 건너뛰면 안 된다: %s' % token)

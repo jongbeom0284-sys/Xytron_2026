@@ -29,7 +29,7 @@ COLS = [
     'traffic_state', 'traffic_stop', 'vehicle_needed',
     'avoid_side', 'avoid_offset_px',
     'cone_active', 'cone_approach', 'cone_state',
-    'vehicle_state', 'vehicle_boxes', 'cmd_steer', 'cmd_speed',
+    'vehicle_state', 'vehicle_boxes', 'vehicle_cls', 'cmd_steer', 'cmd_speed',
 ]
 
 
@@ -42,6 +42,7 @@ class DriveLogger(Node):
         self._traffic = ''
         self._vehicle = ''
         self._vehicle_n = 0
+        self._vehicle_cls = ''
         self._cone = ''
         self._cmd = (0.0, 0.0)
         self.create_subscription(String, '/kobot_yolop/status',
@@ -74,9 +75,18 @@ class DriveLogger(Node):
             car = d.get('car') or {}
             self._vehicle = '%s/%s' % (car.get('dir', ''), car.get('dist', ''))
             self._vehicle_n = int(d.get('n', 0) or 0)
+            # 무엇을 차로 봤는지 — 클래스와 확신도. 오검출을 뒤쫓으려면
+            # '좌측에 뭔가' 로는 부족하다. 박스 여러 개면 conf 큰 순서로.
+            boxes = sorted(d.get('boxes') or [],
+                           key=lambda b: -float(b.get('c') or 0.0))
+            self._vehicle_cls = ' '.join(
+                '%s%.2f%s' % (b.get('cn', '?'), float(b.get('c') or 0.0),
+                              (':' + b['dir']) if b.get('dir') else '')
+                for b in boxes[:3])
         except (ValueError, AttributeError, TypeError):
             self._vehicle = ''
             self._vehicle_n = 0
+            self._vehicle_cls = ''
 
     def _on_cone(self, msg):
         self._cone = (msg.data or '').replace(',', ' ')[:40]
@@ -105,6 +115,7 @@ class DriveLogger(Node):
         d['traffic_state'] = self._traffic
         d['vehicle_state'] = self._vehicle
         d['vehicle_boxes'] = self._vehicle_n
+        d['vehicle_cls'] = self._vehicle_cls
         d['cone_state'] = self._cone
         d['cmd_steer'], d['cmd_speed'] = self._cmd
 
