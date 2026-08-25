@@ -1320,12 +1320,95 @@ class YolopDriveNode(Node):
             self._gone = 0
             self._recent.clear()
             self.get_logger().warning('신호 잠금 해제 — 지금부터 다시 읽는다')
+        elif cmd.startswith('start_'):
+            name = cmd[len('start_'):]
+            if not self._mission_start(name, now):
+                self.get_logger().warning(
+                    '모르는 미션: %s (가능: %s)'
+                    % (name, ', '.join(self.MISSIONS)))
+                return
+            # 상태만 만들고 끝내면 또 한 번 명령을 쳐야 한다. 1분 안에
+            # 다시 나가야 하므로 여기서 바로 출발 준비까지 끝낸다.
+            with self._lock:
+                self._enabled = True
+            self._apply_armed(True)
+            self.get_logger().warning(
+                '미션 재시작: %s — enabled+armed. 출발 준비 완료' % name)
         elif cmd == 'vehicle_force':
             self._vehicle_force_until = now + max(0.0, sec)
             self._vehicle_passed = False
             self.get_logger().warning('앞차 인식 %.0f초 강제 켬' % sec)
         else:
             self.get_logger().warning('모르는 명령: %s' % cmd)
+
+    # 미션 이름 -> 그 미션이 돌기 위해 필요한 앞선 상태
+    MISSIONS = ('signal', 'cone', 'stopcar', 'movingcar', 'left')
+
+    def _mission_start(self, name: str, now: float) -> bool:
+        """실패한 미션 앞에 차를 놓고 다시 출발할 수 있게 전제를 만든다.
+
+        미션은 사슬로 묶여 있다 — 초록 확정이 있어야 주황을 세고, 주황
+        트리거가 있어야 콘에 들어가고, 콘 탈출이 있어야 라이다가 무장하고,
+        라이다가 접혀야 욜로가 켜진다. 중간 미션부터 다시 하려면 그 앞의
+        상태를 통째로 만들어 줘야 한다.
+        """
+        if name not in self.MISSIONS:
+            return False
+        self._reset_latches()
+        link = self._cone_link
+
+        if name == 'signal':
+            return True                  # 출발선 = 전부 초기화 그대로
+
+        if name == 'left':
+            # 좌회전 코스: 콘·차량이 없다. 차선 주행만 한다.
+            self._straight = False
+            self._confirmed = 'left'
+            self._started = True
+            self._go_locked_until = now + GO_LOCK_LEFT_SEC
+            if link is not None:
+                link._active = False
+                link._exited = True
+            return True
+
+        # 아래 셋은 전부 '초록을 이미 확정한' 상태에서 시작한다
+        self._straight = True
+        self._confirmed = 'green'
+        self._started = True             # 신호 탐색 띠도 넓은 쪽으로
+        self._go_locked_until = now + GO_LOCK_GREEN_SEC
+        # 주황 감시 지연(cone_trigger_delay_sec)은 이미 지난 것으로 둔다.
+        # 안 그러면 명령을 치고도 2초를 기다려야 콘을 세기 시작한다.
+        self._straight_at = now - self.cone_trigger_delay_sec - 0.1
+        self._cone_triggered = False
+        self._cone_trig_run = 0
+
+        if name == 'cone':
+            # 주황만 보면 바로 콘 모드로 들어갈 수 있는 상태.
+            if link is not None:
+                link._active = False
+                link._exited = False     # 재진입 차단을 푼다
+            return True
+
+        # stopcar / movingcar: 콘을 이미 지난 것으로 친다
+        self._cone_exited = True
+        self._cone_was_active = False
+        self._cone_triggered = True      # 이 바퀴 콘은 끝났다
+        if link is not None:
+            link._active = False
+            link._exited = True          # 다시 안 들어가게
+        self._vehicle_window_until = (
+            now + self.vehicle_window_sec
+            if self.vehicle_window_sec > 0.0 else 0.0)
+
+        if name == 'stopcar':
+            self._obs_armed = True       # 라이다가 정지차량을 찾는다
+            self._obs_arm_until = now + self.obs_arm_sec
+            return True
+
+        # movingcar: 라이다는 접힌 상태 -> _vehicle_needed 가 바로 True
+        self._obs_armed = False
+        self._obs_hold_until = 0.0
+        return True
 
     def _reset_latches(self) -> None:
         """래치된 상태를 전부 초기값으로 되돌린다. 주행 중에도 안전하다 —
@@ -1726,6 +1809,10 @@ class YolopDriveNode(Node):
             'started': bool(self._started),
             'confirmed': self._confirmed,
             'cone_trig_px': int(self._cone_trig_px),
+            # 주황을 세기 시작하기까지 남은 초. 0 이면 이미 보고 있다.
+            'cone_arm_s': round(max(
+                0.0, (self._straight_at + self.cone_trigger_delay_sec)
+                - now) if self._straight else 0.0, 1),
             'cone_exited': bool(self._cone_exited),
             'vehicle_force_s': round(max(
                 0.0, self._vehicle_force_until - now), 1),

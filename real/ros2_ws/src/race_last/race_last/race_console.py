@@ -30,6 +30,10 @@ CLEAR = '\x1b[2J\x1b[H'
 
 SIGNAL_KO = {'red': '빨강', 'yellow': '노랑', 'green': '초록',
              'left': '좌회전', 'none': '--', '': '--'}
+BASIS_KO = {'white_center': '흰색 중앙', 'yellow': '노란 중앙선',
+            'cone': '라이다 콘 벽', 'cone_approach': '차선 (콘 접근)',
+            'avoid_left': '좌측 흰선 (회피)', 'avoid_right': '우측 흰선 (회피)',
+            'hold': '직전 값 유지', 'none': '차선 못 찾음', '': '--'}
 CONFIRM_KO = {'green': '직진확정', 'left': '좌회전확정', '': '미확정'}
 
 BOOT_NODES = [
@@ -124,154 +128,88 @@ class RaceConsole(Node):
     def _update_latches(self):
         s = self.st
         num = lambda k, d=0.0: float(s.get(k) or d)      # noqa: E731
-
-        # 정지차 — 라이다가 확정하면(유지 시간이 서면) 그 값을 붙잡는다.
-        # 무장만 된 상태에서는 관측이 매 스캔 바뀌므로 띄우지 않는다.
-        if num('obs_hold_s') > 0.0:
-            if s.get('obs_side'):
-                self.obs_latch.set('%s %.2fm %s점' % (
-                    '우측' if s['obs_side'] == 'R' else '좌측',
-                    num('obs_dist'), s.get('obs_n')))
-        elif not s.get('obs_armed'):
-            self.obs_latch.clear()
-
-        # 회피 — 방향이 선 순간 고정, 풀리면 지운다.
-        if s.get('avoid_side'):
-            self.avoid_latch.set('%s 흰선' % (
-                '좌측' if s['avoid_side'] == 'left' else '우측'))
-        else:
-            self.avoid_latch.clear()
-
-        # 콘 — 모드가 켜진 순간 고정, 꺼지면 지운다.
-        if s.get('cone_active'):
-            self.cone_latch.set('모드 ON')
-        else:
-            self.cone_latch.clear()
-
-    # ------------------------------------------------------------ 판단
-    def _stage(self):
-        """지금 어느 미션인가. 코스 순서대로 앞에서부터 본다."""
-        s = self.st
-        if s.get('traffic_stop') or not s.get('confirmed'):
-            return '신호'
-        # 좌회전 바퀴는 콘·차량이 없다. 바로 S자다.
-        if s.get('confirmed') == 'left':
-            return 'S자'
-        if s.get('cone_active') or s.get('cone_approach'):
-            return '콘'
-        # 아직 콘을 안 지났으면 콘을 향해 가는 중이다 (초록 확정 ~ 콘 탈출).
-        if not s.get('cone_exited'):
-            return '콘'
-        if s.get('obs_armed') or float(s.get('obs_hold_s') or 0.0) > 0.0:
-            return '정지차'
-        if s.get('vehicle_needed'):
-            return '이동차'
-        return 'S자'
-
-    def _alive(self):
-        names = set(self.get_node_names())
-        now = time.time()
-        # vehicle_perception_node 는 살아 있어도 node list 에 안 잡힐 때가
-        # 있다 (DDS 디스커버리 특성). 데이터 수신도 생존으로 본다.
-        data_at = {'traffic_perception_node': self.signal_at,
-                   'cone_perception': self.cone_at,
-                   'yolop_drive': self.st_at}
-        rows = []
-        for label, node in BOOT_NODES:
-            up = node in names or (now - data_at.get(node, 0.0)) < 2.0
-            if node == 'camera':
-                up = up and (now - self.image_at) < 2.0
-            if node == 'xycar_lidar_node':
-                up = up and (now - self.scan_at) < 2.0
-            rows.append((label, up))
-        return rows
-
-    # ------------------------------------------------------------ 그리기
-    def _draw(self):
-        rows = self._alive()
-
-        if not self.booted:
-            done = all(up for _, up in rows)
-            lines = ['══════ RACE 부팅 ══════']
-            for label, up in rows:
-                lines.append(' %-14s %s' % (label, '완료' if up else '대기중...'))
-            lines.append('═══════════════════════')
-            if done:
-                self.booted = True
-                lines.append(' 전 항목 완료 — 주행 준비 끝')
-            elif time.time() - self.t0 > 30.0:
-                lines.append(' 30초 경과 — 안 뜨는 항목을 확인하라')
-            self._flush(lines)
-            return
-
-        s = self.st
-        num = lambda k, d=0.0: float(s.get(k) or d)      # noqa: E731
         here = self._stage()
-        track = '  '.join(('▶%s' % x) if x == here else ('  %s' % x)
+        track = '  '.join(('\u25b6%s' % x) if x == here else ('  %s' % x)
                           for x in STAGES)
+        basis = BASIS_KO.get(s.get('basis') or '', s.get('basis') or '--')
+        conf = CONFIRM_KO.get(s.get('confirmed', ''), s.get('confirmed'))
 
-        # 신호 — 확정값을 계속 띄운다. 잠금은 정수 초라 자주 안 바뀐다.
-        sig = [CONFIRM_KO.get(s.get('confirmed', ''), s.get('confirmed'))]
-        if s.get('traffic_stop'):
-            sig.append('정지')
-        if num('signal_lock_s') > 0:
-            sig.append('잠금 %.0fs' % num('signal_lock_s'))
+        rows = []
+        if here == '신호':
+            # 신호만 본다. 아직 아무 미션도 안 시작했다.
+            line = SIGNAL_KO.get(self.signal, self.signal)
+            if s.get('traffic_stop'):
+                line += ' · 정지 중'
+            rows.append(('신호등', line))
+            rows.append(('확정', conf))
+            if num('signal_lock_s') > 0:
+                rows.append(('신호 잠금', '%.0f초 남음 (그동안 안 읽음)'
+                             % num('signal_lock_s')))
 
-        # 콘
-        if self.cone_latch.text:
-            cone = self.cone_latch.show()
-        elif s.get('cone_approach'):
-            cone = '접근'
-        elif s.get('cone_exited'):
-            cone = '탈출 완료'
-        elif s.get('cone_triggered'):
-            cone = '트리거 발사됨'
-        else:
-            cone = '대기 (트리거 무장)'
+        elif here == '콘':
+            rows.append(('신호', conf))
+            rows.append(('차선', basis))
+            if s.get('cone_active'):
+                rows.append(('콘 모드', self.cone_latch.show() or 'ON'))
+            elif s.get('cone_triggered'):
+                rows.append(('주황 감지', '트리거 발사됨 — 콘 진입 대기'))
+            elif num('cone_arm_s') > 0:
+                rows.append(('주황 감지', '%.1f초 뒤 시작' % num('cone_arm_s')))
+            else:
+                rows.append(('주황 감지', '보는 중 (%d px)'
+                             % int(s.get('cone_trig_px') or 0)))
+            if s.get('cone_approach'):
+                rows.append(('콘', '통로 보임 — 감속'))
 
-        # 정지차
-        if self.obs_latch.text:
-            obs = self.obs_latch.show()
-        elif s.get('obs_armed'):
-            obs = '라이다 감시중 %.0fs' % num('obs_arm_s')
-        else:
-            obs = '--'
+        elif here == '정지차':
+            if s.get('obs_armed'):
+                rows.append(('라이다', '감시 중 · %.0f초 남음' % num('obs_arm_s')))
+            elif num('obs_hold_s') > 0:
+                rows.append(('라이다', '확정 · 회피 %.1f초 남음' % num('obs_hold_s')))
+            else:
+                rows.append(('라이다', '끔'))
+            if self.obs_latch.text:
+                rows.append(('관측', self.obs_latch.show()))
+            if self.avoid_latch.text:
+                rows.append(('회피', self.avoid_latch.show()))
+            rows.append(('차선', basis))
 
-        # 이동차
-        if s.get('vehicle_needed'):
-            veh = '욜로 감시중'
+        elif here == '이동차':
+            veh = '보는 중' if s.get('vehicle_needed') else '끔'
             if num('vehicle_window_s') > 0:
-                veh += ' %.0fs' % num('vehicle_window_s')
-        elif s.get('vehicle_passed'):
-            veh = '추월 완료'
-        else:
-            veh = '--'
+                veh += ' · %.0f초 남음' % num('vehicle_window_s')
+            rows.append(('욜로', veh))
+            if int(s.get('car_inside') or 0):
+                rows.append(('차로 안', '%d개' % int(s['car_inside'])))
+            if s.get('vehicle_passed'):
+                rows.append(('추월', '완료'))
+            if self.avoid_latch.text:
+                rows.append(('회피', self.avoid_latch.show()))
+            rows.append(('차선', basis))
 
-        avoid = self.avoid_latch.show() or '--'
+        else:                                   # S자
+            rows.append(('신호', conf))
+            rows.append(('차선', basis))
+            if self.avoid_latch.text:
+                rows.append(('회피', self.avoid_latch.show()))
 
-        lines = [
-            '═════════════ RACE ═════════════',
-            ' %s' % track,
-            '',
-            ' 신호   %s' % ' · '.join(sig),
-            ' 콘     %s' % cone,
-            ' 정지차 %s' % obs,
-            ' 이동차 %s' % veh,
-            ' 회피   %s' % avoid,
-            '',
-            ' %.2f m/s  조향 %+d  %s %s' % (
-                num('speed') * 0.08, int(round(num('steer'))),
-                'ARMED' if s.get('armed') else 'safe',
-                'ON' if s.get('enabled') else 'off'),
-            '════════════════════════════════',
-        ]
+        lines = ['\u2550' * 8 + ' RACE ' + '\u2550' * 8, ' %s' % track, '']
+        for label, value in rows:
+            lines.append(' %-9s %s' % (label, value))
+        lines.append('')
+        lines.append(' %.2f m/s  \uc870\ud5a5 %+d  %s %s' % (
+            num('speed') * 0.08, int(round(num('steer'))),
+            'ARMED' if s.get('armed') else 'safe',
+            'ON' if s.get('enabled') else 'off'))
+        lines.append('\u2550' * 22)
+
         if s.get('fault'):
-            lines.append(' !! 고장: %s' % s['fault'])
+            lines.append(' !! \uace0\uc7a5: %s' % s['fault'])
         if s.get('camera_stale'):
-            lines.append(' !! 카메라 끊김')
-        dead = [label for label, up in rows if not up]
+            lines.append(' !! \uce74\uba54\ub77c \ub04a\uae40')
+        dead = [label for label, up in rows2 if not up]
         if dead:
-            lines.append(' !! 죽은 노드: ' + ', '.join(dead))
+            lines.append(' !! \uc8fd\uc740 \ub178\ub4dc: ' + ', '.join(dead))
         self._flush(lines)
 
     def _flush(self, lines):

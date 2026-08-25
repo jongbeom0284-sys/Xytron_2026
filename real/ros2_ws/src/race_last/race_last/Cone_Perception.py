@@ -57,7 +57,10 @@ class ConePerception(Node):
     def __init__(self):
         super().__init__('cone_perception')
         # 콘 구간 통과가 약 10초. 여유를 붙여 이만큼 열어 둔다 (0823).
-        self.declare_parameter('on_window_sec', 15.0)
+        # 0824: 15 -> 11. 실주행에서 콘 통과가 8초쯤이다. 창이 닫히면
+        # 0.6초 뒤 무조건 탈출하고 그게 곧 정지차량 회피 시작이므로,
+        # 11초면 3초 여유를 두고 자동으로 다음 미션으로 넘어간다.
+        self.declare_parameter('on_window_sec', 11.0)
         self.declare_parameter('signal_delay_sec', 1.0)
         self.declare_parameter('force_enabled', False)
         self.declare_parameter('angle_offset_rad', DEFAULT_ANGLE_OFFSET)
